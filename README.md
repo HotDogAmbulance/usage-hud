@@ -31,12 +31,35 @@ OAuth token — see [Privacy & security](#privacy--security).
 - Right-click for a menu (refresh, probe now, clear cache, quit); `q`/Esc to
   quit, `r` to redraw, `R` to force a live probe.
 
+## Who this is for
+
+Anyone on a Mac who uses **Claude Code** and/or the **Codex CLI** and wants
+an at-a-glance view of how much of their usage quota is left, without
+switching windows or running a command. Either data source works on its
+own — if you only use one of the two tools, the other panel just shows
+"no data yet" instead of failing.
+
 ## Requirements
 
-- macOS 10.13+
-- Python 3.9+ with Tk support. Most installs already have this — Homebrew's
-  `python3`, `python.org` installers, and `uv python install` builds all
-  bundle Tk. Apple's bare-bones system Python usually does not.
+- **macOS 10.13 (High Sierra) or later**, Apple Silicon or Intel — the app
+  is a small shell-script bundle, not a compiled binary, so the same one
+  works on both architectures.
+- **Python 3.9+ with Tk support.** `install.sh` looks for one automatically,
+  in this order:
+  1. `python3` already on your `PATH`
+  2. a Python installed via [`uv`](https://docs.astral.sh/uv/) (`uv python install 3.12`)
+  3. a python.org installer under `/Library/Frameworks/Python.framework`
+
+  Tk comes bundled with Homebrew's `python3`, python.org installers, and
+  `uv`-installed builds, so most Macs with any of those already satisfy
+  this with zero extra setup. If Xcode Command Line Tools are installed,
+  their bundled Python 3.9 (`/usr/bin/python3`) has Tk too. A brand-new Mac
+  with none of the above has no usable `python3` at all — `install.sh` will
+  tell you which command fixes that.
+- For live Claude quota data: **Claude Code** signed in on the same Mac
+  (reads its keychain credential; see [Privacy & security](#privacy--security)).
+  For Codex data: the **Codex CLI**, used at least once so
+  `~/.codex/sessions/` exists.
 
 ## Install
 
@@ -105,6 +128,15 @@ usage_hud.py --refresh 20        seconds between redraws
   printed, or sent anywhere other than those two Anthropic endpoints.
 - Each probe costs about 1 token against your quota and is throttled to at
   most once every 5 minutes.
+
+## Repo layout
+
+```
+usage_hud.py      the whole app - stdlib only, no dependencies
+install.sh        detects Python+Tk, builds and installs the .app
+uninstall.sh      removes it
+icon/AppIcon.icns app icon, baked into the bundle by install.sh
+```
 
 ## Uninstall
 

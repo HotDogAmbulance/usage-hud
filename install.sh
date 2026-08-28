@@ -140,6 +140,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<string>APPL</string>
 	<key>CFBundleExecutable</key>
 	<string>usage-hud-launcher</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>LSMinimumSystemVersion</key>
@@ -172,7 +174,12 @@ exec "\$PY" "\$SCRIPT" >> "\$LOG" 2>&1
 LAUNCH
 chmod +x "$LAUNCHER"
 
+if [ -f "$REPO_DIR/icon/AppIcon.icns" ]; then
+    cp "$REPO_DIR/icon/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+fi
+
 xattr -cr "$APP" 2>/dev/null || true
+touch "$APP"
 
 echo "Installed app:    $APP"
 echo
