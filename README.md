@@ -100,7 +100,7 @@ Claude Code itself does.
   (only if your token expired) Anthropic's OAuth refresh endpoint — same
   calls Claude Code itself makes. Your token never leaves your keychain
   and is never logged.
-- Each live check costs ~1 token and is throttled to once per 5 minutes.
+- Each live check costs ~1 token and is throttled to once per minute.
 
 It's one file, no dependencies — read `usage_hud.py` yourself if you want
 to be sure.
@@ -128,3 +128,5 @@ the first time it was installed).
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+See [CHANGELOG.md](CHANGELOG.md) for what's changed.

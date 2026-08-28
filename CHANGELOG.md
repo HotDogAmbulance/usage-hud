@@ -1,0 +1,20 @@
+# Changelog
+
+## 2026-08-29
+
+- Claude's quota now refreshes on real session activity, not just hooks.
+  Turns out `Stop` never fires on a mid-turn cancel, and `UserPromptSubmit`
+  can't be trusted to catch a one-shot run from another agent or tool. So
+  now the HUD also watches `~/.claude/sessions/*.json` — Claude Code's own
+  busy/idle status file, written for every `claude` process on the machine
+  whether or not it goes through our hooks — and re-checks quota the moment
+  anything changes there. The old timer's still around as a backstop, just
+  loosened up since it's not doing the heavy lifting anymore.
+
+## 2026-08-28
+
+- Statusline is now the default way Claude quota gets fed in — free,
+  updates every turn, no extra API calls. Direct probing is the fallback
+  for when that's not wired up.
+- Initial release: floating HUD for Claude + Codex usage, install/uninstall
+  scripts, app icon.
