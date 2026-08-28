@@ -10,6 +10,10 @@
   whether or not it goes through our hooks — and re-checks quota the moment
   anything changes there. The old timer's still around as a backstop, just
   loosened up since it's not doing the heavy lifting anymore.
+- Fixed that same change firing a needless extra probe on every normal
+  turn too, not just the gap cases — a completed turn flips the session
+  file *and* the statusline cache at once, so now it only probes when
+  activity changed without a matching cache write.
 
 ## 2026-08-28
 
