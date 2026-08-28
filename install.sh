@@ -182,12 +182,15 @@ xattr -cr "$APP" 2>/dev/null || true
 touch "$APP"
 
 echo "Installed app:    $APP"
+
+# Wire into Claude Code's statusline so it updates for free on every turn,
+# instead of relying only on the HUD's own throttled live probes. Non-fatal:
+# the script prints its own message if a statusLine is already configured.
+"$PYTHON_BIN" "$STATE_DIR/usage_hud.py" --install-claude-statusline || true
+
 echo
 echo "Done. Double-click \"$APP_NAME.app\" in $DEST to start it,"
 echo "or add it to Login Items (System Settings > General > Login Items) to autostart."
-echo
-echo "To feed it live Claude Code quota data, run:"
-echo "  \"$PYTHON_BIN\" \"$STATE_DIR/usage_hud.py\" --install-claude-statusline"
 
 if [ "$DO_LAUNCH" -eq 1 ]; then
     open "$APP"
