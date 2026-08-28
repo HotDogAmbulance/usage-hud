@@ -84,15 +84,56 @@ A couple of flags if the defaults don't suit you:
 
 ## Hooking up live Claude data
 
-Codex works the moment you install. Claude needs one extra step, once:
+Codex works the moment you install. Claude actually works out of the box
+too, as long as you're already logged into Claude Code: the moment the HUD
+opens with no cached numbers, it fires off one live probe on its own,
+straight to Anthropic's API using Claude Code's own login from your
+keychain, and fills in within a couple of seconds. No message required.
+
+The one thing that live probe costs is about a token off your quota per
+check, so it's throttled to once every 5 minutes. If you'd rather it update
+for free on every turn instead, run this once:
 
 ```bash
 python3 ~/.usage-hud/usage_hud.py --install-claude-statusline
 ```
 
-This drops the command into `~/.claude/settings.json` as your `statusLine`
-(it backs up whatever was there first). Send one message in Claude Code
-after that and the HUD fills in.
+This drops the command into `~/.claude/settings.json` as your `statusLine`.
+Claude Code already computes your rate-limit numbers for its own status bar
+on every turn — this just also hands a copy to the HUD, so it stays current
+for free and even covers headless/agent runs, without ever calling the API
+itself. It's a nice-to-have, not a requirement.
+
+## Why the Claude side is more involved than the Codex side
+
+Codex CLI just writes your rate-limit numbers to a local log file, so
+reading them is a non-issue. Claude has no equivalent "check my quota" file
+or endpoint, because Anthropic doesn't publish one — the only two places
+that number exists at all are:
+
+1. The `rate_limits` object Claude Code's own client receives for its
+   status bar, on every turn, but only while a conversation is running.
+2. A handful of response headers (`anthropic-ratelimit-unified-5h-...`)
+   that come back on any real API call — meaning the only way to ask "how
+   much do I have left" is to actually make a request and read its headers.
+
+There's no free-standing, read-only "get my usage" API. So to show you a
+number without a conversation open, this script does the only thing
+available: it makes a real (tiny, ~1 token) API call itself, authenticated
+as you, and reads those headers. To call the API "as you" against your
+Pro/Max plan's shared pool — rather than a separate API key with its own
+separate, billed pool — it has to reuse Claude Code's own login rather than
+asking you to generate a new credential. That's the whole reason it reads
+Claude Code's OAuth token from the macOS keychain, and why it also knows
+how to refresh that token when it expires (via the same OAuth endpoint
+Claude Code itself calls on startup) and write the renewed one back.
+
+None of this is a documented, supported integration — it's built by reading
+how Claude Code behaves and doing the same thing. That's also why it needs
+a specific `anthropic-beta` header and a Claude-Code-shaped User-Agent
+string just to get an authenticated response instead of a block. If
+Anthropic ever ships an actual "check my quota" endpoint, most of this
+file gets a lot shorter.
 
 ## Command-line flags
 
