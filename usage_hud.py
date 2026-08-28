@@ -733,10 +733,12 @@ def run_hud(alpha=0.9, refresh=REFRESH_SECONDS):
     # 1 s heartbeat: cache writes from any Claude conversation (statusline on
     # interactive turns, UserPromptSubmit hook on headless agent runs) or from
     # a probe show up live; everything else redraws on the regular cadence.
-    # A change in claude_activity() (any local `claude` process going busy or
-    # idle - including a mid-turn cancel, or a one-shot run by something else
-    # entirely) opportunistically kicks a throttled probe even when no hook
-    # fired, since that's the case the hooks can't be trusted to cover.
+    # claude_activity() changing (any local `claude` process going busy or
+    # idle) opportunistically kicks a throttled probe too - but only if the
+    # cache didn't change in the same tick. A normal completed turn flips
+    # both at once (statusline already paid for the update, for free); it's
+    # a cancel or another process's run that flips activity with no matching
+    # cache write, which is exactly the gap hooks can't be trusted to cover.
     last_cache = {"m": None}
     last_activity = {"m": None}
     ticks = {"n": 0}
@@ -749,13 +751,14 @@ def run_hud(alpha=0.9, refresh=REFRESH_SECONDS):
 
     def tick():
         ticks["n"] += 1
-        a = claude_activity()
-        if a != last_activity["m"]:
-            last_activity["m"] = a
-            run_probe(force=False, manual=False)
         m = cache_state()
         changed = m != last_cache["m"]
         last_cache["m"] = m
+        a = claude_activity()
+        if a != last_activity["m"]:
+            last_activity["m"] = a
+            if not changed:  # statusline already covered this event - skip the extra call
+                run_probe(force=False, manual=False)
         if changed:
             PROBE_STATE["error"] = None  # fresh data supersedes probe errors
             draw()
