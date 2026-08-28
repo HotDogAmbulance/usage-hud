@@ -25,11 +25,21 @@ Data sources
             Every conversation start keeps this live: interactive turns via the
             statusline hook, headless agent runs via a UserPromptSubmit hook
             (--probe-if-stale re-probes through the API whenever the cache is
-            over 2 minutes old). When the cache goes stale or a window resets,
-            the HUD also probes the API directly with Claude Code's own OAuth
-            token from the macOS keychain (a ~1-token request), renewing that
-            token itself when it expires, so fresh numbers arrive without
-            opening Claude. In the HUD, R forces such a live probe immediately.
+            over 2 minutes old). Neither hook covers everything though - Claude
+            Code's Stop hook (and thus nothing) fires on a mid-turn cancel, and
+            a one-shot session from another agent/tool may never touch this
+            machine's hooks at all. So while the HUD window is open it also
+            watches ~/.claude/sessions/*.json - Claude Code's own per-process
+            busy/idle status file, written for every `claude` process on this
+            machine with no hook involved - and opportunistically re-probes
+            whenever any of them change, which catches cancels and other
+            processes' one-shot runs alike. A plain timer (PROBE_FRESH/
+            PROBE_MIN below) is the last-resort backstop for the rest (e.g. a
+            window resetting, or usage from something that bypasses the
+            `claude` CLI entirely), probing the API directly with Claude
+            Code's own OAuth token from the macOS keychain (a ~1-token
+            request), renewing that token itself when it expires. In the HUD,
+            R forces a live probe immediately regardless.
   Codex  : Codex CLI writes `token_count` events containing `rate_limits` into
            ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl. Read directly, no setup.
 
@@ -53,6 +63,7 @@ STATE_DIR = Path(os.environ.get("USAGE_HUD_HOME", HOME / ".usage-hud"))
 CLAUDE_CACHE = STATE_DIR / "claude.json"
 POS_FILE = STATE_DIR / "position.json"
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", HOME / ".codex"))
+CLAUDE_SESSIONS_DIR = HOME / ".claude" / "sessions"
 
 REFRESH_SECONDS = 20
 STALE_AFTER = 6 * 3600  # cached Claude numbers older than this are marked stale
@@ -63,8 +74,8 @@ API_URL = "https://api.anthropic.com/v1/messages"
 OAUTH_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
 OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # Claude Code's public client id
 OAUTH_UA = "claude-cli/2.1.80 (external, cli)"  # python-urllib UA is Cloudflare-banned here
-PROBE_FRESH = 900  # probe when the Claude cache is older than this (s)
-PROBE_MIN = 300  # never probe more often than this (s)
+PROBE_FRESH = 600  # blind backstop: probe when the cache is older than this (s)
+PROBE_MIN = 60  # never probe more often than this (s), blind or activity-triggered
 HOOK_FRESH = 120  # --probe-if-stale: re-probe when the cache is older (s)
 PROBE_STATE = {"probing": False, "last": 0.0, "error": None, "manual": False}
 
@@ -420,6 +431,21 @@ def claude_needs_probe():
                for w in parse_windows(blob.get("rate_limits") or {}, captured))
 
 
+def claude_activity():
+    """Latest mtime across ~/.claude/sessions/*.json - Claude Code's own
+    per-process status file, one per `claude` CLI/IDE process on this
+    machine, touched on every busy<->idle transition (a normal turn ending,
+    a mid-turn Esc-cancel, or a plain headless `claude -p` one-shot run by
+    something else entirely). No hook required and nothing to miss: unlike
+    UserPromptSubmit/Stop, this can't skip a cancelled turn or a session
+    that never fired one of our hooks in the first place."""
+    try:
+        return max((p.stat().st_mtime for p in CLAUDE_SESSIONS_DIR.glob("*.json")),
+                   default=0.0)
+    except OSError:
+        return 0.0
+
+
 def maybe_probe():
     """Background-refresh the Claude cache when stale or expired (throttled)."""
     if PROBE_STATE["probing"] or time.time() - PROBE_STATE["last"] < PROBE_MIN:
@@ -707,7 +733,12 @@ def run_hud(alpha=0.9, refresh=REFRESH_SECONDS):
     # 1 s heartbeat: cache writes from any Claude conversation (statusline on
     # interactive turns, UserPromptSubmit hook on headless agent runs) or from
     # a probe show up live; everything else redraws on the regular cadence.
+    # A change in claude_activity() (any local `claude` process going busy or
+    # idle - including a mid-turn cancel, or a one-shot run by something else
+    # entirely) opportunistically kicks a throttled probe even when no hook
+    # fired, since that's the case the hooks can't be trusted to cover.
     last_cache = {"m": None}
+    last_activity = {"m": None}
     ticks = {"n": 0}
 
     def cache_state():
@@ -718,6 +749,10 @@ def run_hud(alpha=0.9, refresh=REFRESH_SECONDS):
 
     def tick():
         ticks["n"] += 1
+        a = claude_activity()
+        if a != last_activity["m"]:
+            last_activity["m"] = a
+            run_probe(force=False, manual=False)
         m = cache_state()
         changed = m != last_cache["m"]
         last_cache["m"] = m
