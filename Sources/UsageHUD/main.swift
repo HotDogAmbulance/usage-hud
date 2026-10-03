@@ -68,13 +68,16 @@ final class HUD: NSObject, NSApplicationDelegate {
         let body = NSBezierPath(roundedRect: NSRect(x: 1, y: bodyY, width: bodyWidth, height: bodyHeight), xRadius: 3.5, yRadius: 3.5)
         let color = tint(panel.id)
         let fillWidth = valid ? bodyWidth * remaining / 100 : 0
-        NSColor.white.withAlphaComponent(0.36).setFill(); body.fill()
+        let bodyRect = NSRect(x: 1, y: bodyY, width: bodyWidth, height: bodyHeight)
+        NSGraphicsContext.saveGraphicsState()
+        if money == nil, let mask = SystemBattery.body {
+            NSGraphicsContext.current?.cgContext.clip(to: bodyRect, mask: mask)
+        } else { body.addClip() }
+        NSColor.white.withAlphaComponent(0.36).setFill(); bodyRect.fill()
         if money != nil {
             color.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(cached ? 0.50 : 1).setFill()
-            body.fill()
+            bodyRect.fill()
         }
-        NSGraphicsContext.saveGraphicsState()
-        body.addClip()
         if weeklyValid {
             color.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.50 : 1).setFill()
             NSRect(x: 1, y: bodyY, width: bodyWidth * weeklyRemaining / 100, height: bodyHeight).fill()
@@ -87,10 +90,20 @@ final class HUD: NSObject, NSApplicationDelegate {
             NSRect(x: 1 + bodyWidth * weeklyRemaining / 100 - 0.5, y: bodyY, width: 1, height: bodyHeight).fill()
         }
         NSGraphicsContext.restoreGraphicsState()
-        NSColor.white.withAlphaComponent(0.40).setFill()
-        NSBezierPath(roundedRect: NSRect(x: bodyWidth + 2, y: 8, width: 2, height: 5), xRadius: 1, yRadius: 1).fill()
+        NSGraphicsContext.saveGraphicsState()
+        if let mask = SystemBattery.cap {
+            let capRect = NSRect(x: bodyWidth + 2, y: 4.5, width: 2, height: 12)
+            NSGraphicsContext.current?.cgContext.clip(to: capRect, mask: mask)
+            NSColor.white.withAlphaComponent(0.50).setFill(); capRect.fill()
+        } else {
+            let cap = NSBezierPath()
+            cap.move(to: NSPoint(x: bodyWidth + 2, y: 8.5))
+            cap.curve(to: NSPoint(x: bodyWidth + 2, y: 12.5), controlPoint1: NSPoint(x: bodyWidth + 4.5, y: 8.5), controlPoint2: NSPoint(x: bodyWidth + 4.5, y: 12.5))
+            cap.close(); NSColor.white.withAlphaComponent(0.50).setFill(); cap.fill()
+        }
+        NSGraphicsContext.restoreGraphicsState()
         // Native battery digits are taller and lighter than a semibold status label.
-        let baseSize: CGFloat = money != nil ? 10 : 11.5
+        let baseSize: CGFloat = money != nil ? 10 : 9.5
         let baseFont = NSFont.monospacedDigitSystemFont(ofSize: baseSize, weight: .medium)
         let measuredWidth = (text as NSString).size(withAttributes: [.font: baseFont]).width
         let fontSize = min(baseSize, baseSize * (bodyWidth - 2) / max(1, measuredWidth))
@@ -153,6 +166,14 @@ do {
 let app = NSApplication.shared
 let delegate = HUD()
 if CommandLine.arguments.contains("--self-test") {
+    if let body = SystemBattery.body, let cap = SystemBattery.cap {
+        precondition(body.width == 92 && body.height == 48)
+        precondition(cap.width == 8 && cap.height == 48)
+        if let bytes = body.dataProvider?.data as Data? {
+            precondition(bytes[24 * body.bytesPerRow + 46 * 4 + 3] == 255)
+            precondition(bytes[3] == 0)
+        }
+    }
     let unavailable = Window(label: "5h", pct: 99, right: nil, resets_at: nil, expired: true, stale: false)
     let previousWeek = Window(label: "7d", pct: 27, right: nil, resets_at: nil, expired: false, stale: true)
     let fallback = Panel(id: "codex", name: "Codex", windows: [unavailable, previousWeek], note: "")
