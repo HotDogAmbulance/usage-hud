@@ -476,16 +476,22 @@ final class CoreTests {
         try "{\"openrouter\":{\"type\":\"api\",\"key\":\"\(alice)\"}}".write(to: opencode.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
         try "export OPENROUTER_API_KEY=sk-or-v1-short\nexport OPENROUTER_API_KEY=\(bob)\nexport ALICE_OPENROUTER_KEY='\(alice)'".write(to: root.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
         try "OPENROUTER_API_KEY=\(carol) agent run\n# \(bob)".write(to: root.appendingPathComponent("boot-carol.sh"), atomically: true, encoding: .utf8)
+        // Organised folders are searched; guarded and too-deep ones are not.
+        for (folder, key) in [("team/research", "d4"), ("Documents", "e5"), ("a/b/c/d", "f6")] {
+            let url = root.appendingPathComponent(folder)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            try "export DANA_KEY=sk-or-v1-\(String(repeating: key, count: 32))".write(to: url.appendingPathComponent("run.sh"), atomically: true, encoding: .utf8)
+        }
         let found = KeyFinder.find(in: KeyFinder.places(home: root), environment: [:])
-        expectEqual(found.map { $0.label }, ["zshrc", "alice", "boot-carol"])
-        expectEqual(found.map { $0.key }, [bob, alice, carol])
+        expectEqual(found.map { $0.label }, ["zshrc", "alice", "boot-carol", "dana"])
+        expectEqual(found.map { $0.key }, [bob, alice, carol, "sk-or-v1-" + String(repeating: "d4", count: 32)])
         expectEqual(KeyFinder.label(opencode.appendingPathComponent("auth.json")), "opencode")
         expectEqual(KeyFinder.find(in: [], environment: ["OPENROUTER_API_KEY": alice + "\n" + bob]).map { $0.label }, ["environment", "environment 2"])
         http.handler = { url in url.path.hasSuffix("credits") ? ["data": ["total_credits": 9, "total_usage": 1]] : ["data": ["usage": 3, "usage_daily": 0.25]] }
         let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
         expectTrue(provider.automatic)
         try provider.refresh()
-        expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "zshrc", "alice", "boot-carol"])
+        expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "zshrc", "alice", "boot-carol", "dana"])
         expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("openrouter.json")), encoding: .utf8)!.contains("sk-or-v1-"))
     }
 }

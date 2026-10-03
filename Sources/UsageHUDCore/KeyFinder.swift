@@ -11,15 +11,26 @@ enum KeyFinder {
         let words = variable.lowercased().split(separator: "_").filter { !["openrouter", "or", "api", "key", "token"].contains($0) }
         return words.isEmpty ? nil : words.joined(separator: " ")
     }
-    /// Shell profiles, AI tool configs, and personal `.sh` scripts, which people tend to name after a person or a job.
-    static func places(home: URL) -> [URL] {
-        let scripts = ["", "bin", "scripts", ".local/bin"].flatMap { folder in
-            ((try? FileManager.default.contentsOfDirectory(at: home.appendingPathComponent(folder), includingPropertiesForKeys: nil)) ?? [])
-                .filter { $0.pathExtension == "sh" }.sorted { $0.path < $1.path }
+    /// Folders macOS guards with a permission prompt, or that only hold other apps' and packages' files.
+    static let skipped: Set<String> = ["Library", "Applications", "Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures",
+                                       "Public", "node_modules", "build", "dist", "venv"]
+    /// `.sh` scripts within three levels of home, where people keep them in their own order. Hidden and guarded folders
+    /// are skipped, and at most 500 scripts are read.
+    static func scripts(home: URL) -> [URL] {
+        guard let walk = FileManager.default.enumerator(at: home, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles, .skipsPackageDescendants])
+        else { return [] }
+        var found: [URL] = []
+        while let url = walk.nextObject() as? URL, found.count < 500 {
+            if skipped.contains(url.lastPathComponent) || walk.level > 3 { walk.skipDescendants(); continue }
+            if url.pathExtension == "sh" { found.append(url) }
         }
-        return [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".env", ".config/fish/config.fish",
+        return found.sorted { $0.path < $1.path }
+    }
+    /// Shell profiles, AI tool configs, then personal scripts, which people tend to name after a person or a job.
+    static func places(home: URL) -> [URL] {
+        [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".env", ".config/fish/config.fish",
                      ".local/share/opencode/auth.json", ".aider.conf.yml", ".config/crush/crush.json", ".continue/config.yaml",
-                     ".continue/config.json", ".config/zed/settings.json"].map { home.appendingPathComponent($0) } + scripts
+                     ".continue/config.json", ".config/zed/settings.json"].map { home.appendingPathComponent($0) } + scripts(home: home)
     }
     /// "boot-alice.sh" is "boot-alice", ".zshrc" is "zshrc"; a tool's config is named after its folder, so opencode's auth.json is "opencode".
     static func label(_ file: URL) -> String {
