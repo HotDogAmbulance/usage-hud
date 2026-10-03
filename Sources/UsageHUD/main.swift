@@ -153,16 +153,17 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     func tint(_ id: String) -> NSColor {
         switch id {
-        case "codex": return NSColor(srgbRed: 0.40, green: 0.82, blue: 0.74, alpha: 1)
-        case "claude": return NSColor(srgbRed: 0.85, green: 0.58, blue: 0.45, alpha: 1)
-        // Brand colours where the brand has one; black-and-white marks get light neutrals so they show on the menu bar.
-        case "glm": return NSColor(srgbRed: 0.96, green: 0.96, blue: 0.97, alpha: 1)
+        // Every tint stays well below white (relative luminance at most 0.5), so from across the room no battery reads as
+        // the Mac's own. Brand colours where the brand has one; black-and-white marks get distinct mid tones.
+        case "codex": return NSColor(srgbRed: 0.16, green: 0.66, blue: 0.58, alpha: 1)
+        case "claude": return NSColor(srgbRed: 0.85, green: 0.47, blue: 0.34, alpha: 1)
+        case "glm": return NSColor(srgbRed: 0.42, green: 0.36, blue: 0.98, alpha: 1)
         case "gemini": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
-        case "grok": return NSColor(srgbRed: 0.80, green: 0.80, blue: 0.84, alpha: 1)
-        case "vercel": return NSColor(srgbRed: 0.66, green: 0.64, blue: 0.62, alpha: 1)
+        case "grok": return NSColor(srgbRed: 0.52, green: 0.55, blue: 0.62, alpha: 1)
+        case "vercel": return NSColor(srgbRed: 0.58, green: 0.56, blue: 0.54, alpha: 1)
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
         case "kimi": return NSColor(srgbRed: 0.09, green: 0.51, blue: 1.00, alpha: 1)
-        case "openrouter": return NSColor(srgbRed: 0.40, green: 0.93, blue: 0.16, alpha: 1)
+        case "openrouter": return NSColor(srgbRed: 0.30, green: 0.80, blue: 0.12, alpha: 1)
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
         }
     }
@@ -222,7 +223,8 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     /// `weeklyShade` draws the main fill in the same lighter tone the 7d layer uses behind 5h.
     /// `glow` washes the body in soft red, for a battery asking for attention.
-    static let digitWeight = NSFont.Weight.bold
+    /// The digits' font, by size. `--self-test` also renders the candidates side by side in font-preview.png.
+    static var digitFont: (CGFloat) -> NSFont = { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .bold) }
     func icon(_ panel: Panel, weeklyShade: Bool = false, glow: CGFloat = 0) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
@@ -238,7 +240,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         let weeklyRemaining = weeklyValid ? min(100, max(0, 100 - (weekly?.pct ?? 0))) : 0
         // Like the system battery's percentage: SF digits, heavy enough to read once cut out of a small fill.
         let baseSize: CGFloat = money != nil ? 10 : 9.5
-        let baseFont = NSFont.monospacedDigitSystemFont(ofSize: baseSize, weight: Self.digitWeight)
+        let baseFont = Self.digitFont(baseSize)
         let measuredWidth = (text as NSString).size(withAttributes: [.font: baseFont]).width
         // A balance stretches the body to fit its digits: whole amounts keep the standard size, cents widen it.
         let bodyWidth: CGFloat = money != nil ? max(23, (measuredWidth + 6).rounded(.up)) : 23
@@ -285,7 +287,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         }
         NSGraphicsContext.restoreGraphicsState()
         let fontSize = min(baseSize, baseSize * (bodyWidth - 2) / max(1, measuredWidth))
-        let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: Self.digitWeight)
+        let font = Self.digitFont(fontSize)
         // Centre the digits' ink, not their line box, the way the system battery does: side bearings and the
         // descender space would otherwise push "100" left and every number up.
         if let context = NSGraphicsContext.current?.cgContext {
@@ -502,6 +504,12 @@ if CommandLine.arguments.contains("--self-test") {
     // The panel widens to show a whole reset time instead of cutting it off.
     let long = Window(label: "Guy1", pct: 0, right: "$0.00 of $5.00 today · resets in 7h 16m")
     precondition(CellsView(lines: ["OpenRouter"], rows: [long]).frame.width > CellsView(lines: ["OpenRouter"], rows: [Window(label: "a", pct: 0, right: "$1")]).frame.width)
+    // No tint may pass for the system battery's white.
+    for id in ["codex", "claude", "glm", "gemini", "grok", "vercel", "deepseek", "kimi", "openrouter", "other"] {
+        let rgb = delegate.tint(id).usingColorSpace(.sRGB)!
+        let linear = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
+        precondition(0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] <= 0.5, id + " is too close to white")
+    }
     precondition(CellsView.color(left: 0.05) == .systemRed && CellsView.color(left: 0.2) == .systemYellow && CellsView.color(left: 0.9) == .systemGreen)
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
@@ -512,6 +520,34 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(balance("$1026.25 left").size.width > balance("$26.25 left").size.width)
     let representation = NSBitmapImageRep(data: image.tiffRepresentation!)!
     try! representation.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("battery-preview.png"))
+    // Candidate digit fonts, numbered, to compare against the system battery beside them in the menu bar.
+    func proportional(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont { NSFont.systemFont(ofSize: size, weight: weight) }
+    func rounded(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
+        NSFont(descriptor: NSFont.systemFont(ofSize: size, weight: weight).fontDescriptor.withDesign(.rounded) ?? NSFont.systemFont(ofSize: size).fontDescriptor, size: size) ?? .systemFont(ofSize: size)
+    }
+    let candidates: [(String, (CGFloat) -> NSFont)] = [
+        ("1 bold, fixed digits (now)", { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .bold) }),
+        ("2 semibold, fixed digits", { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .semibold) }),
+        ("3 bold", { proportional($0, .bold) }), ("4 semibold", { proportional($0, .semibold) }),
+        ("5 medium", { proportional($0, .medium) }), ("6 heavy", { proportional($0, .heavy) }),
+        ("7 bold, 0.5pt larger", { proportional($0 + 0.5, .bold) }), ("8 semibold, 0.5pt larger", { proportional($0 + 0.5, .semibold) }),
+        ("9 rounded bold", { rounded($0, .bold) }), ("10 rounded semibold", { rounded($0, .semibold) })]
+    let samples = [Panel(id: "codex", name: "Codex", windows: [Window(label: "5h", pct: 30)]),
+                   Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 0)]),
+                   Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$26.25 left")])]
+    let sheet = NSImage(size: NSSize(width: 300, height: CGFloat(candidates.count) * 26 + 8))
+    sheet.lockFocus()
+    NSColor(srgbRed: 0.18, green: 0.20, blue: 0.30, alpha: 1).setFill(); NSRect(origin: .zero, size: sheet.size).fill()
+    for (index, candidate) in candidates.enumerated() {
+        HUD.digitFont = candidate.1
+        let y = sheet.size.height - CGFloat(index + 1) * 26
+        (candidate.0 as NSString).draw(at: NSPoint(x: 8, y: y + 6), withAttributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.white])
+        var x: CGFloat = 160
+        for sample in samples { let battery = delegate.icon(sample); battery.draw(at: NSPoint(x: x, y: y + 2), from: .zero, operation: .sourceOver, fraction: 1); x += battery.size.width + 8 }
+    }
+    sheet.unlockFocus()
+    try! NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("font-preview.png"))
+    HUD.digitFont = candidates[0].1
     print("Battery drawing and note-free menus passed")
     exit(0)
 }
