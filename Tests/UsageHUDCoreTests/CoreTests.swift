@@ -46,6 +46,12 @@ struct AlertProvider: UsageProvider {
     func refresh() throws { if let problem = problem { throw HUDProblem(problem, attention: attention) } }
     func panel() -> Panel { Panel(id: id, name: name, windows: [Window(label: id, right: right)]) }
 }
+final class PromptingProvider: UsageProvider {
+    let id = "p", name = "P", automatic = true
+    var calls = 0
+    func refresh() throws { calls += 1; throw HUDProblem("Keychain asked", prompted: true) }
+    func panel() -> Panel { Panel(id: id, name: name, windows: [Window(label: "5h", pct: 1)]) }
+}
 final class CoreTests {
     var root: URL!, cache: Cache!, credentials: FakeCredentials!, http: FakeHTTP!
     func setUpWithError() throws {
@@ -493,5 +499,16 @@ final class CoreTests {
         try provider.refresh()
         expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "zshrc", "alice", "boot-carol", "dana"])
         expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("openrouter.json")), encoding: .utf8)!.contains("sk-or-v1-"))
+    }
+    /// A Keychain password prompt may follow a click on Refresh, never a background timer.
+    func testKeychainPromptNeverReturnsOnItsOwn() throws {
+        let provider = PromptingProvider()
+        let engine = Engine(root: root, credentials: credentials, http: http, providers: [provider])
+        expectEqual(engine.panels(refresh: "automatic")[0].alert, "Keychain asked")
+        _ = engine.panels(refresh: "automatic"); expectEqual(provider.calls, 1)
+        _ = engine.panels(refresh: "p"); expectEqual(provider.calls, 2)
+        credentials.missing = ["absent"]
+        expectNil(try credentials.stored(service: "absent", account: nil))
+        expectEqual(try credentials.stored(service: "present", account: nil), "fixture")
     }
 }

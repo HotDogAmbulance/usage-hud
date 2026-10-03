@@ -8,7 +8,12 @@ struct HUDProblem: Error, LocalizedError {
     /// Only the user can fix it (a rejected key, a revoked sign-in); the battery asks for attention.
     /// Tokens that merely expired while their CLI sat idle renew themselves and stay quiet.
     let attention: Bool
-    init(_ message: String, attention: Bool = false) { self.message = message; self.attention = attention }
+    /// macOS showed a Keychain password prompt. Background refreshes then leave that provider alone until the user
+    /// refreshes it from its menu, so the prompt never comes back on its own.
+    let prompted: Bool
+    init(_ message: String, attention: Bool = false, prompted: Bool = false) {
+        self.message = message; self.attention = attention || prompted; self.prompted = prompted
+    }
     var errorDescription: String? { message }
 }
 func number(_ value: Any?) -> Double? {

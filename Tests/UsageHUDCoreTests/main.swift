@@ -70,7 +70,8 @@ let cases: [(String, () throws -> Void)] = [
     ("testRouterKeyCapUsesOpenRouterNumbersAndAlerts", test.testRouterKeyCapUsesOpenRouterNumbersAndAlerts),
     ("testRouterCapsResetOnUTCBoundaries", test.testRouterCapsResetOnUTCBoundaries),
     ("testRouterTeamListsEveryKeyWithoutPulsing", test.testRouterTeamListsEveryKeyWithoutPulsing),
-    ("testKeysAlreadyOnTheMacNeedNoSetup", test.testKeysAlreadyOnTheMacNeedNoSetup)
+    ("testKeysAlreadyOnTheMacNeedNoSetup", test.testKeysAlreadyOnTheMacNeedNoSetup),
+    ("testKeychainPromptNeverReturnsOnItsOwn", test.testKeychainPromptNeverReturnsOnItsOwn)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }

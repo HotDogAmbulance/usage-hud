@@ -32,13 +32,16 @@ public final class Engine {
         if refresh == "openai-credits" { try? credits.refresh() }
         return providers.compactMap { provider -> Panel? in
             let statusFile = provider.id + "-status.json"
-            if refresh == provider.id || refresh == "automatic" && provider.automatic {
+            // After a Keychain prompt, only the user's own Refresh may ask again.
+            let prompted = cache.read(statusFile)["prompted"] as? Bool == true
+            if refresh == provider.id || refresh == "automatic" && !prompted && provider.automatic {
                 do {
                     try provider.refresh()
                     try cache.write(statusFile, ["error": NSNull(), "checked_at": Date().timeIntervalSince1970])
                 } catch {
                     let message = (error as? HUDProblem)?.message ?? (error as? HTTPFailure).map { "Usage HTTP \($0.status)" } ?? "Usage unavailable"
                     try? cache.write(statusFile, ["error": message, "attention": (error as? HUDProblem)?.attention == true,
+                                                  "prompted": (error as? HUDProblem)?.prompted == true,
                                                   "checked_at": Date().timeIntervalSince1970])
                 }
             }

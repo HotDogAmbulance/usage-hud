@@ -17,7 +17,7 @@ final class BalanceProvider: UsageProvider {
     func refresh() throws {
         var lastProblem = HUDProblem("Add a \(name) API key to the Keychain; see PROVIDERS.md")
         for host in hosts {
-            guard let key = try? credentials.password(service: service, account: host) else { continue }
+            guard let key = try credentials.stored(service: service, account: host) else { continue }
             let data: JSON
             do {
                 data = try http.get(URL(string: "https://" + host + path)!, token: key, headers: [:], limit: 1024 * 1024)

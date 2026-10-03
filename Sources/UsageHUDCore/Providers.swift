@@ -145,11 +145,10 @@ final class OpenRouterProvider: UsageProvider {
     let id = "openrouter", name = "OpenRouter"
     /// A management key lists every key on the account, so a team lead adds one secret instead of each person's.
     static let teamService = "Usage HUD OpenRouter Team"
-    /// Refreshes in the background once anything is configured.
-    var automatic: Bool { teamKey() != nil || (try? configuredSlots().isEmpty == false) == true }
+    /// Refreshes in the background; with nothing configured it stays hidden and quiet.
+    let automatic = true
     /// Hidden until its first read, so people without OpenRouter don't spend a menu bar slot on it.
     func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("openrouter.json").path) }
-    func teamKey() -> String? { try? credentials.password(service: Self.teamService, account: "openrouter.ai") }
     let cache: Cache, credentials: CredentialReading, http: HTTPReading
     let home: URL, environment: [String: String]
     init(cache: Cache, credentials: CredentialReading, http: HTTPReading,
@@ -258,7 +257,7 @@ final class OpenRouterProvider: UsageProvider {
     }
     func refresh() throws {
         let slots = try configuredSlots()
-        let team = teamKey()
+        let team = try credentials.stored(service: Self.teamService, account: "openrouter.ai")
         guard !slots.isEmpty || team != nil else { throw HUDProblem("Add an OpenRouter key; see PROVIDERS.md") }
         let previous = cache.read("openrouter.json")
         let oldRows = previous["rows"] as? [JSON] ?? []
@@ -273,7 +272,9 @@ final class OpenRouterProvider: UsageProvider {
             let old = oldRows.first(where: { $0["slot_id"] as? String == slot.id || $0["label"] as? String == slot.label }) ?? [:]
             var winner: (JSON, JSON)?
             for source in slot.sources {
-                if let result = try? probe(source) { winner = (source, result); break }
+                do { winner = (source, try probe(source)); break }
+                catch let problem as HUDProblem where problem.prompted { throw problem }
+                catch {}
             }
             if let (source, result) = winner {
                 rows.append(Self.successfulRow(slot: slot, source: source, result: result, previous: old, day: day))

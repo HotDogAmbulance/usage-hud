@@ -32,7 +32,7 @@ final class GLMProvider: UsageProvider {
     func refresh() throws {
         var lastProblem = HUDProblem("Add a GLM Coding Plan API key to the Keychain; see PROVIDERS.md")
         for host in Self.hosts {
-            guard let key = try? credentials.password(service: Self.service, account: host) else { continue }
+            guard let key = try credentials.stored(service: Self.service, account: host) else { continue }
             let data: JSON
             do {
                 // Z.ai expects the raw key, without a Bearer prefix.
