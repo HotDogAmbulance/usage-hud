@@ -8,6 +8,8 @@ Built for macOS, entirely in Swift. Small enough to stay out of the way.
 
 ## Reading the batteries
 
+Using Codex Pro or Claude Pro/Max? [Here’s how your plan is displayed and how to set it up](PAID_PLANS.md). The same app adapts to your account’s reported windows.
+
 Each provider has its own color: teal for Codex, terracotta for Claude, and pale violet for OpenRouter.
 
 For Codex and Claude, the number is the **percentage remaining** in your 5-hour window. The stronger color follows that reading. Behind it, a lighter shade shows what remains for the week; a thin pale marker keeps the weekly boundary visible when the two fills overlap. Grey is the unused part of the battery. The digits are cut out of the fill, so your menu-bar background shows through, just like the reference Mac battery.

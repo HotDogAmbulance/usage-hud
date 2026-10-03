@@ -65,12 +65,16 @@ final class CodexProvider: UsageProvider {
     let cache: Cache
     let credits: OpenAICredits
     init(cache: Cache, credits: OpenAICredits) { self.cache = cache; self.credits = credits }
-    static func windows(_ result: JSON) throws -> JSON {
+    static func bucket(_ result: JSON) throws -> JSON {
         let buckets = dict(result["rateLimitsByLimitId"])
         let bucket = buckets.isEmpty ? dict(result["rateLimits"]) : dict(buckets["codex"])
         guard !bucket.isEmpty, bucket["limitId"] == nil || bucket["limitId"] is NSNull || bucket["limitId"] as? String == "codex" else {
             throw HUDProblem("Codex quota bucket missing")
         }
+        return bucket
+    }
+    static func windows(_ result: JSON) throws -> JSON {
+        let bucket = try Self.bucket(result)
         var windows: JSON = [:]
         for key in ["primary", "secondary"] {
             let window = dict(bucket[key])
@@ -79,12 +83,20 @@ final class CodexProvider: UsageProvider {
                             "window_minutes": number(window["windowDurationMins"]) as Any? ?? NSNull(),
                             "resets_at": number(window["resetsAt"]) as Any? ?? NSNull()]
         }
-        guard !windows.isEmpty else { throw HUDProblem("Codex returned no quota windows") }
+        guard !windows.isEmpty || !dict(bucket["credits"]).isEmpty else { throw HUDProblem("Codex returned no quota windows") }
         return windows
     }
     func refresh() throws {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let binary = home.appendingPathComponent(".local/bin/codex")
+        let environment = ProcessInfo.processInfo.environment
+        let configured = environment["USAGE_HUD_CODEX_CLI"] ?? Bundle.main.object(forInfoDictionaryKey: "UsageHUDCodexCLI") as? String
+        let candidates = [configured].compactMap { $0 } +
+            [home.appendingPathComponent(".local/bin/codex").path, "/opt/homebrew/bin/codex", "/usr/local/bin/codex"] +
+            (environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/codex" }
+        guard let path = candidates.first(where: { $0.hasPrefix("/") && FileManager.default.isExecutableFile(atPath: $0) }) else {
+            throw HUDProblem("Install Codex CLI and sign in with codex login")
+        }
+        let binary = URL(fileURLWithPath: path)
         var env = ProcessInfo.processInfo.environment
         env["CODEX_HOME"] = env["CODEX_HOME"] ?? home.appendingPathComponent(".codex").path
         let rpc = try RPCProcess(binary: binary, arguments: ["app-server", "--stdio"], environment: env)
@@ -93,13 +105,25 @@ final class CodexProvider: UsageProvider {
         _ = try rpc.receive(1)
         try rpc.send(["method": "initialized", "params": JSON()])
         try rpc.send(["id": 2, "method": "account/rateLimits/read"])
-        let result = try Self.windows(rpc.receive(2))
-        try cache.quota("codex-quota.json", windows: result, extra: ["source": "standalone-cli"])
+        let response = try rpc.receive(2), bucket = try Self.bucket(response)
+        try cache.quota("codex-quota.json", windows: Self.windows(response), extra: ["source": "standalone-cli",
+            "plan": bucket["planType"] ?? NSNull(), "subscription_credits": bucket["credits"] ?? NSNull()])
     }
     func panel() -> Panel {
-        var rows = quotaWindows(cache.read("codex-quota.json"))
+        let blob = cache.read("codex-quota.json"), plan = blob["plan"] as? String
+        var rows = quotaWindows(blob)
+        if ["pro", "prolite"].contains(plan ?? "") { rows.removeAll { $0.label == "5h" } }
+        let purchased = dict(blob["subscription_credits"])
+        let old = Date().timeIntervalSince1970 - (number(blob["captured_at"]) ?? 0) > 600
+        if purchased["unlimited"] as? Bool == true {
+            rows.append(Window(label: "Codex credits", right: "Unlimited credits", stale: old))
+        } else if let balance = number(purchased["balance"]), balance >= 0 {
+            rows.append(Window(label: "Codex credits", right: String(format: "%g credits left", balance), stale: old))
+        } else if purchased["hasCredits"] as? Bool == false {
+            rows.append(Window(label: "Codex credits", right: "No purchased credits", stale: old))
+        }
         if let credit = credits.row() { rows.append(credit) }
-        return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Refresh Codex to read quota" : "")
+        return Panel(id: id, name: name, windows: rows, note: plan.map { "Plan: " + $0 } ?? (rows.isEmpty ? "Refresh Codex to read quota" : ""))
     }
 }
 struct RouterSlot {

@@ -101,11 +101,17 @@ public final class Engine {
             return true
         }
         if arguments.count == 4 && arguments[0] == "--write-bundle-info" {
-            let info: JSON = ["CFBundleName": arguments[2], "CFBundleDisplayName": arguments[2],
-                "CFBundleIdentifier": "local.usage-hud", "CFBundleVersion": "4", "CFBundleShortVersionString": "2.0.1",
+            var info: JSON = ["CFBundleName": arguments[2], "CFBundleDisplayName": arguments[2],
+                "CFBundleIdentifier": "local.usage-hud", "CFBundleVersion": "5", "CFBundleShortVersionString": "2.1",
                 "CFBundlePackageType": "APPL", "CFBundleExecutable": "usagehud", "CFBundleIconFile": "AppIcon",
                 "LSUIElement": true, "LSMinimumSystemVersion": "12.0", "NSHighResolutionCapable": true,
                 "UsageHUDDataDirectory": arguments[3]]
+            if let path = ProcessInfo.processInfo.environment["USAGE_HUD_CODEX_CLI"] {
+                guard path.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: path) else {
+                    throw HUDProblem("USAGE_HUD_CODEX_CLI must point to an executable using an absolute path")
+                }
+                info["UsageHUDCodexCLI"] = path
+            }
             try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: URL(fileURLWithPath: arguments[1]), options: .atomic)
             return true
         }

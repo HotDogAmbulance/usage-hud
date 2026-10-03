@@ -125,6 +125,34 @@ final class CoreTests {
         expectError(try CodexProvider.windows(["rateLimitsByLimitId": ["other": ["primary": ["usedPercent": 99]]]]))
         expectError(try CodexProvider.windows(["rateLimits": ["limitId": "other", "primary": ["usedPercent": 99]]]))
     }
+    func testProUsesWeeklyWindowInsteadOfOldFiveHour() throws {
+        let now = Date().timeIntervalSince1970
+        try cache.write("codex-quota.json", ["plan": "pro", "captured_at": now, "rate_limits": [
+            "primary": ["used_percentage": 20, "window_minutes": 300, "captured_at": now],
+            "secondary": ["used_percentage": 31, "window_minutes": 10080, "captured_at": now]]])
+        let provider = CodexProvider(cache: cache, credits: OpenAICredits(cache: cache, credentials: credentials, http: http))
+        let panel = provider.panel()
+        expectEqual(panel.displayedQuota?.label, "7d")
+        expectFalse(panel.windows.contains { $0.label == "5h" })
+        expectEqual(panel.note, "Plan: pro")
+    }
+    func testWeeklyPrimaryIsNotMislabelledFiveHour() throws {
+        let windows = try CodexProvider.windows(["rateLimits": ["limitId": "codex", "planType": "pro",
+            "primary": ["usedPercent": 31, "windowDurationMins": 10080]]])
+        expectEqual(quotaWindows(["captured_at": Date().timeIntervalSince1970, "rate_limits": windows]).first?.label, "7d")
+    }
+    func testPurchasedCodexCreditsAreNotDollars() throws {
+        try cache.write("codex-quota.json", ["plan": "pro", "captured_at": Date().timeIntervalSince1970,
+                                            "subscription_credits": ["balance": "125.5", "hasCredits": true, "unlimited": false]])
+        let panel = CodexProvider(cache: cache, credits: OpenAICredits(cache: cache, credentials: credentials, http: http)).panel()
+        expectEqual(panel.windows.first?.right, "125.5 credits left")
+        expectNil(panel.displayedQuota)
+    }
+    func testCreditOnlyCodexResponseDoesNotInventQuota() throws {
+        let windows = try CodexProvider.windows(["rateLimits": ["credits": ["unlimited": true, "hasCredits": true]]])
+        expectTrue(windows.isEmpty)
+        expectError(try CodexProvider.windows(["rateLimits": ["planType": "pro"]]))
+    }
     func testRouterRejectsDuplicateSlots() {
         let slot: JSON = ["id": "one", "label": "One", "sources": [["provider": "openrouter"]]]
         expectError(try OpenRouterProvider.slots([slot, slot]))
