@@ -336,4 +336,29 @@ final class CoreTests {
         let panels = Engine(root: root, credentials: credentials, http: http).panels()
         expectEqual(panels.map(\.id), ["codex", "claude", "openrouter"])
     }
+
+    func testBalanceParsers() throws {
+        let vercel = try BalanceProvider.vercelBalance(["balance": "95.50", "total_used": "4.50"], "ai-gateway.vercel.sh")
+        expectEqual(vercel.0, 95.5); expectEqual(vercel.1, "$")
+        let deepSeek = try BalanceProvider.deepSeekBalance(["is_available": true, "balance_infos": [
+            ["currency": "CNY", "total_balance": "110.00"], ["currency": "USD", "total_balance": "12.30"]]], "api.deepseek.com")
+        expectEqual(deepSeek.0, 12.3); expectEqual(deepSeek.1, "$")
+        let yuan = try BalanceProvider.deepSeekBalance(["balance_infos": [["currency": "CNY", "total_balance": "110.00"]]], "api.deepseek.com")
+        expectEqual(yuan.1, "¥")
+        let kimi = try BalanceProvider.kimiBalance(["code": 0, "data": ["available_balance": 49.58894]], "api.moonshot.cn")
+        expectEqual(kimi.0, 49.58894); expectEqual(kimi.1, "¥")
+        expectError(try BalanceProvider.vercelBalance([:], "ai-gateway.vercel.sh"))
+    }
+    func testBalanceProviderFallsBackToSecondHostAndShowsMoney() throws {
+        http.handler = { url in
+            if url.host == "api.moonshot.ai" { throw HTTPFailure(status: 401) }
+            return ["data": ["available_balance": 3.5]]
+        }
+        let provider = BalanceProvider.kimi(cache: cache, credentials: credentials, http: http)
+        expectFalse(provider.shown())
+        try provider.refresh()
+        expectTrue(provider.shown())
+        expectEqual(provider.panel().windows.first?.label, "Kimi")
+        expectEqual(provider.panel().windows.first?.right, "¥3.50 left")
+    }
 }

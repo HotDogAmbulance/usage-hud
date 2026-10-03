@@ -55,6 +55,9 @@ final class HUD: NSObject, NSApplicationDelegate {
         case "glm": return NSColor(srgbRed: 0.42, green: 0.60, blue: 0.98, alpha: 1)
         case "gemini": return NSColor(srgbRed: 0.95, green: 0.76, blue: 0.32, alpha: 1)
         case "grok": return NSColor(srgbRed: 0.80, green: 0.80, blue: 0.84, alpha: 1)
+        case "vercel": return NSColor(srgbRed: 0.72, green: 0.88, blue: 0.35, alpha: 1)
+        case "deepseek": return NSColor(srgbRed: 0.47, green: 0.44, blue: 0.96, alpha: 1)
+        case "kimi": return NSColor(srgbRed: 0.96, green: 0.48, blue: 0.58, alpha: 1)
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
         }
     }

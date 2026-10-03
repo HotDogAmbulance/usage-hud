@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add optional Vercel AI Gateway, DeepSeek and Kimi balance batteries, read from each provider's documented balance endpoint.
 - Hovering over a Codex or Claude battery shows its 7d window on its own, in the lighter weekly shade; moving away returns to 5h.
 - Remove the white weekly boundary marker.
 - Add optional GLM Coding Plan, Gemini CLI and Grok CLI batteries. Each appears only after its first successful read; see PROVIDERS.md for setup.

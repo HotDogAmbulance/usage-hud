@@ -21,7 +21,10 @@ public final class Engine {
                                       OpenRouterProvider(cache: cache, credentials: credentials, http: http),
                                       GLMProvider(cache: cache, credentials: credentials, http: http),
                                       GeminiProvider(cache: cache, http: http),
-                                      GrokProvider(cache: cache)]
+                                      GrokProvider(cache: cache),
+                                      BalanceProvider.vercel(cache: cache, credentials: credentials, http: http),
+                                      BalanceProvider.deepSeek(cache: cache, credentials: credentials, http: http),
+                                      BalanceProvider.kimi(cache: cache, credentials: credentials, http: http)]
     }
     public func panels(refresh: String? = nil) -> [Panel] {
         if refresh == "openai-credits" { try? credits.refresh() }
@@ -130,7 +133,7 @@ public final class Engine {
             return true
         }
         if arguments == ["--help"] {
-            print("usagehud [--json | --refresh automatic|codex|claude|openrouter|glm|gemini|grok|openai-credits | --claude-statusline | --probe-if-stale]")
+            print("usagehud [--json | --refresh automatic|codex|claude|openrouter|glm|gemini|grok|vercel|deepseek|kimi|openai-credits | --claude-statusline | --probe-if-stale]")
             return true
         }
         let refresh: String?

@@ -60,7 +60,9 @@ let cases: [(String, () throws -> Void)] = [
     ("testExpiredGeminiNeverCallsNetwork", test.testExpiredGeminiNeverCallsNetwork),
     ("testGeminiPostsProjectFromTier", test.testGeminiPostsProjectFromTier),
     ("testGrokMonthlyBillingInCents", test.testGrokMonthlyBillingInCents),
-    ("testUnusedPlansStayOutOfMenuBar", test.testUnusedPlansStayOutOfMenuBar)
+    ("testUnusedPlansStayOutOfMenuBar", test.testUnusedPlansStayOutOfMenuBar),
+    ("testBalanceParsers", test.testBalanceParsers),
+    ("testBalanceProviderFallsBackToSecondHostAndShowsMoney", test.testBalanceProviderFallsBackToSecondHostAndShowsMoney)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }
