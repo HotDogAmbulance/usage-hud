@@ -3,8 +3,18 @@ import Darwin
 
 import UsageHUDCore
 
+/// Reports pointer entry and exit over a status item button.
+final class HoverTracker: NSResponder {
+    var changed: (Bool) -> Void = { _ in }
+    override func mouseEntered(with event: NSEvent) { changed(true) }
+    override func mouseExited(with event: NSEvent) { changed(false) }
+}
+
 final class HUD: NSObject, NSApplicationDelegate {
     var items: [String: NSStatusItem] = [:]
+    var panels: [String: Panel] = [:]
+    var trackers: [String: HoverTracker] = [:]
+    var hovered: String?
     var busy = false
     var lockDescriptor: Int32 = -1
     let engine = Engine()
@@ -48,7 +58,19 @@ final class HUD: NSObject, NSApplicationDelegate {
     func displayedQuota(_ panel: Panel) -> Window? {
         panel.displayedQuota
     }
-    func icon(_ panel: Panel) -> NSImage {
+    /// While hovered, a battery led by 5h shows its 7d window on its own.
+    func hoverPanel(_ panel: Panel) -> Panel? {
+        guard displayedQuota(panel)?.label == "5h",
+              let weekly = panel.windows.first(where: { $0.label == "7d" && $0.pct != nil }) else { return nil }
+        return Panel(id: panel.id, name: panel.name, windows: [weekly], note: panel.note)
+    }
+    func drawIcon(_ id: String) {
+        guard let panel = panels[id], let button = items[id]?.button else { return }
+        if hovered == id, let weekly = hoverPanel(panel) { button.image = icon(weekly, weeklyShade: true) }
+        else { button.image = icon(panel) }
+    }
+    /// `weeklyShade` draws the main fill in the same lighter tone the 7d layer uses behind 5h.
+    func icon(_ panel: Panel, weeklyShade: Bool = false) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
         let moneyWindow = quota == nil ? panel.windows.first(where: {$0.label == panel.name}) : nil
@@ -66,7 +88,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         let image = NSImage(size: NSSize(width: bodyWidth + 5, height: 22))
         image.lockFocus()
         let body = NSBezierPath(roundedRect: NSRect(x: 1, y: bodyY, width: bodyWidth, height: bodyHeight), xRadius: 3.5, yRadius: 3.5)
-        let color = tint(panel.id)
+        let base = tint(panel.id)
+        let color = weeklyShade ? base.blended(withFraction: 0.65, of: .white)! : base
         let fillWidth = valid ? bodyWidth * remaining / 100 : 0
         let bodyRect = NSRect(x: 1, y: bodyY, width: bodyWidth, height: bodyHeight)
         NSGraphicsContext.saveGraphicsState()
@@ -75,20 +98,15 @@ final class HUD: NSObject, NSApplicationDelegate {
         } else { body.addClip() }
         NSColor.white.withAlphaComponent(0.36).setFill(); bodyRect.fill()
         if money != nil {
-            color.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(cached ? 0.50 : 1).setFill()
+            base.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(cached ? 0.50 : 1).setFill()
             bodyRect.fill()
         }
         if weeklyValid {
-            color.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.50 : 1).setFill()
+            base.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.50 : 1).setFill()
             NSRect(x: 1, y: bodyY, width: bodyWidth * weeklyRemaining / 100, height: bodyHeight).fill()
         }
         color.withAlphaComponent(cached ? 0.45 : 1).setFill()
         NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight).fill()
-        // A pale boundary keeps 7d visible even when the 5h fill covers it.
-        if weeklyValid && weeklyRemaining > 0 && weeklyRemaining < 100 {
-            NSColor.white.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.45 : 0.85).setFill()
-            NSRect(x: 1 + bodyWidth * weeklyRemaining / 100 - 0.5, y: bodyY, width: 1, height: bodyHeight).fill()
-        }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
         if let mask = SystemBattery.cap {
@@ -121,12 +139,24 @@ final class HUD: NSObject, NSApplicationDelegate {
     func render(_ panel: Panel) {
         let item = items[panel.id] ?? NSStatusBar.system.statusItem(withLength: 32)
         items[panel.id] = item
-        item.button?.image = icon(panel)
+        panels[panel.id] = panel
+        if trackers[panel.id] == nil, let button = item.button {
+            let tracker = HoverTracker(), id = panel.id
+            tracker.changed = { [weak self] inside in
+                guard let self = self else { return }
+                if inside { self.hovered = id } else if self.hovered == id { self.hovered = nil }
+                self.drawIcon(id)
+            }
+            button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                                  owner: tracker, userInfo: nil))
+            trackers[panel.id] = tracker
+        }
+        drawIcon(panel.id)
         item.length = (item.button?.image?.size.width ?? 28) + 4
         let displayed = displayedQuota(panel)
         let cached = displayed?.stale == true || displayed?.expired == true
         let reading = displayed.map { $0.label + (cached ? " · cached" : " · remaining") } ?? "balance in USD"
-        item.button?.toolTip = panel.name + " · " + reading + (displayed?.label == "5h" ? "; lighter fill = 7d" : "")
+        item.button?.toolTip = panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "")
         item.button?.setAccessibilityLabel(panel.name + " usage")
         let menu = NSMenu()
         menu.addItem(withTitle: panel.name + " · Usage HUD", action: nil, keyEquivalent: "")
@@ -181,6 +211,15 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.displayedQuota(fallback)?.pct == 27)
     delegate.render(fallback)
     precondition(delegate.items["codex"]?.menu?.items.contains{$0.title == "Showing 7d · cached"} == true)
+    let layered = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 20), Window(label: "7d", pct: 80)])
+    precondition(delegate.hoverPanel(layered)?.displayedQuota?.label == "7d")
+    precondition(delegate.hoverPanel(layered)?.windows.count == 1)
+    precondition(delegate.hoverPanel(fallback) == nil)
+    delegate.render(layered)
+    delegate.trackers["claude"]?.changed(true)
+    precondition(delegate.hovered == "claude")
+    delegate.trackers["claude"]?.changed(false)
+    precondition(delegate.hovered == nil)
     let image = NSImage(size: NSSize(width: 144, height: 44))
     image.lockFocus()
     NSColor(srgbRed: 0.32, green: 0.44, blue: 0.59, alpha: 1).setFill()
