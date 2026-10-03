@@ -11,8 +11,10 @@ struct HUDProblem: Error, LocalizedError {
     /// macOS showed a Keychain password prompt. Background refreshes then leave that provider alone until the user
     /// refreshes it from its menu, so the prompt never comes back on its own.
     let prompted: Bool
-    init(_ message: String, attention: Bool = false, prompted: Bool = false) {
-        self.message = message; self.attention = attention || prompted; self.prompted = prompted
+    /// A harmless command that fixes it, offered in the battery's menu (for example `claude auth login`).
+    let fix: String?
+    init(_ message: String, attention: Bool = false, prompted: Bool = false, fix: String? = nil) {
+        self.message = message; self.attention = attention || prompted; self.prompted = prompted; self.fix = fix
     }
     var errorDescription: String? { message }
 }
@@ -61,12 +63,19 @@ public struct Panel: Codable {
     public var cells: [Window]
     /// A one-line overview above the cells, such as "23 keys · $41.20 today · 3 near cap".
     public var cellsTitle: String?
+    /// The full list behind the cells, when the cells summarise it (Antigravity's models behind their quota pools).
+    public var details: [Window]
+    /// The window the battery shows, when the provider knows better than the 5h/7d rule; shown dimmed once cached.
+    public var lead: String?
+    /// A command that fixes the current problem, from the provider; the menu can run it in Terminal.
+    public var fix: String?
     public init(id: String, name: String, windows: [Window] = [], note: String = "", alert: String? = nil,
-                cells: [Window] = [], cellsTitle: String? = nil) {
+                cells: [Window] = [], cellsTitle: String? = nil, details: [Window] = [], lead: String? = nil) {
         self.id = id; self.name = name; self.windows = windows; self.note = note; self.alert = alert
-        self.cells = cells; self.cellsTitle = cellsTitle
+        self.cells = cells; self.cellsTitle = cellsTitle; self.details = details; self.lead = lead
     }
     public var displayedQuota: Window? {
+        if let lead = lead, let window = windows.first(where: { $0.label == lead && $0.pct != nil }) { return window }
         if let five = windows.first(where: { $0.label == "5h" && $0.pct != nil && $0.stale != true && $0.expired != true }) { return five }
         if let week = windows.first(where: { $0.label == "7d" && $0.pct != nil }) { return week }
         return windows.first(where: { $0.pct != nil && $0.stale != true && $0.expired != true })

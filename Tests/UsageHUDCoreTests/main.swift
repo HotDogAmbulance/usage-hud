@@ -75,7 +75,9 @@ let cases: [(String, () throws -> Void)] = [
     ("testCLIsFoundOutsideTheAppsBarePATH", test.testCLIsFoundOutsideTheAppsBarePATH),
     ("testGLMKeyComesFromClaudeCodeSettings", test.testGLMKeyComesFromClaudeCodeSettings),
     ("testManagementKeyOnTheMacListsTheTeam", test.testManagementKeyOnTheMacListsTheTeam),
-    ("testRevokedFoundKeyStaysQuiet", test.testRevokedFoundKeyStaysQuiet)
+    ("testRevokedFoundKeyStaysQuiet", test.testRevokedFoundKeyStaysQuiet),
+    ("testAntigravityPoolsModelsThatShareAQuota", test.testAntigravityPoolsModelsThatShareAQuota),
+    ("testSignInProblemsOfferTheirFix", test.testSignInProblemsOfferTheirFix)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }

@@ -28,23 +28,47 @@ final class AntigravityProvider: UsageProvider {
         try cache.write("antigravity.json", ["captured_at": Date().timeIntervalSince1970,
                                             "rate_limits": Self.windows(response)])
     }
+    /// "Claude Opus 4.6 (Thinking)" belongs to Claude, "GPT-OSS 120B" to GPT.
+    static func family(_ model: String) -> String {
+        let word = model.split(separator: " ").first.map(String.init) ?? model
+        return word.hasPrefix("GPT") ? "GPT" : word
+    }
+    /// Models that draw on one quota report the same share left and the same reset, so each pool is one row, named by
+    /// the families in it ("Gemini", "Claude & GPT"); a model with a quota of its own keeps its name. Plans that give
+    /// every model its own quota just yield more rows, and once there are many, untouched ones fold into one.
     func panel() -> Panel {
-        let rows = quotaWindows(cache.read("antigravity.json")).sorted {
-            if $0.pct == $1.pct { return $0.label < $1.label }
-            return ($0.pct ?? 0) > ($1.pct ?? 0)
+        let models = quotaWindows(cache.read("antigravity.json")), now = Date().timeIntervalSince1970
+        func text(_ row: Window, models count: Int) -> String {
+            var text = "\(Int((100 - (row.pct ?? 0)).rounded()))% left"
+            if let reset = row.resets_at, reset > now { text += " · resets in " + countdown(reset - now) }
+            if count > 1 { text += " · \(count) models" }
+            return text + (row.stale == true || row.expired == true ? " · cached" : "")
         }
-        let cells = rows.map { row -> Window in
-            var text = "\(Int((100 - (row.pct ?? 0)).rounded()))% remaining"
-            if let reset = row.resets_at, reset > Date().timeIntervalSince1970 {
-                let minutes = Int((reset - Date().timeIntervalSince1970) / 60)
-                text += " · \(minutes / 60)h \(minutes % 60)m"
-            }
-            if row.stale == true || row.expired == true { text += " · cached" }
-            return Window(label: row.label, pct: row.pct, right: text, resets_at: row.resets_at,
-                          expired: row.expired, stale: row.stale)
+        var pools: [String: [Window]] = [:], order: [String] = []
+        for model in models.sorted(by: { $0.label < $1.label }) {
+            let key = "\(Int((model.pct ?? 0).rounded()))|\(Int((model.resets_at ?? 0) / 600))"
+            if pools[key] == nil { order.append(key) }
+            pools[key, default: []].append(model)
         }
-        return Panel(id: id, name: name, windows: rows, note: "Model quotas · requires Antigravity running",
-                     cells: cells, cellsTitle: "\(rows.count) models · click for all quotas")
+        var rows = order.compactMap { pools[$0] }.map { members -> Window in
+            var families: [String] = []
+            for model in members where !families.contains(Self.family(model.label)) { families.append(Self.family(model.label)) }
+            let first = members[0]
+            return Window(label: members.count == 1 ? first.label : families.joined(separator: " & "), pct: first.pct,
+                          right: text(first, models: members.count), resets_at: first.resets_at, expired: first.expired, stale: first.stale)
+        }.enumerated().sorted { ($0.element.pct ?? 0, -$0.offset) > ($1.element.pct ?? 0, -$1.offset) }.map { $0.element }
+        let untouched = rows.filter { ($0.pct ?? 0) < 0.5 }
+        if rows.count > 4 && untouched.count > 1 {
+            let count = models.filter { ($0.pct ?? 0) < 0.5 }.count
+            rows = rows.filter { ($0.pct ?? 0) >= 0.5 } + [Window(label: "Other models", pct: 0, right: "100% left · \(count) models",
+                                                                  stale: untouched.contains { $0.stale == true })]
+        }
+        let details = models.sorted { ($0.pct ?? 0, $1.label) > ($1.pct ?? 0, $0.label) }.map {
+            Window(label: $0.label, pct: $0.pct, right: text($0, models: 1), resets_at: $0.resets_at, expired: $0.expired, stale: $0.stale)
+        }
+        return Panel(id: id, name: name, windows: rows, note: "Model quotas · updates while Antigravity is open",
+                     cells: rows, cellsTitle: "\(models.count) models · \(rows.count) quota \(rows.count == 1 ? "pool" : "pools") · click for every model",
+                     details: details, lead: rows.first?.label)
     }
 }
 
@@ -70,7 +94,8 @@ enum AntigravityLocal {
             return String(parts[0])
         }
         guard candidates.count == 1, let pid = candidates.first else {
-            throw HUDProblem("Open Antigravity and sign in to read its quota", attention: true)
+            // Closing the app is normal, not a fault: the battery dims with its last reading instead of pulsing.
+            throw HUDProblem("Open Antigravity to update its quota")
         }
         let arguments = try command("/bin/ps", ["-p", pid, "-o", "args="])
         guard let csrf = flag("--csrf_token", in: arguments), !csrf.isEmpty else {

@@ -337,7 +337,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         let money = panel.windows.filter { $0.pct == nil && $0.right != nil && $0.label != panel.name }.map { "\n" + $0.label + ": " + ($0.right ?? "") }
         if panel.alert == nil { acknowledged[panel.id] = nil }
         // Providers with per-key cells get the hover panel instead of a tooltip.
-        item.button?.toolTip = !panel.cells.isEmpty ? nil : (panel.alert.map { "⚠︎ " + $0 + "\n" } ?? "") + panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
+        item.button?.toolTip = !panel.cells.isEmpty ? nil : (panel.alert.map { "⚠︎ " + $0 + "\n" } ?? "") + (panel.fix.map { "Fix: click, then run “" + $0 + "”\n" } ?? "") + panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
         item.button?.setAccessibilityLabel(panel.name + " usage" + (panel.alert.map { ", " + $0 } ?? ""))
         updatePulse()
         let menu = NSMenu()
@@ -359,11 +359,16 @@ final class HUD: NSObject, NSApplicationDelegate {
         }
         if panel.cellsTitle != nil {
             let all = NSMenu()
-            for cell in panel.cells { all.addItem(withTitle: cell.label + " · " + (cell.right ?? ""), action: nil, keyEquivalent: "") }
+            let rows = panel.details.isEmpty ? panel.cells : panel.details
+            for cell in rows { all.addItem(withTitle: cell.label + " · " + (cell.right ?? ""), action: nil, keyEquivalent: "") }
             let title = panel.id == "antigravity" ? "All models" : "All keys"
-            menu.addItem(withTitle: title + " (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
+            menu.addItem(withTitle: title + " (\(rows.count))", action: nil, keyEquivalent: "").submenu = all
         }
         menu.addItem(NSMenuItem.separator())
+        if let fix = panel.fix {
+            let item = menu.addItem(withTitle: "Fix: run “" + fix + "” in Terminal", action: #selector(runFix(_:)), keyEquivalent: "")
+            item.representedObject = fix; item.target = self
+        }
         let refresh = menu.addItem(withTitle: "Refresh " + panel.name, action: #selector(refreshProvider(_:)), keyEquivalent: "r")
         refresh.representedObject = panel.id; refresh.target = self
         if panel.id == "codex" {
@@ -426,6 +431,17 @@ final class HUD: NSObject, NSApplicationDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
     @objc func refreshProvider(_ sender: NSMenuItem) { load(sender.representedObject as? String) }
+    /// Opens Terminal on the provider's own fix (a sign-in command) through a .command file, so no Automation permission
+    /// is needed, and the user sees and answers it themselves. Only commands written into the providers ever get here.
+    static let fixes: Set<String> = ["claude auth login", "codex login", "grok login"]
+    @objc func runFix(_ sender: NSMenuItem) {
+        guard let fix = sender.representedObject as? String, HUD.fixes.contains(fix) else { return }
+        let script = home.appendingPathComponent("fix.command")
+        let text = "#!/bin/zsh -l\necho '$ \(fix)'\n\(fix)\necho; echo 'Done. Choose Refresh in the battery menu.'\n"
+        guard (try? text.write(to: script, atomically: true, encoding: .utf8)) != nil else { return }
+        chmod(script.path, 0o700)
+        NSWorkspace.shared.open(script)
+    }
     @objc func quit() { NSApp.terminate(nil) }
 }
 // A CLI that exits before reading its input must not take the app down with it.
@@ -503,6 +519,13 @@ if CommandLine.arguments.contains("--self-test") {
                      cells: [Window(label: "k7", pct: 96, right: "$4.80 of $5.00 today"), Window(label: "k8", right: "$1.00 today")], cellsTitle: "2 keys")
     delegate.render(team)
     precondition(delegate.items["openrouter"]?.button?.toolTip == nil)
+    // A sign-in problem offers its harmless fix in the menu and says so on hover.
+    var signedOut = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 20)], note: "Claude authentication expired")
+    signedOut.fix = "claude auth login"
+    delegate.render(signedOut)
+    precondition(delegate.items["claude"]?.menu?.items.contains { $0.title == "Fix: run “claude auth login” in Terminal" && $0.action != nil } == true)
+    precondition(delegate.items["claude"]?.button?.toolTip?.contains("Fix: click, then run “claude auth login”") == true)
+    precondition(HUD.fixes.contains("claude auth login") && !HUD.fixes.contains("rm -rf ~"))
     precondition(delegate.items["openrouter"]?.menu?.items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
     precondition(CellsView(lines: ["a", "b"], rows: team.cells).frame.height == 92)
     // The panel widens to show a whole reset time instead of cutting it off.
