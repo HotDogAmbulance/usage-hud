@@ -4,25 +4,26 @@ import Foundation
 /// but its keys are unmistakable, so a few likely places are read and only exact key matches are taken. Keys go nowhere
 /// but openrouter.ai and are never written down.
 enum KeyFinder {
-    static let pattern = try! NSRegularExpression(pattern: "sk-or-v1-[0-9a-f]{64}")
-    /// Shell profiles, AI tool configs, and personal scripts, which people tend to name after a person or a job.
+    /// The key, and the variable it is assigned to when there is one.
+    static let pattern = try! NSRegularExpression(pattern: "(?:\\b([A-Za-z_][A-Za-z0-9_]*)\\s*[=:]\\s*[\"']?)?(sk-or-v1-[0-9a-f]{64})")
+    /// `ALICE_OPENROUTER_KEY` names its key "alice"; generic names like `OPENROUTER_API_KEY` say nothing, so the file names it.
+    static func person(_ variable: String) -> String? {
+        let words = variable.lowercased().split(separator: "_").filter { !["openrouter", "or", "api", "key", "token"].contains($0) }
+        return words.isEmpty ? nil : words.joined(separator: " ")
+    }
+    /// The standard places only: shell profiles and AI tool configs. Personal scripts are left alone.
     static func places(home: URL) -> [URL] {
-        let fixed = [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".env", ".config/fish/config.fish",
+        [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".env", ".config/fish/config.fish",
                      ".local/share/opencode/auth.json", ".aider.conf.yml", ".config/crush/crush.json", ".continue/config.yaml",
                      ".continue/config.json", ".config/zed/settings.json"].map { home.appendingPathComponent($0) }
-        let scripts = ["", "bin", "scripts", ".local/bin"].flatMap { folder in
-            ((try? FileManager.default.contentsOfDirectory(at: home.appendingPathComponent(folder), includingPropertiesForKeys: nil)) ?? [])
-                .filter { $0.pathExtension == "sh" }.sorted { $0.path < $1.path }
-        }
-        return fixed + scripts
     }
-    /// "boot-alice.sh" is "boot-alice"; a tool's config is named after its folder; ".zshrc" is "zshrc".
+    /// ".zshrc" is "zshrc"; a tool's config is named after its folder, so opencode's auth.json is "opencode".
     static func label(_ file: URL) -> String {
         let stem = file.deletingPathExtension().lastPathComponent
         let name = ["auth", "config", "settings"].contains(stem) ? file.deletingLastPathComponent().lastPathComponent : stem
         return name.trimmingCharacters(in: CharacterSet(charactersIn: "."))
     }
-    /// Each distinct key once, named after the first file it appears in. Files over 1 MB are skipped.
+    /// Each distinct key once, named after its variable or else the first file it appears in. Files over 1 MB are skipped.
     static func find(in files: [URL], environment: [String: String] = ProcessInfo.processInfo.environment) -> [(label: String, key: String)] {
         var found: [(label: String, key: String)] = [], seen = Set<String>()
         let sources = [("environment", environment["OPENROUTER_API_KEY"] ?? "")] + files.compactMap { file -> (String, String)? in
@@ -30,10 +31,12 @@ enum KeyFinder {
                   let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
             return (label(file), text)
         }
-        for (name, text) in sources {
+        for (file, text) in sources {
             for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                let key = (text as NSString).substring(with: match.range)
+                let key = (text as NSString).substring(with: match.range(at: 2))
                 guard seen.insert(key).inserted else { continue }
+                let variable = match.range(at: 1).location == NSNotFound ? "" : (text as NSString).substring(with: match.range(at: 1))
+                let name = person(variable) ?? file
                 let taken = found.filter { $0.label == name || $0.label.hasPrefix(name + " ") }.count
                 found.append((taken == 0 ? name : "\(name) \(taken + 1)", key))
             }
