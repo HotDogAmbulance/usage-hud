@@ -6,6 +6,8 @@ Quota adapters persist `used_percentage`, `window_minutes` where applicable, `re
 
 ## OpenRouter
 
+**Nothing to set up:** OpenRouter has no sign-in file, but its keys (`sk-or-v1-` and 64 hex characters) are unmistakable. When `providers.json` is absent, the app looks for them in `OPENROUTER_API_KEY`, your shell profiles (`.zshrc`, `.zprofile`, `.zshenv`, `.bashrc`, `.bash_profile`, `.profile`, `.env`, fish `config.fish`), common AI tool configs (opencode, aider, crush, Continue, Zed) and `.sh` scripts directly in `~`, `~/bin`, `~/scripts` and `~/.local/bin`. Each key is named after the first file it appears in, so `boot-alice.sh` shows as "boot-alice". Keys are sent only to openrouter.ai and are never written to disk. To choose keys yourself, create `providers.json` as below; it replaces the search.
+
 **Team or many keys:** create a management key at openrouter.ai (Settings › Management keys) and add it once:
 
 ```bash

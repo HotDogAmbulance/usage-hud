@@ -456,7 +456,7 @@ final class CoreTests {
             if url.path.hasSuffix("credits") { return ["data": ["total_credits": 50, "total_usage": 7]] }
             return ["data": url.query == "offset=0" ? first : [["name": "", "label": "sk-or-v1-abc", "usage_daily": 1]]]
         }
-        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http)
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
         expectTrue(provider.automatic)
         try provider.refresh()
         let panel = provider.panel()
@@ -467,5 +467,23 @@ final class CoreTests {
         http.handler = { _ in throw HTTPFailure(status: 401) }
         do { try provider.refresh(); fail("Expected rejection") } catch { expectTrue((error as? HUDProblem)?.attention == true) }
         expectEqual(provider.panel().cells.count, 100)
+    }
+    func testKeysAlreadyOnTheMacNeedNoSetup() throws {
+        let alice = "sk-or-v1-" + String(repeating: "a1", count: 32), bob = "sk-or-v1-" + String(repeating: "b2", count: 32)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("bin"), withIntermediateDirectories: true)
+        try "export OPENROUTER_API_KEY=\(alice)\nexport OTHER=\(alice)".write(to: root.appendingPathComponent("boot-alice.sh"), atomically: true, encoding: .utf8)
+        try "KEY='\(bob)' agent run".write(to: root.appendingPathComponent("bin/research.sh"), atomically: true, encoding: .utf8)
+        try "export OPENROUTER_API_KEY=sk-or-v1-short\nexport B=\(bob)".write(to: root.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        let found = KeyFinder.find(in: KeyFinder.places(home: root), environment: [:])
+        expectEqual(found.map { $0.label }, ["zshrc", "boot-alice"])
+        expectEqual(found.map { $0.key }, [bob, alice])
+        expectEqual(KeyFinder.label(root.appendingPathComponent(".local/share/opencode/auth.json")), "opencode")
+        expectEqual(KeyFinder.find(in: [], environment: ["OPENROUTER_API_KEY": alice + "\n" + bob]).map { $0.label }, ["environment", "environment 2"])
+        http.handler = { url in url.path.hasSuffix("credits") ? ["data": ["total_credits": 9, "total_usage": 1]] : ["data": ["usage": 3, "usage_daily": 0.25]] }
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
+        expectTrue(provider.automatic)
+        try provider.refresh()
+        expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "zshrc", "boot-alice"])
+        expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("openrouter.json")), encoding: .utf8)!.contains("sk-or-v1-"))
     }
 }
