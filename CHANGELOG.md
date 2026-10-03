@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Batteries lose the faint white fringe around full fills (each layer now fills only its own span), and their digits are bold like the system battery's and centred on their ink, so "100" no longer sits left and high.
 - OpenRouter's hover panel draws each key as a small battery, green, yellow under 30% and red under 10%, widens to show whole reset times, mentions refresh problems, and opens faster.
 - A management key kept in a profile or script is recognised and lists the team; your own keys appear once, not again in the team list. Revoked keys in old scripts are skipped, and OpenRouter stays hidden until one key works. The key search runs hourly, not every refresh.
 - Codex and Claude stay out of the menu bar until their first read; any hidden provider still appears when it needs you (a Keychain prompt or a rejected key).

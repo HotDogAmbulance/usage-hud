@@ -1,6 +1,7 @@
 import Cocoa
 import Darwin
 import ServiceManagement
+import CoreText
 
 import UsageHUDCore
 
@@ -221,6 +222,7 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     /// `weeklyShade` draws the main fill in the same lighter tone the 7d layer uses behind 5h.
     /// `glow` washes the body in soft red, for a battery asking for attention.
+    static let digitWeight = NSFont.Weight.bold
     func icon(_ panel: Panel, weeklyShade: Bool = false, glow: CGFloat = 0) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
@@ -234,9 +236,9 @@ final class HUD: NSObject, NSApplicationDelegate {
         let weekly = panel.windows.first(where: {$0.label == "7d" && $0.label != quota?.label && $0.pct != nil})
         let weeklyValid = weekly != nil
         let weeklyRemaining = weeklyValid ? min(100, max(0, 100 - (weekly?.pct ?? 0))) : 0
-        // Native battery digits are taller and lighter than a semibold status label.
+        // Like the system battery's percentage: SF digits, heavy enough to read once cut out of a small fill.
         let baseSize: CGFloat = money != nil ? 10 : 9.5
-        let baseFont = NSFont.monospacedDigitSystemFont(ofSize: baseSize, weight: .medium)
+        let baseFont = NSFont.monospacedDigitSystemFont(ofSize: baseSize, weight: Self.digitWeight)
         let measuredWidth = (text as NSString).size(withAttributes: [.font: baseFont]).width
         // A balance stretches the body to fit its digits: whole amounts keep the standard size, cents widen it.
         let bodyWidth: CGFloat = money != nil ? max(23, (measuredWidth + 6).rounded(.up)) : 23
@@ -254,15 +256,20 @@ final class HUD: NSObject, NSApplicationDelegate {
         let dark = darkMenuBar
         // The empty part and the cap contrast with the menu bar: white on a dark bar, black on a light one.
         let ink = dark ? NSColor.white : NSColor.black
-        ink.withAlphaComponent(dark ? 0.36 : 0.22).setFill(); bodyRect.fill()
-        if money != nil {
-            paint(bodyRect, body: bodyRect, id: panel.id, light: true, alpha: cached ? 0.50 : 1, dark: dark)
+        // Each layer fills only its own span, on whole device pixels. Stacked layers would each blend the same soft edge,
+        // leaving a pale fringe of the track around every full battery.
+        let pixel = { (x: CGFloat) -> CGFloat in (x * 2).rounded() / 2 }
+        let span = { (from: CGFloat, to: CGFloat) in NSRect(x: 1 + from, y: bodyY, width: max(0, to - from), height: bodyHeight) }
+        let fillEnd = money != nil ? bodyWidth : pixel(fillWidth)
+        let weeklyEnd = weeklyValid ? max(fillEnd, pixel(bodyWidth * weeklyRemaining / 100)) : fillEnd
+        let weeklyAlpha: CGFloat = weekly?.stale == true || weekly?.expired == true ? 0.50 : 1, fillAlpha: CGFloat = cached ? (money != nil ? 0.50 : 0.45) : 1
+        // A translucent layer still needs the track behind it.
+        let trackStart = fillAlpha < 1 ? 0 : weeklyAlpha < 1 ? fillEnd : weeklyEnd
+        ink.withAlphaComponent(dark ? 0.36 : 0.22).setFill(); span(trackStart, bodyWidth).fill()
+        if weeklyEnd > fillEnd {
+            paint(span(fillEnd, weeklyEnd), body: bodyRect, id: panel.id, light: true, alpha: weeklyAlpha, dark: dark)
         }
-        if weeklyValid {
-            paint(NSRect(x: 1, y: bodyY, width: bodyWidth * weeklyRemaining / 100, height: bodyHeight), body: bodyRect, id: panel.id,
-                  light: true, alpha: weekly?.stale == true || weekly?.expired == true ? 0.50 : 1, dark: dark)
-        }
-        paint(NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight), body: bodyRect, id: panel.id, light: weeklyShade, alpha: cached ? 0.45 : 1, dark: dark)
+        paint(span(0, fillEnd), body: bodyRect, id: panel.id, light: money != nil || weeklyShade, alpha: fillAlpha, dark: dark)
         if glow > 0 { NSColor(srgbRed: 1.0, green: 0.33, blue: 0.30, alpha: glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
@@ -278,14 +285,18 @@ final class HUD: NSObject, NSApplicationDelegate {
         }
         NSGraphicsContext.restoreGraphicsState()
         let fontSize = min(baseSize, baseSize * (bodyWidth - 2) / max(1, measuredWidth))
-        let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .medium)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
-        let size = (text as NSString).size(withAttributes: attrs)
-        let origin = NSPoint(x: 1 + bodyWidth/2-size.width/2, y: 10.5-size.height/2)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current?.cgContext.setBlendMode(.destinationOut)
-        (text as NSString).draw(at: origin, withAttributes: attrs)
-        NSGraphicsContext.restoreGraphicsState()
+        let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: Self.digitWeight)
+        // Centre the digits' ink, not their line box, the way the system battery does: side bearings and the
+        // descender space would otherwise push "100" left and every number up.
+        if let context = NSGraphicsContext.current?.cgContext {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.white]))
+            let glyphs = CTLineGetImageBounds(line, context)
+            context.saveGState()
+            context.setBlendMode(.destinationOut); context.textMatrix = .identity
+            context.textPosition = CGPoint(x: pixel(1 + bodyWidth / 2 - glyphs.midX), y: pixel(bodyY + bodyHeight / 2 - glyphs.midY))
+            CTLineDraw(line, context)
+            context.restoreGState()
+        }
         image.unlockFocus()
         return image
     }
