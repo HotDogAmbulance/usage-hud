@@ -18,11 +18,14 @@ public final class Engine {
         credits = OpenAICredits(cache: cache, credentials: credentials, http: http)
         self.providers = providers ?? [CodexProvider(cache: cache, credits: credits),
                                       ClaudeProvider(cache: cache, credentials: credentials, http: http),
-                                      OpenRouterProvider(cache: cache, credentials: credentials, http: http)]
+                                      OpenRouterProvider(cache: cache, credentials: credentials, http: http),
+                                      GLMProvider(cache: cache, credentials: credentials, http: http),
+                                      GeminiProvider(cache: cache, http: http),
+                                      GrokProvider(cache: cache)]
     }
     public func panels(refresh: String? = nil) -> [Panel] {
         if refresh == "openai-credits" { try? credits.refresh() }
-        return providers.map { provider in
+        return providers.compactMap { provider -> Panel? in
             let statusFile = provider.id + "-status.json"
             if refresh == provider.id || refresh == "automatic" && provider.automatic {
                 do {
@@ -33,6 +36,7 @@ public final class Engine {
                     try? cache.write(statusFile, ["error": message, "checked_at": Date().timeIntervalSince1970])
                 }
             }
+            guard provider.shown() else { return nil }
             var panel = provider.panel()
             if let message = cache.read(statusFile)["error"] as? String {
                 panel.note = message
@@ -126,7 +130,7 @@ public final class Engine {
             return true
         }
         if arguments == ["--help"] {
-            print("usagehud [--json | --refresh automatic|codex|claude|openrouter|openai-credits | --claude-statusline | --probe-if-stale]")
+            print("usagehud [--json | --refresh automatic|codex|claude|openrouter|glm|gemini|grok|openai-credits | --claude-statusline | --probe-if-stale]")
             return true
         }
         let refresh: String?

@@ -24,6 +24,30 @@ Ordered sources provide fallbacks. Keep slot IDs stable. A source change or new 
 
 OpenRouter uses `/api/v1/key` for cumulative key usage and `/api/v1/credits` for the account's USD balance. It refreshes only on request. A money balance has no percentage denominator.
 
+## GLM, Gemini and Grok
+
+These three stay out of the menu bar until their first successful read, so people who don't use them never see an empty battery. They refresh in the background with Codex and Claude.
+
+| Provider | What it reads | Setup |
+| --- | --- | --- |
+| GLM Coding Plan | 5h and weekly credit windows from `/api/monitor/usage/quota/limit` | Store your Coding Plan API key in the Keychain (below) |
+| Gemini | Daily per-model pools (Pro, Flash, Flash Lite) from the Gemini CLI quota endpoint | Install [Gemini CLI](https://github.com/google-gemini/gemini-cli) and sign in with Google |
+| Grok | Monthly spend against the plan limit, via `grok agent stdio` | Install Grok CLI and run `grok login` |
+
+**GLM.** Use `api.z.ai` as the account for Z.ai, or `open.bigmodel.cn` for Zhipu:
+
+```bash
+security add-generic-password -s "Usage HUD GLM" -a api.z.ai -w
+```
+
+macOS asks for the key without echoing it. Z.ai reports credit windows (`CREDIT_LIMIT`, unit 3 = hours, unit 6 = weeks) and older plans report `TOKENS_LIMIT` for the 5h window; the monthly MCP allowance (`TIME_LIMIT`) is not shown.
+
+**Gemini.** The app reads `~/.gemini/oauth_creds.json` and never renews or rewrites it. Google access tokens are short-lived, so when the token has expired the battery keeps its last reading as cached until you next use `gemini`. API-key and Vertex sign-ins are not supported.
+
+**Grok.** Set `USAGE_HUD_GROK_CLI` to an absolute path if `grok` is not in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin` or the app's PATH.
+
+The Gemini quota endpoint, the Z.ai monitor endpoint and Grok's billing RPC are not documented public APIs. Field handling is defensive, and these adapters were written from fixtures rather than live accounts.
+
 ## OpenAI API credit estimate
 
 `~/.usage-hud/credits.json` can select a restricted organization Admin key:

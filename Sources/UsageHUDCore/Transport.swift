@@ -5,6 +5,7 @@ final class RPCProcess {
     let process = Process(), input = Pipe(), output = Pipe()
     let deadline: Date
     var buffered = Data()
+    var errorMessage = "Codex quota unavailable; check codex login status"
     init(binary: URL, arguments: [String], environment: [String: String]? = nil, timeout: Double = 25) throws {
         deadline = Date().addingTimeInterval(timeout)
         process.executableURL = binary; process.arguments = arguments
@@ -24,7 +25,8 @@ final class RPCProcess {
     }
     deinit { stop() }
     func send(_ message: JSON) throws {
-        var data = try JSONSerialization.data(withJSONObject: message); data.append(10)
+        // Grok's ACP server reads "x.ai/billing" literally, so slashes stay unescaped.
+        var data = try JSONSerialization.data(withJSONObject: message, options: [.withoutEscapingSlashes]); data.append(10)
         do { try input.fileHandleForWriting.write(contentsOf: data) } catch { throw HUDProblem("CLI connection closed") }
     }
     func chunk() throws -> Data {
@@ -48,7 +50,7 @@ final class RPCProcess {
                 let line = buffered[..<end]; buffered.removeSubrange(...end)
                 guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? JSON else { continue }
                 if number(object["id"]) == Double(id) {
-                    if object["error"] != nil { throw HUDProblem("Codex quota unavailable; check codex login status") }
+                    if object["error"] != nil { throw HUDProblem(errorMessage) }
                     return dict(object["result"])
                 }
             }
@@ -83,14 +85,26 @@ struct KeychainReader: CredentialReading {
         return text
     }
 }
-protocol HTTPReading { func get(_ url: URL, token: String, headers: [String: String], limit: Int) throws -> JSON }
+protocol HTTPReading {
+    func get(_ url: URL, token: String, headers: [String: String], limit: Int) throws -> JSON
+    func post(_ url: URL, token: String, headers: [String: String], body: JSON, limit: Int) throws -> JSON
+}
 struct HTTPFailure: Error { let status: Int }
 final class ResponseBox: @unchecked Sendable {
     var data: Data?; var response: URLResponse?; var error: Error?
 }
 struct HTTPReader: HTTPReading {
     func get(_ url: URL, token: String, headers: [String: String] = [:], limit: Int = 8 * 1024 * 1024) throws -> JSON {
+        try send(URLRequest(url: url, timeoutInterval: 25), token: token, headers: headers, limit: limit)
+    }
+    func post(_ url: URL, token: String, headers: [String: String] = [:], body: JSON, limit: Int = 8 * 1024 * 1024) throws -> JSON {
         var request = URLRequest(url: url, timeoutInterval: 25)
+        request.httpMethod = "POST"; request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return try send(request, token: token, headers: headers, limit: limit)
+    }
+    private func send(_ original: URLRequest, token: String, headers: [String: String], limit: Int) throws -> JSON {
+        var request = original
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
