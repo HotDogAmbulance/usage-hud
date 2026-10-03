@@ -79,7 +79,9 @@ let cases: [(String, () throws -> Void)] = [
     ("testAntigravityPoolsModelsThatShareAQuota", test.testAntigravityPoolsModelsThatShareAQuota),
     ("testSignInProblemsOfferTheirFix", test.testSignInProblemsOfferTheirFix),
     ("testShelfLearnsEachPersonsMainTools", test.testShelfLearnsEachPersonsMainTools),
-    ("testBalanceKeysAlreadyOnTheMac", test.testBalanceKeysAlreadyOnTheMac)
+    ("testBalanceKeysAlreadyOnTheMac", test.testBalanceKeysAlreadyOnTheMac),
+    ("testKeychainAsksForASecretOnlyWhenItChanges", test.testKeychainAsksForASecretOnlyWhenItChanges),
+    ("testClaudeLeavesTheKeychainAloneWhileItsStatuslineReports", test.testClaudeLeavesTheKeychainAloneWhileItsStatuslineReports)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }

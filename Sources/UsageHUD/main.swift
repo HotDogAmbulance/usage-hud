@@ -567,13 +567,21 @@ if CommandLine.arguments.contains("--self-test") {
     func rounded(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
         NSFont(descriptor: NSFont.systemFont(ofSize: size, weight: weight).fontDescriptor.withDesign(.rounded) ?? NSFont.systemFont(ofSize: size).fontDescriptor, size: size) ?? .systemFont(ofSize: size)
     }
+    // Narrower cuts fit "100" the way the system battery does; macOS 13 added them.
+    func narrow(_ size: CGFloat, _ weight: NSFont.Weight, compressed: Bool = false) -> NSFont {
+        if #available(macOS 13, *) { return NSFont.systemFont(ofSize: size, weight: weight, width: compressed ? .compressed : .condensed) }
+        return proportional(size, weight)
+    }
     let candidates: [(String, (CGFloat) -> NSFont)] = [
         ("1 bold, fixed digits (now)", { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .bold) }),
-        ("2 semibold, fixed digits", { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .semibold) }),
-        ("3 bold", { proportional($0, .bold) }), ("4 semibold", { proportional($0, .semibold) }),
-        ("5 medium", { proportional($0, .medium) }), ("6 heavy", { proportional($0, .heavy) }),
-        ("7 bold, 0.5pt larger", { proportional($0 + 0.5, .bold) }), ("8 semibold, 0.5pt larger", { proportional($0 + 0.5, .semibold) }),
-        ("9 rounded bold", { rounded($0, .bold) }), ("10 rounded semibold", { rounded($0, .semibold) })]
+        ("2 rounded semibold", { rounded($0, .semibold) }), ("3 rounded medium", { rounded($0, .medium) }),
+        ("4 rounded bold", { rounded($0, .bold) }),
+        ("5 condensed semibold", { narrow($0, .semibold) }),
+        ("6 condensed bold", { narrow($0, .bold) }),
+        ("7 condensed heavy", { narrow($0, .heavy) }),
+        ("8 compressed semibold", { narrow($0, .semibold, compressed: true) }),
+        ("9 compressed bold", { narrow($0, .bold, compressed: true) }),
+        ("10 compressed heavy", { narrow($0, .heavy, compressed: true) })]
     let samples = [Panel(id: "codex", name: "Codex", windows: [Window(label: "5h", pct: 30)]),
                    Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 0)]),
                    Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$26.25 left")])]
@@ -590,7 +598,7 @@ if CommandLine.arguments.contains("--self-test") {
     sheet.unlockFocus()
     try! NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("font-preview.png"))
     HUD.digitFont = candidates[0].1
-    print("Battery drawing and note-free menus passed")
+    print("Battery drawing and note-free menus passed; fonts: " + delegate.home.appendingPathComponent("font-preview.png").path)
     exit(0)
 }
 app.delegate = delegate

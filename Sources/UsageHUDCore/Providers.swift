@@ -29,6 +29,10 @@ final class ClaudeProvider: UsageProvider {
         return token
     }
     func refresh() throws {
+        // While Claude Code runs, its statusline brings the quota, so the Keychain is left alone; credits still update hourly.
+        let blob = cache.read("claude.json"), now = Date().timeIntervalSince1970
+        if blob["source"] as? String == "statusline", now - (number(blob["captured_at"]) ?? 0) < 600,
+           now - (number(blob["oauth_at"]) ?? 0) < 3600 { return }
         let token = try Self.accessToken(credentials.password(service: "Claude Code-credentials", account: nil))
         let data: JSON
         do {
@@ -46,7 +50,7 @@ final class ClaudeProvider: UsageProvider {
             windows[key] = ["used_percentage": pct, "resets_at": resetTime(window["resets_at"]) as Any? ?? NSNull()]
         }
         guard !windows.isEmpty else { throw HUDProblem("Claude response has no quota windows") }
-        var extra: JSON = ["source": "oauth-usage-get", "depleted": false, "probe_blocked_until": NSNull()]
+        var extra: JSON = ["source": "oauth-usage-get", "oauth_at": now, "depleted": false, "probe_blocked_until": NSNull()]
         if var credits = data["extra_usage"] as? JSON {
             credits["captured_at"] = Date().timeIntervalSince1970; extra["usage_credits"] = credits
         }

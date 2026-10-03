@@ -75,7 +75,7 @@ public final class Engine {
         let now = Date().timeIntervalSince1970
         var updates: JSON = [:]
         let windows = dict(payload["rate_limits"])
-        if !windows.isEmpty { try cache.quota("claude.json", windows: windows) }
+        if !windows.isEmpty { try cache.quota("claude.json", windows: windows, extra: ["source": "statusline"]) }
         let context = number(dict(payload["context_window"])["used_percentage"])
         if let context = context { updates["context_pct"] = context; updates["context_captured_at"] = now }
         if !updates.isEmpty { try cache.merge("claude.json", updates) }

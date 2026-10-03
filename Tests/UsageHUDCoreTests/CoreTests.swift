@@ -663,4 +663,35 @@ final class CoreTests {
         expectError(try BalanceProvider.vercel(cache: cache, credentials: credentials, http: http, home: none, environment: [:]).refresh())
         expectEqual(http.calls, 0)
     }
+    /// Someone who clicked Allow rather than Always Allow is asked again only when the item changes.
+    func testKeychainAsksForASecretOnlyWhenItChanges() throws {
+        var stamp = "mdat 1", secrets = 0, missing = false
+        let reader = KeychainReader { arguments in
+            if missing { return ("", 0.1) }
+            if arguments.last == "-w" { secrets += 1; return ("secret " + stamp, 3) }
+            return (stamp, 0.1)
+        }
+        expectEqual(try reader.password(service: "s", account: nil), "secret mdat 1")
+        expectEqual(try reader.password(service: "s", account: nil), "secret mdat 1")
+        expectEqual(secrets, 1)
+        stamp = "mdat 2"
+        expectEqual(try reader.password(service: "s", account: nil), "secret mdat 2")
+        expectEqual(secrets, 2)
+        missing = true
+        do { _ = try reader.password(service: "s", account: nil); fail("a missing item should fail") } catch let problem as HUDProblem { expectFalse(problem.prompted) }
+        let refused = KeychainReader { $0.last == "-w" ? ("", 5.0) : ("mdat", 0.1) }
+        do { _ = try refused.password(service: "s", account: nil); fail("a refused prompt should fail") } catch let problem as HUDProblem { expectTrue(problem.prompted) }
+    }
+    /// While Claude Code's statusline reports, the Keychain is not touched; credits still update hourly.
+    func testClaudeLeavesTheKeychainAloneWhileItsStatuslineReports() throws {
+        _ = try Engine(root: root, credentials: credentials, http: http)
+            .statusline(JSONSerialization.data(withJSONObject: ["rate_limits": ["five_hour": ["used_percentage": 12]]]))
+        try cache.merge("claude.json", ["oauth_at": Date().timeIntervalSince1970])
+        try ClaudeProvider(cache: cache, credentials: credentials, http: http).refresh()
+        expectEqual(credentials.calls, 0); expectEqual(http.calls, 0)
+        try cache.merge("claude.json", ["oauth_at": 0])
+        credentials.text = "{\"accessToken\":\"fixture\"}"; http.response = ["five_hour": ["utilization": 12]]
+        try ClaudeProvider(cache: cache, credentials: credentials, http: http).refresh()
+        expectEqual(http.calls, 1)
+    }
 }
