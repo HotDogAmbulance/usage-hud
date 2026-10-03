@@ -18,7 +18,7 @@ If the 5-hour reading is unavailable or its window has reset, the battery falls 
 
 OpenRouter shows **dollars left**. Its pale green body gives the balance a readable home; the fill doesn’t represent a percentage. Whole amounts keep the standard battery size; cents stretch the body to fit. Any OpenAI API credit estimate lives separately in the Codex menu.
 
-At most three batteries sit in the menu bar, so a crowded bar or the notch never hides one silently. The ones you used most recently stay; the rest fold into a small **+N** item, and resting the pointer on it opens their batteries and menus. To show more or fewer, run `defaults write local.usage-hud visibleBatteries 4`.
+At most three batteries sit in the menu bar, so a crowded bar or the notch never hides one silently. The HUD learns which tools you use most and keeps those, whatever your main tools are, so one you only tried today doesn't push them out; the most used one takes the first spot when the app starts. The rest fold into a small **+N** item, and resting the pointer on it opens their batteries and menus. To show more or fewer, run `defaults write local.usage-hud visibleBatteries 4`.
 
 On a light menu bar the batteries switch to dark outlines, and every colour stays deep enough never to pass for the Mac's own battery. Claude's extra usage (spent, cap, or Off) appears in the hover text with any other money rows.
 

@@ -13,19 +13,9 @@ final class GLMProvider: UsageProvider {
         self.cache = cache; self.credentials = credentials; self.http = http; self.home = home; self.environment = environment
     }
     func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("glm.json").path) }
-    /// Z.ai's setup points Claude Code at its Anthropic-compatible endpoint, so that key is the plan's key, keyed by our API host.
-    /// The key only ever goes to our fixed host, never to the URL found beside it.
+    /// Z.ai's setup points Claude Code at its Anthropic-compatible endpoint, so that key is the plan's key.
     static func found(home: URL, environment: [String: String]) -> [String: String] {
-        let settings = (try? Data(contentsOf: home.appendingPathComponent(".claude/settings.json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
-        var keys: [String: String] = [:]
-        for source in [environment, dict(dict(settings)["env"]).compactMapValues { $0 as? String }] {
-            guard let base = URL(string: source["ANTHROPIC_BASE_URL"] ?? "")?.host?.lowercased(),
-                  let key = source["ANTHROPIC_AUTH_TOKEN"] ?? source["ANTHROPIC_API_KEY"], !key.isEmpty,
-                  let host = hosts.first(where: { let domain = $0.split(separator: ".").suffix(2).joined(separator: ".")
-                                                  return base == domain || base.hasSuffix("." + domain) }) else { continue }
-            keys[host] = keys[host] ?? key
-        }
-        return keys
+        KeyFinder.claudeCode(hosts: hosts, home: home, environment: environment)
     }
     static func windows(_ response: JSON) throws -> JSON {
         if response["success"] as? Bool == false { throw HUDProblem("GLM quota unavailable: " + (response["msg"] as? String ?? "unknown error")) }

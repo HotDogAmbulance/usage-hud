@@ -56,7 +56,9 @@ public final class Engine {
             // A provider not yet read stays hidden, unless it needs the user (a prompt or a rejected key) to get there.
             guard provider.shown() || status["attention"] as? Bool == true else { return nil }
             var panel = provider.panel()
-            if let message = status["error"] as? String {
+            // Claude Code's statusline and hooks deliver readings too; one newer than the failure means it healed by itself.
+            if let message = status["error"] as? String,
+               number(cache.read(provider.id + ".json")["captured_at"]) ?? 0 <= number(status["checked_at"]) ?? 0 {
                 panel.note = message; panel.fix = status["fix"] as? String
                 for index in panel.windows.indices { panel.windows[index].stale = true }
                 // A rejected key won't fix itself; a passing outage or an idle CLI's token will.

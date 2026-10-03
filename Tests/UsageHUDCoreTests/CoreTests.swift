@@ -18,11 +18,11 @@ final class FakeHTTP: HTTPReading {
     var error: Error?
     var handler: ((URL) throws -> JSON)?
     func get(_ url: URL, token: String, headers: [String: String], limit: Int) throws -> JSON {
-        calls += 1; sentHeaders = headers
+        calls += 1; sentHeaders = headers; sentToken = token
         if let error = error { throw error }
         return try handler?(url) ?? response
     }
-    var bodies: [JSON] = [], sentHeaders: [String: String] = [:]
+    var bodies: [JSON] = [], sentHeaders: [String: String] = [:], sentToken = ""
     func post(_ url: URL, token: String, headers: [String: String], body: JSON, limit: Int) throws -> JSON {
         bodies.append(body)
         return try get(url, token: token, headers: headers, limit: limit)
@@ -391,10 +391,10 @@ final class CoreTests {
         expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "claude", "openrouter"])
         expectEqual(shelf.arrange(ids, limit: 3).hidden, ["glm", "kimi"])
         expectEqual(shelf.arrange(["codex", "claude"], limit: 3).hidden, [])
-        // First sightings and falling quota (a window reset) are not use.
+        // A first sighting with quota spent counts a little; a balance or a falling quota (a window reset) doesn't.
         shelf.observe(quota("glm", 40), now: 10); shelf.observe(balance("kimi", "¥9.00 left"), now: 10)
         shelf.observe(quota("glm", 5), now: 20)
-        expectEqual(shelf.arrange(ids, limit: 3).hidden, ["glm", "kimi"])
+        expectEqual(shelf.arrange(ids, limit: 3).hidden, ["openrouter", "kimi"])
         // Rising quota and a falling balance are.
         shelf.observe(quota("glm", 12), now: 30)
         shelf.observe(balance("kimi", "¥8.75 left"), now: 40)
@@ -596,9 +596,71 @@ final class CoreTests {
         let engine = Engine(root: root, credentials: credentials, http: http, providers: [
             AlertProvider(id: "a", problem: "a needs sign-in", attention: true, right: "$9.00 left")])
         expectNil(engine.panels(refresh: "automatic")[0].fix)
+        // An old token only means Claude Code sat idle: no sign-in, no red battery.
         credentials.text = "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"expiresAt\":1000}}"
         try? cache.write("claude.json", ["captured_at": 1])
-        let claude = Engine(root: root, credentials: credentials, http: http).panels(refresh: "claude")
-        expectEqual(claude.first { $0.id == "claude" }?.fix, "claude auth login")
+        let claude = { (refresh: String?) in Engine(root: self.root, credentials: self.credentials, http: self.http).panels(refresh: refresh).first { $0.id == "claude" } }
+        let idle = claude("claude")
+        expectTrue(idle?.fix == nil && idle?.alert == nil && idle?.note.contains("idle") == true)
+        // A rejected token is a real sign-out, and the menu offers the sign-in.
+        credentials.text = "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"expiresAt\":99999999999999}}"
+        http.error = HTTPFailure(status: 401)
+        let out = claude("claude")
+        expectTrue(out?.fix == "claude auth login" && out?.alert != nil)
+        // A newer reading from Claude Code's statusline means it healed by itself.
+        try? cache.quota("claude.json", windows: ["five_hour": ["used_percentage": 30]], now: Date().timeIntervalSince1970 + 5)
+        let healed = claude(nil)
+        expectTrue(healed?.fix == nil && healed?.alert == nil && healed?.note == "")
+    }
+    func testShelfLearnsEachPersonsMainTools() {
+        func quota(_ id: String, _ pct: Double) -> Panel { Panel(id: id, name: id, windows: [Window(label: "5h", pct: pct)]) }
+        func balance(_ id: String, _ amount: Double) -> Panel { Panel(id: id, name: id, windows: [Window(label: id, right: String(format: "$%.2f left", amount))]) }
+        var shelf = Shelf()
+        let ids = ["codex", "claude", "openrouter", "glm", "kimi"]
+        // Someone living on GLM and Kimi: a day and a half of steady use.
+        var glm = 0.0, kimi = 100.0, now = 0.0
+        shelf.observe(quota("glm", glm), now: 0); shelf.observe(balance("kimi", kimi), now: 0); shelf.observe(quota("codex", 0), now: 0)
+        for step in 1...200 {
+            now = Double(step) * 600; glm += 0.2; kimi -= 0.1
+            shelf.observe(quota("glm", glm), now: now); shelf.observe(balance("kimi", kimi), now: now)
+        }
+        // Codex, tried just now, doesn't push them out.
+        shelf.observe(quota("codex", 3), now: now + 60)
+        expectEqual(Array(shelf.ranked(ids).prefix(3)), ["glm", "kimi", "codex"])
+        expectEqual(shelf.arrange(ids, limit: 2).shown, ["glm", "kimi"])
+        expectEqual(shelf.arrange(ids, limit: 2, urgent: ["openrouter"]).shown, ["openrouter", "glm"])
+        // A week later, every score has halved.
+        let before = shelf.scores["glm"]!
+        shelf.observe(quota("glm", glm), now: now + 60 + 604_800)
+        expectTrue(abs(shelf.scores["glm"]! - before / 2) < 0.01)
+        // A tool reporting every 30 seconds counts no more than one reporting every five minutes.
+        var chatty = Shelf()
+        chatty.observe(quota("claude", 0), now: 0)
+        for step in 1...20 { chatty.observe(quota("claude", Double(step)), now: Double(step) * 30) }
+        expectTrue(abs(chatty.scores["claude"]! - 3) < 0.01)
+    }
+    /// DeepSeek, Kimi and Vercel keys people already keep need no setup, and a stale one stays quiet.
+    func testBalanceKeysAlreadyOnTheMac() throws {
+        credentials.missing = ["Usage HUD DeepSeek", "Usage HUD Kimi", "Usage HUD Vercel"]
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "export OLD_DEEPSEEK_API_KEY=sk-ffffffffffffffffffff\nexport DEEPSEEK_API_KEY=\"sk-0123456789abcdef0123\"\n"
+            .write(to: root.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        http.handler = { url in
+            expectEqual(url.host, "api.deepseek.com")
+            return ["balance_infos": [["currency": "USD", "total_balance": "7.00"]]]
+        }
+        try BalanceProvider.deepSeek(cache: cache, credentials: credentials, http: http, home: root, environment: [:]).refresh()
+        expectEqual(http.sentToken, "sk-0123456789abcdef0123")
+        let none = root.appendingPathComponent("none")
+        let kimi = BalanceProvider.kimi(cache: cache, credentials: credentials, http: http, home: none,
+                                        environment: ["ANTHROPIC_BASE_URL": "https://api.moonshot.ai/anthropic", "ANTHROPIC_AUTH_TOKEN": "kimi-cc-key"])
+        http.handler = { _ in ["data": ["available_balance": 2.0]] }
+        try kimi.refresh()
+        expectEqual(http.sentToken, "kimi-cc-key")
+        http.error = HTTPFailure(status: 401)
+        do { try kimi.refresh(); fail("a rejected key should fail") } catch let problem as HUDProblem { expectFalse(problem.attention) }
+        http.error = nil; http.calls = 0
+        expectError(try BalanceProvider.vercel(cache: cache, credentials: credentials, http: http, home: none, environment: [:]).refresh())
+        expectEqual(http.calls, 0)
     }
 }
