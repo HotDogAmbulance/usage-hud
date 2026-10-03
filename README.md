@@ -18,6 +18,12 @@ If the 5-hour reading is unavailable or its window has reset, the battery falls 
 
 OpenRouter shows **dollars left**. Its pale green body gives the balance a readable home; the fill doesn’t represent a percentage. Whole amounts keep the standard battery size; cents stretch the body to fit. Any OpenAI API credit estimate lives separately in the Codex menu.
 
+At most three batteries sit in the menu bar, so a crowded bar or the notch never hides one silently. The ones you used most recently stay; the rest fold into a small **+N** item, and resting the pointer on it opens their batteries and menus. To show more or fewer, run `defaults write local.usage-hud visibleBatteries 4`.
+
+On a light menu bar the batteries switch to dark outlines, and pale colours deepen so white and silver stay visible. Claude's extra usage (spent, cap, or Off) appears in the hover text with any other money rows.
+
+When a newer release is published on GitHub, every battery menu offers **Update available**. Usage endpoints change without notice, so this is how fixes reach you.
+
 ## Make it at home on your Mac
 
 You’ll need macOS 12 or later and Xcode Command Line Tools to build the app. For subscription usage, sign in through the standalone Codex CLI (`~/.local/bin/codex`) and Claude Code. You can use Usage HUD without the Codex or Claude desktop apps; their CLI tools and sign-ins still need to be available.

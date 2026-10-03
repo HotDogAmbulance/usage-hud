@@ -15,6 +15,15 @@ final class HUD: NSObject, NSApplicationDelegate {
     var panels: [String: Panel] = [:]
     var trackers: [String: HoverTracker] = [:]
     var hovered: String?
+    /// Batteries past `visibleLimit` move into this item; hovering it opens their menu.
+    var overflow: NSStatusItem?
+    let overflowTracker = HoverTracker()
+    var shelf = Shelf(levels: UserDefaults.standard.dictionary(forKey: "shelfLevels") as? [String: Double] ?? [:],
+                      lastUsed: UserDefaults.standard.dictionary(forKey: "shelfLastUsed") as? [String: Double] ?? [:])
+    /// Change with `defaults write local.usage-hud visibleBatteries 4`.
+    var visibleLimit: Int { UserDefaults.standard.integer(forKey: "visibleBatteries") > 0 ? UserDefaults.standard.integer(forKey: "visibleBatteries") : 3 }
+    /// A newer release, offered at the foot of every battery menu.
+    var update: (tag: String, page: URL)?
     var busy = false
     var lockDescriptor: Int32 = -1
     let engine = Engine()
@@ -31,12 +40,36 @@ final class HUD: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.load("automatic") }
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.load("automatic") }
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.load(nil) }
+        checkForUpdate()
+        Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in self?.checkForUpdate() }
+        DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+                                                            object: nil, queue: .main) { [weak self] _ in
+            self?.items.keys.forEach { self?.drawIcon($0) }
+        }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         load("automatic")
         if let item = items["codex"] ?? items.values.first { item.button?.performClick(nil) }
         return true
     }
+    /// Undocumented usage endpoints change, so readers need fixes quickly. Builds name their release source in
+    /// Info.plist (`UsageHUDReleases`, "owner/repo"); only the public release metadata is fetched.
+    func checkForUpdate() {
+        let info = Bundle.main.infoDictionary ?? [:]
+        guard let current = info["CFBundleShortVersionString"] as? String,
+              let url = URL(string: "https://api.github.com/repos/" + (info["UsageHUDReleases"] as? String ?? "HotDogAmbulance/usage-hud") + "/releases/latest") else { return }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            guard let data = data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let found = Updates.newer(json, than: current) else { return }
+            DispatchQueue.main.async {
+                self.update = found
+                for panel in self.panels.values { self.render(panel) }
+            }
+        }.resume()
+    }
+    @objc func openUpdate() { if let page = update?.page { NSWorkspace.shared.open(page) } }
     func load(_ refresh: String?) {
         guard !busy else { return }
         busy = true
@@ -44,7 +77,10 @@ final class HUD: NSObject, NSApplicationDelegate {
             let panels = self.engine.panels(refresh: refresh)
             DispatchQueue.main.async {
                 self.busy = false
-                for panel in panels { self.render(panel) }
+                for panel in panels { self.render(panel); self.shelf.observe(panel, now: Date().timeIntervalSince1970) }
+                UserDefaults.standard.set(self.shelf.levels, forKey: "shelfLevels")
+                UserDefaults.standard.set(self.shelf.lastUsed, forKey: "shelfLastUsed")
+                self.arrange(panels.map { $0.id })
             }
         }
     }
@@ -63,9 +99,21 @@ final class HUD: NSObject, NSApplicationDelegate {
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
         }
     }
+    /// Whether the menu bar is dark; it follows the wallpaper, so it can differ from the system appearance.
+    var darkMenuBar: Bool {
+        (items.values.first?.button?.effectiveAppearance ?? NSApp.effectiveAppearance).bestMatch(from: [.darkAqua, .aqua]) != .aqua
+    }
     /// Fills `rect` with the provider's tint. Gemini uses its four-colour mark, spread across the whole body.
-    func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, alpha: CGFloat) {
-        let shade = { (color: NSColor) in (light ? color.blended(withFraction: 0.65, of: .white)! : color).withAlphaComponent(alpha) }
+    /// On a light menu bar, pale tints are deepened and the weekly shade is softened less, so white and silver stay visible.
+    func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, alpha: CGFloat, dark: Bool = true) {
+        let shade = { (color: NSColor) -> NSColor in
+            var color = color
+            if !dark, let rgb = color.usingColorSpace(.sRGB),
+               0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent > 0.6 {
+                color = color.blended(withFraction: 0.45, of: .black)!
+            }
+            return (light ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
+        }
         guard id == "gemini" else { shade(tint(id)).setFill(); rect.fill(); return }
         let marks: [(CGFloat, CGFloat, CGFloat)] = [(0.19, 0.53, 1.00), (0.19, 0.53, 1.00), (0.98, 0.27, 0.26), (0.98, 0.74, 0.07), (0.03, 0.73, 0.38)]
         NSGraphicsContext.saveGraphicsState()
@@ -118,26 +166,29 @@ final class HUD: NSObject, NSApplicationDelegate {
         if money == nil, let mask = SystemBattery.body {
             NSGraphicsContext.current?.cgContext.clip(to: bodyRect, mask: mask)
         } else { body.addClip() }
-        NSColor.white.withAlphaComponent(0.36).setFill(); bodyRect.fill()
+        let dark = darkMenuBar
+        // The empty part and the cap contrast with the menu bar: white on a dark bar, black on a light one.
+        let ink = dark ? NSColor.white : NSColor.black
+        ink.withAlphaComponent(dark ? 0.36 : 0.22).setFill(); bodyRect.fill()
         if money != nil {
-            paint(bodyRect, body: bodyRect, id: panel.id, light: true, alpha: cached ? 0.50 : 1)
+            paint(bodyRect, body: bodyRect, id: panel.id, light: true, alpha: cached ? 0.50 : 1, dark: dark)
         }
         if weeklyValid {
             paint(NSRect(x: 1, y: bodyY, width: bodyWidth * weeklyRemaining / 100, height: bodyHeight), body: bodyRect, id: panel.id,
-                  light: true, alpha: weekly?.stale == true || weekly?.expired == true ? 0.50 : 1)
+                  light: true, alpha: weekly?.stale == true || weekly?.expired == true ? 0.50 : 1, dark: dark)
         }
-        paint(NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight), body: bodyRect, id: panel.id, light: weeklyShade, alpha: cached ? 0.45 : 1)
+        paint(NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight), body: bodyRect, id: panel.id, light: weeklyShade, alpha: cached ? 0.45 : 1, dark: dark)
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
         if let mask = SystemBattery.cap {
             let capRect = NSRect(x: bodyWidth + 2, y: 4.5, width: 2, height: 12)
             NSGraphicsContext.current?.cgContext.clip(to: capRect, mask: mask)
-            NSColor.white.withAlphaComponent(0.50).setFill(); capRect.fill()
+            ink.withAlphaComponent(dark ? 0.50 : 0.35).setFill(); capRect.fill()
         } else {
             let cap = NSBezierPath()
             cap.move(to: NSPoint(x: bodyWidth + 2, y: 8.5))
             cap.curve(to: NSPoint(x: bodyWidth + 2, y: 12.5), controlPoint1: NSPoint(x: bodyWidth + 4.5, y: 8.5), controlPoint2: NSPoint(x: bodyWidth + 4.5, y: 12.5))
-            cap.close(); NSColor.white.withAlphaComponent(0.50).setFill(); cap.fill()
+            cap.close(); ink.withAlphaComponent(dark ? 0.50 : 0.35).setFill(); cap.fill()
         }
         NSGraphicsContext.restoreGraphicsState()
         let fontSize = min(baseSize, baseSize * (bodyWidth - 2) / max(1, measuredWidth))
@@ -172,7 +223,9 @@ final class HUD: NSObject, NSApplicationDelegate {
         let displayed = displayedQuota(panel)
         let cached = displayed?.stale == true || displayed?.expired == true
         let reading = displayed.map { $0.label + (cached ? " · cached" : " · remaining") } ?? "balance in USD"
-        item.button?.toolTip = panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "")
+        // Money rows (credits, extra usage) ride along in the hover text, so balances need no click.
+        let money = panel.windows.filter { $0.pct == nil && $0.right != nil && $0.label != panel.name }.map { "\n" + $0.label + ": " + ($0.right ?? "") }
+        item.button?.toolTip = panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
         item.button?.setAccessibilityLabel(panel.name + " usage")
         let menu = NSMenu()
         menu.addItem(withTitle: panel.name + " · Usage HUD", action: nil, keyEquivalent: "")
@@ -197,6 +250,45 @@ final class HUD: NSObject, NSApplicationDelegate {
             let credits = menu.addItem(withTitle: "Refresh OpenAI API credits", action: #selector(refreshProvider(_:)), keyEquivalent: "")
             credits.representedObject = "openai-credits"; credits.target = self
         }
+        if let update = update {
+            menu.addItem(withTitle: "Update available: " + update.tag + "…", action: #selector(openUpdate), keyEquivalent: "").target = self
+        }
+        menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
+        item.menu = menu
+    }
+    /// Keeps the most recently used batteries in the menu bar, so a crowded bar or the notch never hides them silently.
+    func arrange(_ ids: [String]) {
+        let hidden = shelf.arrange(ids, limit: visibleLimit).hidden
+        for id in ids { items[id]?.isVisible = !hidden.contains(id) }
+        guard !hidden.isEmpty else { overflow?.isVisible = false; return }
+        let item = overflow ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if overflow == nil, let button = item.button {
+            overflow = item
+            overflowTracker.changed = { [weak self] inside in
+                guard inside else { return }
+                // A short pause, so sweeping the pointer across the bar doesn't pop the menu open.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    guard let button = self?.overflow?.button, let window = button.window,
+                          button.bounds.contains(button.convert(window.mouseLocationOutsideOfEventStream, from: nil)) else { return }
+                    button.performClick(nil)
+                }
+            }
+            button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                                  owner: overflowTracker, userInfo: nil))
+        }
+        item.isVisible = true
+        item.button?.title = "+\(hidden.count)"
+        item.button?.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        item.button?.toolTip = "\(hidden.count) more: " + hidden.compactMap { panels[$0]?.name }.joined(separator: ", ")
+        item.button?.setAccessibilityLabel("\(hidden.count) more usage batteries")
+        let menu = NSMenu()
+        for id in hidden {
+            guard let panel = panels[id] else { continue }
+            let entry = menu.addItem(withTitle: items[id]?.button?.toolTip?.components(separatedBy: "\n").first ?? panel.name, action: nil, keyEquivalent: "")
+            entry.image = icon(panel)
+            entry.submenu = items[id]?.menu?.copy() as? NSMenu
+        }
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
         item.menu = menu
     }
@@ -250,6 +342,15 @@ if CommandLine.arguments.contains("--self-test") {
         battery.draw(in: NSRect(x: CGFloat(index*48), y: 11, width: battery.size.width, height: 22))
     }
     image.unlockFocus()
+    // Past the limit, the least recently used batteries move into one overflow item.
+    for id in ["glm", "deepseek"] { delegate.render(Panel(id: id, name: id.uppercased(), windows: [Window(label: "5h", pct: 10)])) }
+    delegate.shelf = Shelf()
+    delegate.arrange(["codex", "claude", "openrouter", "glm", "deepseek"])
+    precondition(delegate.items["glm"]?.isVisible == false && delegate.items["deepseek"]?.isVisible == false)
+    precondition(delegate.items["codex"]?.isVisible == true && delegate.overflow?.button?.title == "+2")
+    precondition(delegate.overflow?.menu?.items.first?.submenu?.items.contains { $0.title.hasPrefix("Refresh GLM") } == true)
+    delegate.arrange(["codex", "claude"])
+    precondition(delegate.overflow?.isVisible == false)
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))
