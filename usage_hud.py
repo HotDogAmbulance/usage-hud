@@ -1,53 +1,6 @@
 #!/usr/bin/env python3
-"""
-usage_hud.py - a small always-on-top floating window showing how much of your
-Claude and Codex/ChatGPT usage quota is left.
-
-Everything is read from local files. No network calls, no credentials, no scraping.
-
-Modes
------
-  python3 usage_hud.py                     start the floating HUD
-  python3 usage_hud.py --once              print one snapshot to stdout and exit
-  python3 usage_hud.py --json              print one snapshot as JSON and exit
-  python3 usage_hud.py --claude-statusline use as Claude Code's statusLine command
-  python3 usage_hud.py --install-claude-statusline   wire the above into settings.json
-  python3 usage_hud.py --probe-claude      force one live quota probe now
-  python3 usage_hud.py --probe-if-stale    internal: Claude Code UserPromptSubmit
-                                           hook - live-probe when cache > 2 min old
-
-Data sources
-------------
-  Claude : Claude Code passes a `rate_limits` object on stdin to your statusline
-            command (Claude Code >= 2.1.80, Pro/Max subscribers). --claude-statusline
-            caches it to ~/.usage-hud/claude.json. These numbers are the *account*
-            quota, shared by Claude Code, claude.ai and the desktop app.
-            Every conversation start keeps this live: interactive turns via the
-            statusline hook, headless agent runs via a UserPromptSubmit hook
-            (--probe-if-stale re-probes through the API whenever the cache is
-            over 2 minutes old). Neither hook covers everything though - Claude
-            Code's Stop hook (and thus nothing) fires on a mid-turn cancel, and
-            a one-shot session from another agent/tool may never touch this
-            machine's hooks at all. So while the HUD window is open it also
-            watches ~/.claude/sessions/*.json - Claude Code's own per-process
-            busy/idle status file, written for every `claude` process on this
-            machine with no hook involved - and opportunistically re-probes
-            whenever any of them change, which catches cancels and other
-            processes' one-shot runs alike. A plain timer (PROBE_FRESH/
-            PROBE_MIN below) is the last-resort backstop for the rest (e.g. a
-            window resetting, or usage from something that bypasses the
-            `claude` CLI entirely), probing the API directly with Claude
-            Code's own OAuth token from the macOS keychain (a ~1-token
-            request), renewing that token itself when it expires. In the HUD,
-            R forces a live probe immediately regardless.
-  Codex  : Codex CLI writes `token_count` events containing `rate_limits` into
-           ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl. Read directly, no setup.
-
-Keys: drag to move - r redraw - R live-probe Claude quota now - q or Esc quit - right-click for menu.
-"""
-
+"""Usage HUD data utilities and Claude Code compatibility hooks. No window UI."""
 from __future__ import annotations
-
 import argparse
 import json
 import os
@@ -55,77 +8,73 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-
 HOME = Path.home()
-STATE_DIR = Path(os.environ.get("USAGE_HUD_HOME", HOME / ".usage-hud"))
-CLAUDE_CACHE = STATE_DIR / "claude.json"
-POS_FILE = STATE_DIR / "position.json"
-CODEX_HOME = Path(os.environ.get("CODEX_HOME", HOME / ".codex"))
-CLAUDE_SESSIONS_DIR = HOME / ".claude" / "sessions"
-
-REFRESH_SECONDS = 20
-STALE_AFTER = 6 * 3600  # cached Claude numbers older than this are marked stale
-TAIL_BYTES = 512 * 1024  # how much of a session log to read from the end
-
-KEYCHAIN_ITEM = "Claude Code-credentials"
-API_URL = "https://api.anthropic.com/v1/messages"
-OAUTH_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
-OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # Claude Code's public client id
-OAUTH_UA = "claude-cli/2.1.80 (external, cli)"  # python-urllib UA is Cloudflare-banned here
-PROBE_FRESH = 600  # blind backstop: probe when the cache is older than this (s)
-PROBE_MIN = 60  # never probe more often than this (s), blind or activity-triggered
-HOOK_FRESH = 120  # --probe-if-stale: re-probe when the cache is older (s)
-PROBE_STATE = {"probing": False, "last": 0.0, "error": None, "manual": False}
-
-
-# --------------------------------------------------------------------------
-# helpers
-# --------------------------------------------------------------------------
-
-_LABELS = {
-    "five_hour": "5h",
-    "seven_day": "7d",
-    "primary": "5h",
-    "secondary": "wk",
-}
-
+CODEX_HOME = Path(os.environ.get('CODEX_HOME', HOME / '.codex'))
+STATE_DIR = Path(os.environ.get('USAGE_HUD_HOME', HOME / '.usage-hud'))
+CLAUDE_CACHE = STATE_DIR / 'claude.json'
+CODEX_CACHE = STATE_DIR / 'codex.json'
+CODEX_CREDITS_CONFIG = STATE_DIR / 'credits.json'
+OPENAI_COSTS_URL = 'https://api.openai.com/v1/organization/costs'
+OPENAI_USAGE_URL = 'https://api.openai.com/v1/organization/usage/completions'
+OPENAI_PRICING_REVISION = 'gpt-6-astra-2026-09-08'
+OPENAI_MODEL_PRICES = {'gpt-6-astra': {'input_uncached': Decimal('10'), 'input_cached': Decimal('1'), 'input_cache_write': Decimal('12.5'), 'output': Decimal('50')}}
+OPENAI_LONG_CONTEXT_THRESHOLD = 272000
+STALE_AFTER = 6 * 3600
+KEYCHAIN_ITEM = 'Claude Code-credentials'
+OPENROUTER_CACHE = STATE_DIR / 'openrouter.json'
+OPENROUTER_SERVICE = os.environ.get('USAGE_HUD_OPENROUTER_SERVICE', '')
+OPENROUTER_ACCOUNTS = [tuple(pair.split(':', 1)) for pair in os.environ.get('USAGE_HUD_OPENROUTER_KEYS', '').split(',') if ':' in pair]
+PROVIDER_SLOTS_RAW = os.environ.get('USAGE_HUD_PROVIDER_SLOTS', '')
+PROVIDER_CONFIG = STATE_DIR / 'providers.json'
+OPENROUTER_KEY_URL = 'https://openrouter.ai/api/v1/key'
+OPENROUTER_CREDITS_URL = 'https://openrouter.ai/api/v1/credits'
+OPENAI_CREDITS_FRESH = 600
+OPENAI_ADMIN_TOKEN_STATE = {'selector': None, 'token': None}
+_LABELS = {'five_hour': '5h', 'seven_day': '7d', 'primary': '5h', 'secondary': '7d'}
+_WINDOW_SECONDS = {'five_hour': 5 * 3600, 'seven_day': 7 * 86400, 'primary': 5 * 3600, 'secondary': 7 * 86400}
 
 def label_for(key: str, window_minutes=None) -> str:
     if window_minutes:
         m = int(window_minutes)
         if m % 10080 == 0:
-            return f"{m // 10080}wk"
+            return f'{m // 10080 * 7}d'
         if m % 1440 == 0:
-            return f"{m // 1440}d"
+            return f'{m // 1440}d'
         if m % 60 == 0:
-            return f"{m // 60}h"
-        return f"{m}m"
+            return f'{m // 60}h'
+        return f'{m}m'
     if key in _LABELS:
         return _LABELS[key]
-    for prefix, short in _LABELS.items():
+    for (prefix, short) in _LABELS.items():
         if key.startswith(prefix):
-            rest = key[len(prefix):].strip("_").replace("_", " ")
-            return f"{short} {rest}".strip()
-    return key.replace("_", " ")[:8]
+            rest = key[len(prefix):].strip('_').replace('_', ' ')
+            return f'{short} {rest}'.strip()
+    return key.replace('_', ' ')[:8]
 
+def window_seconds(key, window_minutes):
+    mins = as_float(window_minutes)
+    if mins:
+        return mins * 60
+    return _WINDOW_SECONDS.get(key)
 
 def fmt_delta(seconds) -> str:
     if seconds is None:
-        return ""
+        return ''
     seconds = int(seconds)
     if seconds <= 0:
-        return "now"
-    d, rem = divmod(seconds, 86400)
-    h, rem = divmod(rem, 3600)
+        return 'now'
+    (d, rem) = divmod(seconds, 86400)
+    (h, rem) = divmod(rem, 3600)
     m = rem // 60
     if d:
-        return f"{d}d{h}h"
+        return f'{d}d{h}h'
     if h:
-        return f"{h}h{m:02d}m"
-    return f"{m}m"
-
+        return f'{h}h{m:02d}m'
+    return f'{m}m'
 
 def as_float(x):
     try:
@@ -133,9 +82,41 @@ def as_float(x):
     except (TypeError, ValueError):
         return None
 
+def _private_dir(path: Path):
+    path.mkdir(parents=True, exist_ok=True, mode=448)
+    try:
+        path.chmod(448)
+    except OSError:
+        pass
+
+def _atomic_private_json(path: Path, payload):
+    _private_dir(path.parent)
+    tmp = path.with_name(f'.{path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 384)
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        path.chmod(384)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+def _merge_private_json(path: Path, updates: dict):
+    try:
+        merged = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(merged, dict):
+            merged = {}
+    except Exception:
+        merged = {}
+    merged.update(updates)
+    _atomic_private_json(path, merged)
 
 def find_key(obj, name):
-    """Depth-first search for the first value stored under `name`."""
     if isinstance(obj, dict):
         if name in obj:
             return obj[name]
@@ -150,694 +131,573 @@ def find_key(obj, name):
                 return found
     return None
 
-
 def parse_windows(rate_limits: dict, captured_at: float):
-    """Normalise either provider's rate_limits blob into a list of windows."""
     out = []
     if not isinstance(rate_limits, dict):
         return out
-    for key, val in rate_limits.items():
+    for (key, val) in rate_limits.items():
         if not isinstance(val, dict):
             continue
-        pct = as_float(val.get("used_percentage"))
+        pct = as_float(val.get('used_percentage'))
         if pct is None:
-            pct = as_float(val.get("used_percent"))
+            pct = as_float(val.get('used_percent'))
         if pct is None:
             continue
-
-        resets_at = as_float(val.get("resets_at"))
+        resets_at = as_float(val.get('resets_at'))
         if resets_at is None:
-            rin = as_float(val.get("resets_in_seconds"))
+            rin = as_float(val.get('resets_in_seconds'))
             if rin is not None:
                 resets_at = captured_at + rin
-
-        out.append({
-            "label": label_for(key, val.get("window_minutes")),
-            "pct": max(0.0, min(100.0, pct)),
-            "resets_at": resets_at,
-            # Once resets_at has passed the window started over, so the cached
-            # percentage says nothing about the new one. Don't pretend it does.
-            "expired": bool(resets_at and resets_at < time.time()),
-        })
-    out.sort(key=lambda w: w["resets_at"] or float("inf"))
+        out.append({'label': label_for(key, val.get('window_minutes')), 'seconds': window_seconds(key, val.get('window_minutes')), 'pct': max(0.0, min(100.0, pct)), 'resets_at': resets_at, 'expired': bool(resets_at and resets_at < time.time()), 'stale': bool(val.get('stale')) or time.time() - (as_float(val.get('captured_at')) or captured_at) > 600})
+    out.sort(key=lambda w: (w['seconds'] is None, w['seconds'] if w['seconds'] is not None else 0.0, w['resets_at'] or float('inf')))
     return out
 
-
-# --------------------------------------------------------------------------
-# Claude: read the cache written by the statusline hook
-# --------------------------------------------------------------------------
-
 def read_claude():
-    panel = {"name": "CLAUDE", "windows": [], "note": ""}
+    panel = {'name': 'CLAUDE', 'windows': [], 'note': ''}
     try:
-        blob = json.loads(CLAUDE_CACHE.read_text(encoding="utf-8"))
+        blob = json.loads(CLAUDE_CACHE.read_text(encoding='utf-8'))
     except FileNotFoundError:
-        panel["note"] = "no Claude data yet - send a message in Claude Code"
+        panel['note'] = 'Refresh Claude from its menu'
         return panel
     except Exception as exc:
-        panel["note"] = f"cache unreadable ({exc.__class__.__name__})"
+        panel['note'] = f'cache unreadable ({exc.__class__.__name__})'
         return panel
-
-    captured = as_float(blob.get("captured_at")) or time.time()
-    panel["windows"] = parse_windows(blob.get("rate_limits") or {}, captured)
-    panel["captured_at"] = captured
-
-    if not panel["windows"]:
-        panel["note"] = "no rate_limits yet - open Claude Code"
+    captured = as_float(blob.get('captured_at')) or time.time()
+    panel['windows'] = parse_windows(blob.get('rate_limits') or {}, captured)
+    panel['captured_at'] = captured
+    if not panel['windows']:
+        panel['note'] = 'No quota yet; refresh Claude'
     elif time.time() - captured > STALE_AFTER:
-        panel["note"] = f"stale, last seen {fmt_delta(time.time() - captured)} ago"
-        for w in panel["windows"]:
-            w["stale"] = True
-    expired = [w["label"] for w in panel["windows"] if w.get("expired")]
-    if expired:
-        panel["note"] = (f"{'+'.join(expired)} window reset - waiting for fresh "
-                         f"data (auto-probe or Claude Code)")
+        for w in panel['windows']:
+            w['stale'] = True
+    credits = _claude_credits_row(blob.get('usage_credits'))
+    if credits:
+        panel['windows'].append(credits)
     return panel
 
+def _claude_credits_row(credits):
+    if not isinstance(credits, dict) or not credits.get('is_enabled'):
+        return None
+    limit = as_float(credits.get('monthly_limit'))
+    used = as_float(credits.get('used_credits'))
+    if not limit or used is None:
+        return None
+    scale = 100.0 if limit >= 500 else 1.0
+    pct = as_float(credits.get('utilization'))
+    if pct is None:
+        pct = used / limit * 100.0
+    stale = time.time() - (as_float(credits.get('captured_at')) or 0) > STALE_AFTER
+    return {'label': 'credits', 'pct': None, 'right': f'${used / scale:,.2f} of ${limit / scale:,.2f} · {pct:.0f}%', 'stale': stale}
 
 def claude_statusline():
-    """Run as Claude Code's statusLine command: cache rate_limits, print a line."""
     try:
         payload = json.load(sys.stdin)
     except Exception:
-        print("")
+        print('')
         return 0
-
-    if isinstance(payload.get("rate_limits"), dict):
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = CLAUDE_CACHE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({
-            "captured_at": time.time(),
-            "rate_limits": payload["rate_limits"],
-        }), encoding="utf-8")
-        os.replace(tmp, CLAUDE_CACHE)  # atomic, survives concurrent sessions
-
-    # Still print a useful status line so you lose nothing by installing this.
-    model = payload.get("model")
-    model = model.get("display_name") if isinstance(model, dict) else (model or "")
-    ctx = as_float(find_key(payload.get("context_window") or {}, "used_percentage"))
-    bits = [b for b in [model, f"ctx {ctx:.0f}%" if ctx is not None else ""] if b]
-    for w in parse_windows(payload.get("rate_limits") or {}, time.time()):
-        left = fmt_delta((w["resets_at"] - time.time()) if w["resets_at"] else None)
-        bits.append(f"{w['label']} {w['pct']:.0f}%" + (f" ({left})" if left else ""))
-    print(" | ".join(bits))
+    ctx = as_float(find_key(payload.get('context_window') or {}, 'used_percentage'))
+    updates = {}
+    if isinstance(payload.get('rate_limits'), dict):
+        updates['captured_at'] = time.time()
+        updates['rate_limits'] = payload['rate_limits']
+    if ctx is not None:
+        updates['context_pct'] = ctx
+        updates['context_captured_at'] = time.time()
+    if updates:
+        _merge_private_json(CLAUDE_CACHE, updates)
+    model = payload.get('model')
+    model = model.get('display_name') if isinstance(model, dict) else model or ''
+    bits = [b for b in [model, f'ctx {ctx:.0f}%' if ctx is not None else ''] if b]
+    for w in parse_windows(payload.get('rate_limits') or {}, time.time()):
+        left = fmt_delta(w['resets_at'] - time.time() if w['resets_at'] else None)
+        bits.append(f"{w['label']} {w['pct']:.0f}%" + (f' ({left})' if left else ''))
+    print(' | '.join(bits))
     return 0
-
-
-def install_claude_statusline(force=False):
-    settings = HOME / ".claude" / "settings.json"
-    script = Path(__file__).resolve()
-    command = f'"{sys.executable}" "{script}" --claude-statusline'
-
-    data = {}
-    if settings.exists():
-        try:
-            data = json.loads(settings.read_text(encoding="utf-8"))
-        except Exception as exc:
-            print(f"! {settings} is not valid JSON ({exc}); fix it first.")
-            return 1
-        if data.get("statusLine") and not force:
-            print(f"! You already have a statusLine configured:\n  "
-                  f"{json.dumps(data['statusLine'])}\n"
-                  f"  Re-run with --force to replace it, or add this command yourself:\n"
-                  f"  {command}")
-            return 1
-        backup = settings.with_suffix(".json.usage-hud-backup")
-        backup.write_text(settings.read_text(encoding="utf-8"), encoding="utf-8")
-        print(f"backed up {settings} -> {backup}")
-
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    data["statusLine"] = {"type": "command", "command": command, "padding": 0}
-    settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    print(f"wrote statusLine into {settings}")
-    print("Now start Claude Code and send one message; the HUD fills in after that.")
-    return 0
-
-
-# --------------------------------------------------------------------------
-# Claude direct probe: ask the API for quota headers using Claude Code's
-# own OAuth token. The token is read from the keychain and never logged or
-# stored anywhere except its keychain entry. When the stored access token
-# has expired, it is renewed with the refresh token from that same entry
-# (what Claude Code itself does on startup) and written back there.
-# --------------------------------------------------------------------------
-
-def _keychain_account():
-    import subprocess
-    try:
-        meta = subprocess.run(
-            ["security", "find-generic-password", "-s", KEYCHAIN_ITEM],
-            capture_output=True, text=True, timeout=10).stdout
-        for line in meta.splitlines():
-            if line.strip().startswith('"acct"'):
-                part = line.split("=", 1)[1].strip()
-                return part.strip('"') if part and part != "<NULL>" else None
-    except Exception:
-        pass
-    return None
-
-
-def _oauth_refresh(oauth: dict, blob: dict):
-    """Trade the refresh token for a fresh access token. The response rotates
-    the refresh token too, so persist the pair to the keychain BEFORE the
-    rotated one is allowed to go stale."""
-    import subprocess
-    body = json.dumps({"grant_type": "refresh_token",
-                       "refresh_token": oauth.get("refreshToken"),
-                       "client_id": OAUTH_CLIENT_ID}).encode()
-    req = urllib.request.Request(OAUTH_REFRESH_URL, data=body, headers={
-        "Content-Type": "application/json", "Accept": "application/json",
-        "User-Agent": OAUTH_UA})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = json.loads(exc.read().decode()).get("error_description", "")[:120]
-        except Exception:
-            pass
-        return None, (f"token refresh failed (HTTP {exc.code}"
-                      f"{' - ' + detail if detail else ''}) - open Claude Code to re-login")
-    except Exception as exc:
-        return None, f"token refresh failed ({exc.__class__.__name__})"
-
-    new_tok = data.get("access_token")
-    if not new_tok:
-        return None, "token refresh response had no access_token"
-    oauth["accessToken"] = new_tok
-    if data.get("refresh_token"):
-        oauth["refreshToken"] = data["refresh_token"]
-    oauth["expiresAt"] = int((time.time() + data.get("expires_in", 3600)) * 1000)
-
-    cmd = ["security", "add-generic-password", "-U", "-s", KEYCHAIN_ITEM]
-    acct = _keychain_account()
-    if acct:
-        cmd += ["-a", acct]
-    cmd += ["-w", json.dumps(blob)]
-    try:
-        if subprocess.run(cmd, capture_output=True, text=True,
-                          timeout=10).returncode != 0:
-            return None, "token renewed but keychain write failed - open Claude Code"
-    except Exception:
-        return None, "token renewed but keychain write failed - open Claude Code"
-    return new_tok, None
-
 
 def claude_oauth():
-    """Return (access_token, error) from Claude Code's macOS keychain entry,
-    renewing the token first if it has expired."""
     import subprocess
     try:
-        raw = subprocess.run(
-            ["security", "find-generic-password", "-s", KEYCHAIN_ITEM, "-w"],
-            capture_output=True, text=True, timeout=10).stdout.strip()
+        raw = subprocess.run(['security', 'find-generic-password', '-s', KEYCHAIN_ITEM, '-w'], capture_output=True, text=True, timeout=10).stdout.strip()
     except Exception:
-        return None, "no macOS keychain access"
+        return (None, 'no macOS keychain access')
     if not raw:
-        return None, "no Claude Code credentials in keychain"
+        return (None, 'no Claude Code credentials in keychain')
     try:
         blob = json.loads(raw)
-        oauth = blob.get("claudeAiOauth") or blob
-        tok, exp = oauth.get("accessToken"), oauth.get("expiresAt")
+        oauth = blob.get('claudeAiOauth') or blob
+        (tok, exp) = (oauth.get('accessToken'), oauth.get('expiresAt'))
     except Exception:
-        return None, "keychain credential unreadable"
+        return (None, 'keychain credential unreadable')
     if not tok:
-        return None, "keychain credential has no token"
+        return (None, 'keychain credential has no token')
     if not (exp and exp / 1000 < time.time()):
-        return tok, None
-    if not oauth.get("refreshToken"):
-        return None, "OAuth token expired and no refresh token - open Claude Code"
-    return _oauth_refresh(oauth, blob)
-
-
-def probe_claude():
-    """Fetch official 5h/7d quota from the API; update CLAUDE_CACHE. ~1 token."""
-    tok, err = claude_oauth()
-    if err:
-        return False, err
-
-    body = json.dumps({"model": "claude-haiku-4-5", "max_tokens": 1,
-                       "messages": [{"role": "user", "content": "hi"}]}).encode()
-    req = urllib.request.Request(API_URL, data=body, headers={
-        "Authorization": f"Bearer {tok}",
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "oauth-2025-04-20",
-        "content-type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            headers = {k.lower(): v for k, v in resp.headers.items()}
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = json.loads(exc.read().decode()).get("error", {}).get("message", "")[:120]
-        except Exception:
-            pass
-        return False, f"probe HTTP {exc.code}{' - ' + detail if detail else ''}"
-    except Exception as exc:
-        return False, f"probe failed ({exc.__class__.__name__})"
-
-    rl = {}
-    for key, suffix in (("five_hour", "5h"), ("seven_day", "7d")):
-        util = as_float(headers.get(f"anthropic-ratelimit-unified-{suffix}-utilization"))
-        if util is None:
-            continue
-        window = {"used_percentage": util * 100}
-        reset = as_float(headers.get(f"anthropic-ratelimit-unified-{suffix}-reset"))
-        if reset:
-            window["resets_at"] = reset
-        rl[key] = window
-    if not rl:
-        return False, "no rate limit headers in API response"
-
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = CLAUDE_CACHE.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"captured_at": time.time(), "rate_limits": rl}),
-                   encoding="utf-8")
-    os.replace(tmp, CLAUDE_CACHE)
-    return True, ", ".join(f"{label_for(k)} {v['used_percentage']:.0f}%"
-                           for k, v in rl.items())
-
-
-def claude_needs_probe():
-    try:
-        blob = json.loads(CLAUDE_CACHE.read_text(encoding="utf-8"))
-    except Exception:
-        return True
-    captured = as_float(blob.get("captured_at")) or 0
-    if time.time() - captured > PROBE_FRESH:
-        return True
-    return any(w.get("expired")
-               for w in parse_windows(blob.get("rate_limits") or {}, captured))
-
-
-def claude_activity():
-    """Latest mtime across ~/.claude/sessions/*.json - Claude Code's own
-    per-process status file, one per `claude` CLI/IDE process on this
-    machine, touched on every busy<->idle transition (a normal turn ending,
-    a mid-turn Esc-cancel, or a plain headless `claude -p` one-shot run by
-    something else entirely). No hook required and nothing to miss: unlike
-    UserPromptSubmit/Stop, this can't skip a cancelled turn or a session
-    that never fired one of our hooks in the first place."""
-    try:
-        return max((p.stat().st_mtime for p in CLAUDE_SESSIONS_DIR.glob("*.json")),
-                   default=0.0)
-    except OSError:
-        return 0.0
-
-
-def maybe_probe():
-    """Background-refresh the Claude cache when stale or expired (throttled)."""
-    if PROBE_STATE["probing"] or time.time() - PROBE_STATE["last"] < PROBE_MIN:
-        return
-    if not claude_needs_probe():
-        PROBE_STATE["error"] = None
-        return
-    run_probe(force=False, manual=False)
-
-
-def run_probe(force=False, manual=False):
-    """Kick off one probe in a background thread (single-flight). `force`
-    bypasses the PROBE_MIN throttle - that is the HUD's R key. Returns True
-    if a probe was started."""
-    if PROBE_STATE["probing"]:
-        return False
-    if not force and time.time() - PROBE_STATE["last"] < PROBE_MIN:
-        return False
-    PROBE_STATE["probing"] = True
-    PROBE_STATE["manual"] = manual
-
-    def worker():
-        try:
-            ok, msg = probe_claude()
-            PROBE_STATE["error"] = None if ok else msg
-        finally:
-            PROBE_STATE["last"] = time.time()
-            PROBE_STATE["probing"] = False
-            PROBE_STATE["manual"] = False
-
-    threading.Thread(target=worker, daemon=True).start()
-    return True
-
-
-def probe_if_stale():
-    """Hook entry point (UserPromptSubmit): every conversation start - inter-
-    active or headless (agents) - refreshes the Claude cache when it is older
-    than HOOK_FRESH. Never fails the host command: always exit 0."""
-    try:
-        try:
-            blob = json.loads(CLAUDE_CACHE.read_text(encoding="utf-8"))
-            age = time.time() - (as_float(blob.get("captured_at")) or 0)
-        except Exception:
-            age = float("inf")
-        if age >= HOOK_FRESH:
-            ok, msg = probe_claude()
-            if not ok:
-                print(f"usage-hud probe: {msg}", file=sys.stderr)
-    except Exception as exc:
-        print(f"usage-hud hook error: {exc.__class__.__name__}", file=sys.stderr)
-    return 0
-
-
-# --------------------------------------------------------------------------
-# Codex: read rate_limits straight out of the newest session log
-# --------------------------------------------------------------------------
-
-def newest_codex_logs(limit=8):
-    root = CODEX_HOME / "sessions"
-    if not root.is_dir():
-        return []
-    files = []
-    # sessions/YYYY/MM/DD/rollout-*.jsonl - walk newest date folders first
-    for year in sorted((p for p in root.iterdir() if p.is_dir()), reverse=True):
-        for month in sorted((p for p in year.iterdir() if p.is_dir()), reverse=True):
-            for day in sorted((p for p in month.iterdir() if p.is_dir()), reverse=True):
-                files.extend(day.glob("*.jsonl"))
-                if len(files) >= limit * 3:
-                    break
-            if len(files) >= limit * 3:
-                break
-        if len(files) >= limit * 3:
-            break
-    if not files:  # older/flat layouts
-        files = list(root.rglob("*.jsonl"))
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return files[:limit]
-
-
-def last_rate_limits_in(path: Path):
-    """Scan a session log backwards for the most recent rate_limits payload."""
-    try:
-        size = path.stat().st_size
-        with path.open("rb") as fh:
-            if size > TAIL_BYTES:
-                fh.seek(size - TAIL_BYTES)
-                fh.readline()  # drop the partial line
-            lines = fh.read().splitlines()
-    except OSError:
-        return None
-
-    for raw in reversed(lines):
-        if b"rate_limits" not in raw:
-            continue
-        try:
-            event = json.loads(raw)
-        except Exception:
-            continue
-        rl = find_key(event, "rate_limits")
-        if isinstance(rl, dict) and rl:
-            ts = event.get("timestamp")
-            captured = path.stat().st_mtime
-            if isinstance(ts, str):
-                try:
-                    from datetime import datetime
-                    captured = datetime.fromisoformat(
-                        ts.replace("Z", "+00:00")).timestamp()
-                except ValueError:
-                    pass
-            return rl, captured
-    return None
-
+        return (tok, None)
+    return (None, 'Claude authentication expired - open Claude Code to refresh it')
 
 def read_codex():
-    panel = {"name": "CODEX", "windows": [], "note": ""}
-    logs = newest_codex_logs()
-    if not logs:
-        panel["note"] = "no ~/.codex/sessions found"
-        return panel
-
-    for path in logs:
-        hit = last_rate_limits_in(path)
-        if hit:
-            rl, captured = hit
-            panel["windows"] = parse_windows(rl, captured)
-            panel["captured_at"] = captured
-            if time.time() - captured > STALE_AFTER:
-                panel["note"] = f"stale, last seen {fmt_delta(time.time() - captured)} ago"
-                for w in panel["windows"]:
-                    w["stale"] = True
-            return panel
-
-    panel["note"] = "no rate_limits in recent sessions"
+    panel = {'name': 'CODEX', 'windows': [], 'note': ''}
+    try:
+        blob = json.loads((STATE_DIR / 'codex-quota.json').read_text())
+        captured = float(blob.get('captured_at', 0))
+        panel['windows'] = parse_windows(blob.get('rate_limits', {}), captured)
+        panel['captured_at'] = captured
+        if time.time() - captured > 600:
+            panel['note'] = 'Cached quota; refresh needed'
+            for w in panel['windows']:
+                w['stale'] = True
+    except (OSError, ValueError, TypeError):
+        panel['note'] = 'Refresh Codex to read quota'
+    credits = _codex_credits_row()
+    if credits:
+        panel['windows'].append(credits)
     return panel
 
-
-# --------------------------------------------------------------------------
-# snapshot + text output
-# --------------------------------------------------------------------------
-
-def snapshot():
-    return [read_claude(), read_codex()]
-
-
-def bar(pct, width=12):
-    filled = int(round(pct / 100 * width))
-    return "#" * filled + "." * (width - filled)
-
-
-def print_once(as_json=False):
-    panels = snapshot()
-    if as_json:
-        print(json.dumps(panels, indent=2, default=str))
-        return 0
-    now = time.time()
-    for p in panels:
-        print(p["name"])
-        for w in p["windows"]:
-            if w.get("expired"):
-                print(f"  {w['label']:<8} {bar(0)}     ?%  window reset since last reading")
-                continue
-            left = fmt_delta((w["resets_at"] - now) if w["resets_at"] else None)
-            flag = "  (stale)" if w.get("stale") else ""
-            print(f"  {w['label']:<8} {bar(w['pct'])} {w['pct']:5.1f}%"
-                  f"  resets {left}{flag}")
-        if p["note"]:
-            print(f"  - {p['note']}")
-        print()
-    return 0
-
-
-# --------------------------------------------------------------------------
-# the floating window
-# --------------------------------------------------------------------------
-
-BG = "#14161a"
-FG = "#e8e8ea"
-DIM = "#6b7280"
-TRACK = "#2a2e36"
-GREEN, AMBER, RED = "#4ade80", "#fbbf24", "#f87171"
-W = 246
-ROW_H = 19
-HEAD_H = 19
-PAD = 9
-
-
-def colour_for(pct):
-    return GREEN if pct < 50 else (AMBER if pct < 80 else RED)
-
-
-def run_hud(alpha=0.9, refresh=REFRESH_SECONDS):
+def _keychain_password(service: str, account: str):
+    import subprocess
     try:
-        import tkinter as tk
-    except ImportError:
-        print("tkinter is missing. Debian/Ubuntu: sudo apt install python3-tk\n"
-              "macOS/Windows: use the python.org build, which bundles it.\n"
-              "Meanwhile `--once` still works in a terminal.", file=sys.stderr)
-        return 1
-
-    root = tk.Tk()
-    root.title("usage")
-    root.overrideredirect(True)
-    root.attributes("-topmost", True)
-    try:
-        root.attributes("-alpha", alpha)
-    except tk.TclError:
-        pass
-
-    canvas = tk.Canvas(root, bg=BG, highlightthickness=0, bd=0)
-    canvas.pack(fill="both", expand=True)
-
-    x, y = 60, 60
-    try:
-        pos = json.loads(POS_FILE.read_text(encoding="utf-8"))
-        x, y = int(pos["x"]), int(pos["y"])
+        raw = subprocess.run(['security', 'find-generic-password', '-s', service, '-a', account, '-w'], capture_output=True, text=True, timeout=120).stdout.strip()
     except Exception:
-        pass
-    root.geometry(f"+{x}+{y}")
+        return None
+    return raw or None
 
-    drag = {"x": 0, "y": 0}
-
-    def start_drag(e):
-        drag["x"], drag["y"] = e.x, e.y
-
-    def do_drag(e):
-        root.geometry(f"+{root.winfo_pointerx() - drag['x']}"
-                      f"+{root.winfo_pointery() - drag['y']}")
-
-    def save_and_quit(*_):
+def _provider_slots():
+    raw = PROVIDER_SLOTS_RAW
+    if not raw:
         try:
-            STATE_DIR.mkdir(parents=True, exist_ok=True)
-            POS_FILE.write_text(json.dumps(
-                {"x": root.winfo_x(), "y": root.winfo_y()}), encoding="utf-8")
-        except Exception:
-            pass
-        root.destroy()
-
-    def draw():
-        canvas.delete("all")
-        maybe_probe()
-        panels = snapshot()
-        now = time.time()
-        yy = PAD
-        for p in panels:
-            if p["name"] == "CLAUDE":
-                if PROBE_STATE["probing"] and PROBE_STATE["manual"]:
-                    p["note"] = "probing quota (R)..."
-                elif PROBE_STATE["probing"]:
-                    p["note"] = "auto-probing quota..."
-                elif PROBE_STATE["error"]:
-                    p["note"] = f"auto-probe: {PROBE_STATE['error']}"
-            canvas.create_text(PAD, yy, anchor="nw", text=p["name"],
-                               fill=DIM, font=("TkDefaultFont", 9, "bold"))
-            yy += HEAD_H
-            for w in p["windows"]:
-                expired = w.get("expired")
-                pct = 0.0 if expired else w["pct"]
-                col = DIM if (expired or w.get("stale")) else colour_for(pct)
-                canvas.create_text(PAD, yy + 4, anchor="nw", text=w["label"],
-                                   fill=DIM, font=("TkDefaultFont", 9))
-                bx0, bx1 = PAD + 26, W - 96
-                canvas.create_rectangle(bx0, yy + 5, bx1, yy + 12,
-                                        fill=TRACK, outline="")
-                end = bx0 + (bx1 - bx0) * pct / 100
-                if end > bx0:
-                    canvas.create_rectangle(bx0, yy + 5, end, yy + 12,
-                                            fill=col, outline="")
-                canvas.create_text(bx1 + 8, yy + 4, anchor="nw",
-                                   text="?" if expired else f"{pct:.0f}%", fill=col,
-                                   font=("TkDefaultFont", 9, "bold"))
-                left = ("reset" if expired else
-                        fmt_delta((w["resets_at"] - now) if w["resets_at"] else None))
-                if left:
-                    canvas.create_text(W - PAD, yy + 4, anchor="ne", text=left,
-                                       fill=DIM, font=("TkDefaultFont", 9))
-                yy += ROW_H
-            if p["note"]:
-                canvas.create_text(PAD, yy, anchor="nw", text=p["note"],
-                                   fill=DIM, font=("TkDefaultFont", 8))
-                yy += ROW_H - 3
-            yy += 4
-
-        root.geometry(f"{W}x{int(yy + PAD - 4)}")
-
-    # 1 s heartbeat: cache writes from any Claude conversation (statusline on
-    # interactive turns, UserPromptSubmit hook on headless agent runs) or from
-    # a probe show up live; everything else redraws on the regular cadence.
-    # claude_activity() changing (any local `claude` process going busy or
-    # idle) opportunistically kicks a throttled probe too - but only if the
-    # cache didn't change in the same tick. A normal completed turn flips
-    # both at once (statusline already paid for the update, for free); it's
-    # a cancel or another process's run that flips activity with no matching
-    # cache write, which is exactly the gap hooks can't be trusted to cover.
-    last_cache = {"m": None}
-    last_activity = {"m": None}
-    ticks = {"n": 0}
-
-    def cache_state():
-        try:
-            return CLAUDE_CACHE.stat().st_mtime_ns
-        except OSError:
-            return None
-
-    def tick():
-        ticks["n"] += 1
-        m = cache_state()
-        changed = m != last_cache["m"]
-        last_cache["m"] = m
-        a = claude_activity()
-        if a != last_activity["m"]:
-            last_activity["m"] = a
-            if not changed:  # statusline already covered this event - skip the extra call
-                run_probe(force=False, manual=False)
-        if changed:
-            PROBE_STATE["error"] = None  # fresh data supersedes probe errors
-            draw()
-        elif ticks["n"] * 1 >= refresh:
-            ticks["n"] = 0
-            draw()
-        canvas.after(1000, tick)
-
-    def clear_claude_cache(*_):
-        try:
-            CLAUDE_CACHE.unlink()
+            raw = PROVIDER_CONFIG.read_text(encoding='utf-8')
         except FileNotFoundError:
             pass
-        draw()
+        except OSError as exc:
+            return ([], f'provider slot config unreadable ({exc.__class__.__name__})')
+    if raw:
+        try:
+            slots = json.loads(raw)
+            if not isinstance(slots, list):
+                raise ValueError('slots must be a list')
+            seen = set()
+            clean = []
+            for slot in slots:
+                slot_id = slot.get('id') if isinstance(slot, dict) else None
+                label = slot.get('label') if isinstance(slot, dict) else None
+                sources = slot.get('sources') if isinstance(slot, dict) else None
+                if not isinstance(slot_id, str) or not slot_id or slot_id in seen or (not isinstance(label, str)) or (not label) or (not isinstance(sources, list)) or (not sources):
+                    raise ValueError('invalid or duplicate slot')
+                if not all((isinstance(s, dict) and isinstance(s.get('provider'), str) for s in sources)):
+                    raise ValueError('invalid source')
+                seen.add(slot_id)
+                clean.append({'id': slot_id, 'label': label, 'sources': sources})
+            return (clean, None)
+        except Exception as exc:
+            return ([], f'provider slot config invalid ({exc.__class__.__name__})')
+    slots = []
+    for (index, (label, account)) in enumerate(OPENROUTER_ACCOUNTS, 1):
+        slots.append({'id': f'legacy-{index}', 'label': label, 'sources': [{'provider': 'openrouter', 'service': OPENROUTER_SERVICE, 'account': account}]})
+    return (slots, None)
 
-    def manual_probe(*_):
-        run_probe(force=True, manual=True)  # R: live check right now
-        draw()
-        return "break"
+def _source_id(source: dict):
+    provider = source.get('provider', 'unknown')
+    if provider == 'openrouter':
+        return f"openrouter:{source.get('service', '')}:{source.get('account', '')}"
+    return f"{provider}:{source.get('id', 'default')}"
 
-    menu = tk.Menu(root, tearoff=0)
-    menu.add_command(label="Refresh", command=draw)
-    menu.add_command(label="Probe Claude quota now (R)", command=manual_probe)
-    menu.add_command(label="Clear Claude cache", command=clear_claude_cache)
-    menu.add_command(label="Quit", command=save_and_quit)
+def _provider_get(url: str, key: str):
+    req = urllib.request.Request(url, headers={'Authorization': f'Bearer {key}'})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        raw = resp.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise ValueError('provider response too large')
+        return json.loads(raw.decode())
 
-    for widget in (root, canvas):
-        widget.bind("<Button-1>", start_drag)
-        widget.bind("<B1-Motion>", do_drag)
-        widget.bind("<Button-3>", lambda e: menu.tk_popup(e.x_root, e.y_root))
-        widget.bind("<Button-2>", lambda e: menu.tk_popup(e.x_root, e.y_root))
-    root.bind("<Escape>", save_and_quit)
-    root.bind("q", save_and_quit)
-    root.bind("r", lambda e: draw())
-    root.bind("R", manual_probe)
+def _probe_openrouter_source(source: dict):
+    (service, account) = (source.get('service'), source.get('account'))
+    if not isinstance(service, str) or not service or (not isinstance(account, str)) or (not account):
+        raise ValueError('openrouter source requires service and account')
+    tok = _keychain_password(service, account)
+    if not tok:
+        raise PermissionError('keychain locked')
+    data = _provider_get(OPENROUTER_KEY_URL, tok).get('data', {})
+    usage = as_float(data.get('usage'))
+    if usage is None:
+        raise ValueError('key response missing usage')
+    result = {'usage': max(0.0, usage), 'limit': as_float(data.get('limit'))}
+    try:
+        cdata = _provider_get(OPENROUTER_CREDITS_URL, tok).get('data', {})
+        (total, used) = (as_float(cdata.get('total_credits')), as_float(cdata.get('total_usage')))
+        if total is not None and used is not None:
+            result['credits_remaining'] = total - used
+    except Exception:
+        pass
+    return result
 
-    draw()
-    tick()
-    root.mainloop()
-    return 0
+def _local_today():
+    import datetime
+    return datetime.date.today().isoformat()
 
+def probe_openrouter():
+    (slots, config_error) = _provider_slots()
+    if config_error:
+        return (False, config_error)
+    (prev, prev_blob) = ({}, {})
+    try:
+        prev_blob = json.loads(OPENROUTER_CACHE.read_text(encoding='utf-8'))
+        for row in prev_blob.get('rows', []):
+            key = row.get('slot_id') or row.get('label')
+            if key:
+                prev[key] = row
+    except Exception:
+        pass
+    today = _local_today()
+    (rows, balances, successes) = ([], {}, 0)
+    for slot in slots:
+        old = prev.get(slot['id']) or prev.get(slot['label']) or {}
+        (errors, winner) = ([], None)
+        for source in slot['sources']:
+            provider = source.get('provider')
+            entry = PROVIDERS.get(provider)
+            if entry is None:
+                errors.append(f'{provider}: unsupported')
+                continue
+            try:
+                result = entry['probe'](source)
+                winner = (source, result)
+                break
+            except Exception as exc:
+                detail = str(exc).strip()[:80]
+                errors.append(f'{provider}: {detail or exc.__class__.__name__}')
+        if winner:
+            (source, result) = winner
+            source_id = _source_id(source)
+            usage = result['usage']
+            same_pipe = old.get('source_id') == source_id
+            if same_pipe and old.get('day') == today and ('day_start_usage' in old):
+                day_start = old['day_start_usage']
+            else:
+                day_start = usage
+            row = {'slot_id': slot['id'], 'label': slot['label'], 'provider': source['provider'], 'source_id': source_id, 'usage': usage, 'limit': result.get('limit'), 'day': today, 'day_start_usage': day_start}
+            rows.append(row)
+            successes += 1
+            if result.get('credits_remaining') is not None:
+                balances.setdefault(source['provider'], result['credits_remaining'])
+        else:
+            carry = {k: old[k] for k in ('provider', 'source_id', 'usage', 'limit', 'day', 'day_start_usage') if k in old}
+            rows.append({'slot_id': slot['id'], 'label': slot['label'], 'error': '; '.join(errors) or 'no sources', 'stale': True, **carry})
+    checked_at = time.time()
+    _atomic_private_json(OPENROUTER_CACHE, {'captured_at': checked_at if successes else prev_blob.get('captured_at', 0), 'checked_at': checked_at, 'balances': balances, 'rows': rows})
+    failures = [f"{r['label']}: {r['error']}" for r in rows if r.get('error')]
+    return (bool(successes), '; '.join(failures) or None)
 
-# --------------------------------------------------------------------------
+def read_openrouter():
+    panel = {'name': 'AGENT USAGE', 'windows': [], 'note': ''}
+    try:
+        blob = json.loads(OPENROUTER_CACHE.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        panel['note'] = 'Refresh OpenRouter from its menu'
+        return panel
+    except Exception as exc:
+        panel['note'] = f'cache unreadable ({exc.__class__.__name__})'
+        return panel
+    captured = as_float(blob.get('captured_at')) or time.time()
+    panel['captured_at'] = captured
+    balances = blob.get('balances') or {}
+    if not balances and blob.get('credits_remaining') is not None:
+        balances = {'openrouter': blob['credits_remaining']}
+    for (provider, remaining) in balances.items():
+        label = PROVIDERS.get(provider, {}).get('label', provider)
+        panel['windows'].append({'label': label, 'pct': None, 'right': f'${remaining:,.2f} left'})
+    for row in blob.get('rows', []):
+        if row.get('error'):
+            right = f"stale; {row['error']}" if 'usage' in row else row['error']
+            panel['windows'].append({'label': row['label'], 'pct': None, 'right': f'({right[:34]})', 'stale': True})
+            continue
+        usage = row.get('usage') or 0.0
+        day_start = row.get('day_start_usage')
+        used_today = max(0.0, usage - day_start) if day_start is not None else None
+        right = f'${used_today:,.2f} today' if used_today is not None else f'${usage:,.2f} total; baseline pending'
+        panel['windows'].append({'label': row['label'], 'pct': None, 'right': right})
+    failures = [r for r in blob.get('rows', []) if r.get('error')]
+    if failures:
+        panel['note'] = f'last check had {len(failures)} failed slot(s)'
+    elif time.time() - captured > STALE_AFTER:
+        panel['note'] = f'stale, last seen {fmt_delta(time.time() - captured)} ago'
+        for w in panel['windows']:
+            w['stale'] = True
+    return panel
+
+def _openai_credit_source():
+    try:
+        cfg = json.loads(CODEX_CREDITS_CONFIG.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    src = cfg.get('openai') if isinstance(cfg, dict) else None
+    if isinstance(src, dict) and isinstance(src.get('service'), str) and src['service'] and isinstance(src.get('account'), str) and src['account']:
+        return src
+    return None
+
+def _openai_balance_seed(src: dict):
+    balance = as_float(src.get('balance_seed_usd'))
+    started = as_float(src.get('balance_seed_at'))
+    if balance is None or started is None:
+        try:
+            cached = json.loads(CODEX_CACHE.read_text(encoding='utf-8'))
+        except Exception:
+            cached = {}
+        balance = as_float(cached.get('balance_seed_usd', cached.get('balance')))
+        started = as_float(cached.get('balance_seed_at', cached.get('captured_at')))
+    if balance is None or balance < 0 or started is None or (started <= 0):
+        return None
+    return (balance, int(started))
+
+def _openai_admin_token(src: dict):
+    selector = (src['service'], src['account'])
+    if OPENAI_ADMIN_TOKEN_STATE['selector'] == selector and OPENAI_ADMIN_TOKEN_STATE['token']:
+        return OPENAI_ADMIN_TOKEN_STATE['token']
+    token = _keychain_password(*selector)
+    if token:
+        OPENAI_ADMIN_TOKEN_STATE.update(selector=selector, token=token)
+    return token
+
+def _forget_openai_admin_token():
+    OPENAI_ADMIN_TOKEN_STATE.update(selector=None, token=None)
+
+def _openai_costs_since(token: str, start_time: int, end_time: int):
+    total = Decimal('0')
+    page = None
+    seen_pages = set()
+    for _ in range(1000):
+        query = {'start_time': start_time, 'end_time': end_time, 'bucket_width': '1d', 'limit': 180}
+        if page:
+            query['page'] = page
+        url = f'{OPENAI_COSTS_URL}?{urllib.parse.urlencode(query)}'
+        req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read(4 * 1024 * 1024 + 1)
+        if len(raw) > 4 * 1024 * 1024:
+            raise ValueError('cost response too large')
+        payload = json.loads(raw.decode())
+        buckets = payload.get('data') if isinstance(payload, dict) else None
+        if not isinstance(buckets, list):
+            raise ValueError('cost response missing data')
+        for bucket in buckets:
+            results = bucket.get('results') if isinstance(bucket, dict) else None
+            if not isinstance(results, list):
+                raise ValueError('cost bucket missing results')
+            for result in results:
+                amount = result.get('amount') if isinstance(result, dict) else None
+                currency = amount.get('currency') if isinstance(amount, dict) else None
+                if not isinstance(currency, str) or currency.lower() != 'usd':
+                    raise ValueError('cost response currency is not USD')
+                try:
+                    value = Decimal(str(amount.get('value')))
+                except (InvalidOperation, TypeError, ValueError):
+                    raise ValueError('cost response has invalid amount') from None
+                if not value.is_finite():
+                    raise ValueError('cost response has invalid amount')
+                total += value
+        if not payload.get('has_more'):
+            return total
+        next_page = payload.get('next_page')
+        if not isinstance(next_page, str) or not next_page or next_page in seen_pages:
+            raise ValueError('cost pagination invalid')
+        seen_pages.add(next_page)
+        page = next_page
+    raise ValueError('too many cost pages')
+
+def _nonnegative_int(value, field: str):
+    if isinstance(value, bool):
+        raise ValueError(f'usage response has invalid {field}')
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f'usage response has invalid {field}') from None
+    if number < 0 or str(value).strip() not in (str(number), f'{number}.0'):
+        raise ValueError(f'usage response has invalid {field}')
+    return number
+
+def _openai_usage_result_cost(result: dict):
+    if not isinstance(result, dict):
+        raise ValueError('usage result is not an object')
+    model = result.get('model')
+    prices = OPENAI_MODEL_PRICES.get(model)
+    if prices is None:
+        raise ValueError(f'unsupported priced model: {model!r}')
+    batch = result.get('batch')
+    if batch not in (None, True, False):
+        raise ValueError('usage response has invalid batch')
+    tier = result.get('service_tier')
+    if tier in ('flex', 'flex-tier') or batch is True:
+        tier_multiplier = Decimal('0.5')
+    elif tier in (None, 'default', 'standard', 'auto'):
+        tier_multiplier = Decimal('1')
+    else:
+        raise ValueError(f'unsupported service tier: {tier!r}')
+    cached = _nonnegative_int(result.get('input_cached_tokens', 0), 'input_cached_tokens')
+    cache_write = _nonnegative_int(result.get('input_cache_write_tokens', 0), 'input_cache_write_tokens')
+    uncached_raw = result.get('input_uncached_tokens')
+    total_input_raw = result.get('input_tokens')
+    if uncached_raw is None:
+        total_input = _nonnegative_int(total_input_raw, 'input_tokens')
+        uncached = total_input - cached - cache_write
+        if uncached < 0:
+            raise ValueError('usage input token components exceed total')
+    else:
+        uncached = _nonnegative_int(uncached_raw, 'input_uncached_tokens')
+        total_input = _nonnegative_int(total_input_raw, 'input_tokens') if total_input_raw is not None else uncached + cached + cache_write
+    output = _nonnegative_int(result.get('output_tokens', 0), 'output_tokens')
+    requests = _nonnegative_int(result.get('num_model_requests', 0), 'num_model_requests')
+    if requests == 0 and (total_input or output):
+        raise ValueError('usage tokens reported without a request')
+    long_context = total_input > OPENAI_LONG_CONTEXT_THRESHOLD
+    conservative = long_context and requests > 1
+    input_multiplier = Decimal('2') if long_context else Decimal('1')
+    output_multiplier = Decimal('1.5') if long_context else Decimal('1')
+    million = Decimal('1000000')
+    cost = (Decimal(uncached) * prices['input_uncached'] * input_multiplier + Decimal(cached) * prices['input_cached'] * input_multiplier + Decimal(cache_write) * prices['input_cache_write'] * input_multiplier + Decimal(output) * prices['output'] * output_multiplier) * tier_multiplier / million
+    return (cost, conservative, requests)
+
+def _openai_usage_cost_since(token: str, start_time: int, end_time: int):
+    total = Decimal('0')
+    page = None
+    seen_pages = set()
+    coverage_end = start_time
+    conservative = False
+    request_count = 0
+    for _ in range(1000):
+        query = {'start_time': start_time, 'end_time': end_time, 'bucket_width': '1m', 'limit': 1440, 'group_by': ['model', 'batch', 'service_tier']}
+        if page:
+            query['page'] = page
+        url = f'{OPENAI_USAGE_URL}?{urllib.parse.urlencode(query, doseq=True)}'
+        req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read(8 * 1024 * 1024 + 1)
+        if len(raw) > 8 * 1024 * 1024:
+            raise ValueError('usage response too large')
+        payload = json.loads(raw.decode())
+        buckets = payload.get('data') if isinstance(payload, dict) else None
+        if not isinstance(buckets, list):
+            raise ValueError('usage response missing data')
+        for bucket in buckets:
+            if not isinstance(bucket, dict):
+                raise ValueError('usage bucket is not an object')
+            bucket_end = _nonnegative_int(bucket.get('end_time'), 'end_time')
+            coverage_end = max(coverage_end, bucket_end)
+            results = bucket.get('results')
+            if not isinstance(results, list):
+                raise ValueError('usage bucket missing results')
+            for result in results:
+                (cost, upper_bound, requests) = _openai_usage_result_cost(result)
+                total += cost
+                conservative = conservative or upper_bound
+                request_count += requests
+        if not payload.get('has_more'):
+            return (total, coverage_end, conservative, request_count)
+        next_page = payload.get('next_page')
+        if not isinstance(next_page, str) or not next_page or next_page in seen_pages:
+            raise ValueError('usage pagination invalid')
+        seen_pages.add(next_page)
+        page = next_page
+    raise ValueError('too many usage pages')
+
+def probe_openai_credits():
+    src = _openai_credit_source()
+    if not src:
+        return (False, 'no credits.json')
+    seed = _openai_balance_seed(src)
+    if not seed:
+        msg = 'missing balance seed'
+        _merge_private_json(CODEX_CACHE, {'error': msg})
+        return (False, msg)
+    (seed_balance, seed_at) = seed
+    now = int(time.time())
+    if seed_at >= now:
+        msg = 'balance seed is not in the past'
+        _merge_private_json(CODEX_CACHE, {'error': msg})
+        return (False, msg)
+    tok = _openai_admin_token(src)
+    if not tok:
+        _merge_private_json(CODEX_CACHE, {'error': 'keychain read failed'})
+        return (False, 'keychain read failed')
+    try:
+        settled_spend = _openai_costs_since(tok, seed_at, now)
+        (usage_spend, coverage_end, conservative, requests) = _openai_usage_cost_since(tok, seed_at, now)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            _forget_openai_admin_token()
+        msg = 'admin costs access required' if exc.code in (401, 403) else f'HTTP {exc.code}'
+        _merge_private_json(CODEX_CACHE, {'error': msg})
+        return (False, msg)
+    except Exception as exc:
+        msg = f'err ({exc.__class__.__name__})'
+        _merge_private_json(CODEX_CACHE, {'error': msg})
+        return (False, msg)
+    spent = max(settled_spend, usage_spend)
+    balance = Decimal(str(seed_balance)) - spent
+    _merge_private_json(CODEX_CACHE, {'captured_at': time.time(), 'balance': float(balance), 'currency': 'USD', 'manual': False, 'estimated': True, 'live_estimate': True, 'balance_seed_usd': seed_balance, 'balance_seed_at': seed_at, 'spent_since_seed': float(spent), 'settled_spend': float(settled_spend), 'usage_estimated_spend': float(usage_spend), 'usage_coverage_end': coverage_end, 'usage_request_count': requests, 'conservative_long_context': conservative, 'pricing_revision': OPENAI_PRICING_REVISION, 'source': 'organization_costs_plus_server_usage', 'error': None})
+    return (True, '')
+
+def _codex_credits_row():
+    try:
+        blob = json.loads(CODEX_CACHE.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    balance = as_float(blob.get('balance'))
+    if balance is None:
+        return None
+    if blob.get('error'):
+        right = f"(stale; {blob['error']})"[:23]
+        stale = True
+    else:
+        if blob.get('manual'):
+            right = f'${balance:,.2f} left  (manual)'[:23]
+        elif blob.get('live_estimate'):
+            right = f'${balance:,.2f}  live est.'[:23]
+        else:
+            right = (f'${balance:,.2f} left' + ('  (est.)' if blob.get('estimated') else ''))[:23]
+        stale_after = OPENAI_CREDITS_FRESH if blob.get('live_estimate') else STALE_AFTER
+        stale = time.time() - (as_float(blob.get('captured_at')) or 0) > stale_after
+    return {'label': 'credits', 'pct': None, 'right': right, 'stale': stale}
+PROVIDERS = {'openrouter': {'probe': _probe_openrouter_source, 'label': 'OpenRouter'}}
+
+def preserve_quota(cache, windows):
+    now = time.time()
+    try:
+        blob = json.loads(cache.read_text())
+        old = blob.get("rate_limits", {})
+        captured = blob.get("captured_at", 0)
+    except (OSError, ValueError, AttributeError):
+        old, captured = {}, 0
+    result = {key: dict(value, stale=True, captured_at=value.get("captured_at", captured))
+              for key, value in old.items() if isinstance(value, dict)}
+    result.update({key: dict(value, stale=False, captured_at=now) for key, value in windows.items()})
+    return result
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--once", action="store_true", help="print a snapshot and exit")
-    ap.add_argument("--json", action="store_true", help="print a snapshot as JSON")
-    ap.add_argument("--claude-statusline", action="store_true",
-                    help="internal: Claude Code statusLine command")
-    ap.add_argument("--install-claude-statusline", action="store_true",
-                    help="wire this script into ~/.claude/settings.json")
-    ap.add_argument("--probe-claude", action="store_true",
-                    help="probe the API for fresh Claude quota and update the cache")
-    ap.add_argument("--probe-if-stale", action="store_true",
-                    help="internal: hook entry point - probe only when the "
-                         "cache is older than HOOK_FRESH; always exit 0")
-    ap.add_argument("--force", action="store_true",
-                    help="with --install-claude-statusline, replace an existing one")
-    ap.add_argument("--alpha", type=float, default=0.9, help="opacity, 0.3-1.0")
-    ap.add_argument("--refresh", type=int, default=REFRESH_SECONDS,
-                    help="seconds between refreshes")
-    args = ap.parse_args()
-
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--claude-statusline', action='store_true')
+    parser.add_argument('--probe-if-stale', action='store_true')
+    parser.add_argument('--probe-claude', action='store_true')
+    parser.add_argument('--probe-openrouter', action='store_true')
+    parser.add_argument('--probe-openai-credits', action='store_true')
+    parser.add_argument('--json', action='store_true')
+    parser.add_argument('--once', action='store_true')
+    args = parser.parse_args()
     if args.claude_statusline:
         return claude_statusline()
-    if args.probe_if_stale:
-        return probe_if_stale()
-    if args.probe_claude:
-        ok, msg = probe_claude()
-        print(("ok - " if ok else "failed - ") + msg)
+    if args.probe_openai_credits:
+        (ok, error) = probe_openai_credits()
+        print('ok' if ok else error)
         return 0 if ok else 1
-    if args.install_claude_statusline:
-        return install_claude_statusline(force=args.force)
-    if args.once or args.json:
-        return print_once(as_json=args.json)
-    return run_hud(alpha=args.alpha, refresh=args.refresh)
-
-
-if __name__ == "__main__":
+    from collector import panels
+    refresh = 'claude' if args.probe_claude else 'openrouter' if args.probe_openrouter else None
+    if args.probe_if_stale:
+        try:
+            captured = json.loads(CLAUDE_CACHE.read_text()).get('captured_at', 0)
+        except (OSError, ValueError):
+            captured = 0
+        if time.time() - captured < 300:
+            return 0
+        panels('claude')
+        return 0
+    print(json.dumps(panels(refresh), indent=2))
+    return 0
+if __name__ == '__main__':
     sys.exit(main())

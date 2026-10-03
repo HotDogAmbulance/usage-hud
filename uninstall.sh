@@ -31,7 +31,14 @@ done
 APP="$DEST/$APP_NAME.app"
 STATE_DIR="${USAGE_HUD_HOME:-$HOME/.usage-hud}"
 
-pkill -f "$STATE_DIR/usage_hud.py" 2>/dev/null || true
+/usr/bin/python3 - "$APP/Contents/MacOS/usage-hud-menubar" <<'PYCODE'
+import os,signal,subprocess,sys
+for line in subprocess.check_output(['ps','-axo','pid=,comm='],text=True).splitlines():
+    fields=line.strip().split(None,1)
+    if len(fields)==2 and fields[1]==sys.argv[1]:
+        try: os.kill(int(fields[0]),signal.SIGTERM)
+        except ProcessLookupError: pass
+PYCODE
 
 if [ -d "$APP" ]; then
     rm -rf "$APP"
@@ -46,7 +53,7 @@ if [ "$PURGE" -eq 1 ]; then
         echo "Removed: $STATE_DIR"
     fi
 else
-    echo "Kept: $STATE_DIR (cached quota data, position, script). Pass --purge to remove it too."
+    echo "Kept: $STATE_DIR (cached quota data and provider adapters). Pass --purge to remove it too."
 fi
 
 echo

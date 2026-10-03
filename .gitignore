@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+*.app/
+*.json
+*.log
+*.lock
+battery-preview.png
+usage-hud-menubar*

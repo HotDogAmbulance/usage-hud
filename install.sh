@@ -1,197 +1,54 @@
 #!/bin/bash
-# install.sh - build "Usage HUD.app" and install the HUD for the current user.
-#
-# What it does:
-#   1. Finds a Python 3 interpreter that has Tk support (tries plain `python3`
-#      on PATH, uv-managed installs, Homebrew, and python.org framework
-#      installs, in that order).
-#   2. Copies usage_hud.py into ~/.usage-hud/ (or $USAGE_HUD_HOME), so the
-#      app keeps working after you delete this cloned repo.
-#   3. Builds a small .app bundle that launches it, and installs that bundle
-#      into ~/Applications (or --dest).
-#
-# Usage:
-#   ./install.sh [--dest DIR] [--python PATH] [--name NAME] [--launch]
-#
-#   --dest DIR      where to install the .app (default: ~/Applications)
-#   --python PATH   use this interpreter instead of auto-detecting one
-#   --name NAME     app bundle display name (default: Usage HUD)
-#   --launch        open the app once installation finishes
-
+# Build a native menu-bar app; install stdlib-only provider adapters separately.
 set -euo pipefail
-
-if [ "$(uname -s)" != "Darwin" ]; then
-    echo "install.sh builds a macOS .app bundle; this only works on macOS." >&2
-    echo "On other platforms, just run: python3 usage_hud.py" >&2
-    exit 1
-fi
-
+umask 077
 DEST="$HOME/Applications"
 APP_NAME="Usage HUD"
-PYTHON_OVERRIDE=""
+HUD_PYTHON="/usr/bin/python3"
 DO_LAUNCH=0
-
 while [ $# -gt 0 ]; do
     case "$1" in
         --dest) DEST="$2"; shift 2 ;;
-        --python) PYTHON_OVERRIDE="$2"; shift 2 ;;
+        --python) HUD_PYTHON="$2"; shift 2 ;;
         --name) APP_NAME="$2"; shift 2 ;;
         --launch) DO_LAUNCH=1; shift ;;
-        -h|--help)
-            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
-            exit 0
-            ;;
-        *) echo "unknown argument: $1" >&2; exit 1 ;;
+        -h|--help) echo 'Usage: ./install.sh [--dest DIR] [--python PATH] [--name NAME] [--launch]'; exit 0 ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
-
+[ "$(uname -s)" = Darwin ] || { echo 'Requires macOS.' >&2; exit 1; }
+[[ "$APP_NAME" != */* && -n "$APP_NAME" ]] || { echo 'Invalid app name.' >&2; exit 1; }
+"$HUD_PYTHON" -c 'import sys; assert sys.version_info >= (3,9), "Python 3.9+ required"'
+xcrun --find swiftc >/dev/null
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${USAGE_HUD_HOME:-$HOME/.usage-hud}"
-
-# ---------------------------------------------------------------------------
-# 1. find a Python 3 with Tk support
-# ---------------------------------------------------------------------------
-
-has_tkinter() {
-    "$1" -c "import tkinter" >/dev/null 2>&1
-}
-
-find_python() {
-    if [ -n "$PYTHON_OVERRIDE" ]; then
-        if has_tkinter "$PYTHON_OVERRIDE"; then
-            echo "$PYTHON_OVERRIDE"
-            return 0
-        fi
-        echo "! --python $PYTHON_OVERRIDE has no working tkinter" >&2
-        return 1
-    fi
-
-    # plain python3 on PATH (Homebrew, python.org, pyenv, etc.)
-    if command -v python3 >/dev/null 2>&1; then
-        local p
-        p="$(command -v python3)"
-        has_tkinter "$p" && { echo "$p"; return 0; }
-    fi
-
-    # uv-managed interpreters, newest first
-    local uv_py
-    for uv_py in $(ls -d "$HOME"/.local/share/uv/python/cpython-3.*/bin/python3 2>/dev/null | sort -rV); do
-        has_tkinter "$uv_py" && { echo "$uv_py"; return 0; }
-    done
-
-    # python.org framework installs, newest first
-    local fw_py
-    for fw_py in $(ls -d /Library/Frameworks/Python.framework/Versions/3.*/bin/python3 2>/dev/null | sort -rV); do
-        has_tkinter "$fw_py" && { echo "$fw_py"; return 0; }
-    done
-
-    return 1
-}
-
-echo "Looking for a Python 3 with Tk support..."
-if ! PYTHON_BIN="$(find_python)"; then
-    cat >&2 <<'EOF'
-
-! No Python 3 with tkinter was found.
-
-Fix one of these ways, then re-run ./install.sh:
-  - uv:        uv python install 3.12
-  - Homebrew:  brew install python-tk
-  - python.org: download the installer from python.org (bundles Tk)
-EOF
-    exit 1
-fi
-echo "Using: $PYTHON_BIN"
-
-# ---------------------------------------------------------------------------
-# 2. install the script into the state dir
-# ---------------------------------------------------------------------------
-
-mkdir -p "$STATE_DIR"
-cp "$REPO_DIR/usage_hud.py" "$STATE_DIR/usage_hud.py"
-chmod +x "$STATE_DIR/usage_hud.py"
-echo "Installed script: $STATE_DIR/usage_hud.py"
-
-# ---------------------------------------------------------------------------
-# 3. build the .app bundle
-# ---------------------------------------------------------------------------
-
-mkdir -p "$DEST"
-APP="$DEST/$APP_NAME.app"
-rm -rf "$APP"
+HUD_BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "$HUD_BUILD_DIR"' EXIT
+APP="$HUD_BUILD_DIR/$APP_NAME.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-
-cat > "$APP/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>CFBundleName</key>
-	<string>$APP_NAME</string>
-	<key>CFBundleDisplayName</key>
-	<string>$APP_NAME</string>
-	<key>CFBundleIdentifier</key>
-	<string>local.usage-hud</string>
-	<key>CFBundleVersion</key>
-	<string>1.0</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
-	<key>CFBundleExecutable</key>
-	<string>usage-hud-launcher</string>
-	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
-	<key>LSUIElement</key>
-	<true/>
-	<key>LSMinimumSystemVersion</key>
-	<string>10.13</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-</dict>
-</plist>
-PLIST
-
-LAUNCHER="$APP/Contents/MacOS/usage-hud-launcher"
-cat > "$LAUNCHER" <<LAUNCH
-#!/bin/bash
-# Generated by install.sh - do not edit by hand, re-run install.sh instead.
-set -u
-PY="$PYTHON_BIN"
-SCRIPT="$STATE_DIR/usage_hud.py"
-LOG="$STATE_DIR/hud.log"
-
-if [ ! -x "\$PY" ]; then
-    osascript -e "display alert \"$APP_NAME\" message \"Python interpreter not found: \$PY. Re-run install.sh from the usage-hud repo.\" as critical"
-    exit 1
+xcrun swiftc -target "$(uname -m)-apple-macosx12.0" "$REPO_DIR/MenuBar.swift" -o "$APP/Contents/MacOS/usage-hud-menubar"
+"$HUD_PYTHON" - "$APP/Contents/Info.plist" "$APP_NAME" "$STATE_DIR" "$HUD_PYTHON" <<'PY'
+import plistlib,sys
+with open(sys.argv[1], 'wb') as file:
+    plistlib.dump(dict(CFBundleName=sys.argv[2], CFBundleDisplayName=sys.argv[2],
+        CFBundleIdentifier='local.usage-hud', CFBundleVersion='2', CFBundleShortVersionString='1.1',
+        CFBundlePackageType='APPL', CFBundleExecutable='usage-hud-menubar', CFBundleIconFile='AppIcon',
+        LSUIElement=True, LSMinimumSystemVersion='12.0', NSHighResolutionCapable=True,
+        UsageHUDDataDirectory=sys.argv[3], UsageHUDPython=sys.argv[4]),file)
+PY
+cp "$REPO_DIR/icon/AppIcon.icns" "$APP/Contents/Resources/"
+codesign --force --deep --sign - "$APP"
+codesign --verify --deep --strict "$APP"
+mkdir -p "$STATE_DIR/plugins" "$DEST"
+chmod 700 "$STATE_DIR" "$STATE_DIR/plugins"
+cp "$REPO_DIR/usage_hud.py" "$REPO_DIR/collector.py" "$STATE_DIR/"
+cp "$REPO_DIR/plugins/"*.py "$STATE_DIR/plugins/"
+chmod 600 "$STATE_DIR/"*.py "$STATE_DIR/plugins/"*.py
+# Keep credentials, caches, provider settings and Claude Code settings intact.
+if [ -e "$DEST/$APP_NAME.app" ]; then
+    mv "$DEST/$APP_NAME.app" "$HUD_BUILD_DIR/previous.app"
 fi
-if [ ! -f "\$SCRIPT" ]; then
-    osascript -e "display alert \"$APP_NAME\" message \"Script not found: \$SCRIPT. Re-run install.sh from the usage-hud repo.\" as critical"
-    exit 1
-fi
-
-exec "\$PY" "\$SCRIPT" >> "\$LOG" 2>&1
-LAUNCH
-chmod +x "$LAUNCHER"
-
-if [ -f "$REPO_DIR/icon/AppIcon.icns" ]; then
-    cp "$REPO_DIR/icon/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
-fi
-
-xattr -cr "$APP" 2>/dev/null || true
-touch "$APP"
-
-echo "Installed app:    $APP"
-
-# Wire into Claude Code's statusline so it updates for free on every turn,
-# instead of relying only on the HUD's own throttled live probes. Non-fatal:
-# the script prints its own message if a statusLine is already configured.
-"$PYTHON_BIN" "$STATE_DIR/usage_hud.py" --install-claude-statusline || true
-
-echo
-echo "Done. Double-click \"$APP_NAME.app\" in $DEST to start it,"
-echo "or add it to Login Items (System Settings > General > Login Items) to autostart."
-
-if [ "$DO_LAUNCH" -eq 1 ]; then
-    open "$APP"
-fi
+mv "$APP" "$DEST/$APP_NAME.app"
+echo "Installed: $DEST/$APP_NAME.app"
+echo 'Sign in using standalone Codex CLI and Claude Code; no desktop app is required.'
+if [ "$DO_LAUNCH" -eq 1 ]; then open "$DEST/$APP_NAME.app"; fi

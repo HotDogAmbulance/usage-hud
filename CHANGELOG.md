@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-03
+
+- Replace the floating Tk note with native Swift menu-bar batteries.
+- Layer 5h and 7d inside a single body, with cached-weekly fallback.
+- Read live Codex quota through standalone CLI app-server and Claude usage through GET, without inference or credential mutation.
+- Isolate providers, remove obsolete window/activity/log-scan paths, preserve credit accounting and Claude hooks.
+- Bundle the native executable directly and handle app reopening.
+- Update installation and documentation for Swift UI plus stdlib Python adapters.
+
+
 ## 2026-08-29
 
 - Claude's quota now refreshes on real session activity, not just hooks.
