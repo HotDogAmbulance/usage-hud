@@ -508,7 +508,7 @@ final class CoreTests {
         _ = engine.panels(refresh: "automatic"); expectEqual(provider.calls, 1)
         _ = engine.panels(refresh: "p"); expectEqual(provider.calls, 2)
         credentials.missing = ["absent"]
-        expectNil(try credentials.stored(service: "absent", account: nil))
-        expectEqual(try credentials.stored(service: "present", account: nil), "fixture")
+        let absent = try credentials.stored(service: "absent", account: nil), present = try credentials.stored(service: "present", account: nil)
+        expectNil(absent); expectEqual(present, "fixture")
     }
 }
