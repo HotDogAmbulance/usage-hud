@@ -353,8 +353,10 @@ final class CoreTests {
         expectError(try GrokProvider.windows(["usage": ["totalUsed": ["val": 1]]]))
     }
     func testUnusedPlansStayOutOfMenuBar() {
-        let panels = Engine(root: root, credentials: credentials, http: http).panels()
-        expectEqual(panels.map(\.id), ["codex", "claude"])
+        let engine = Engine(root: root, credentials: credentials, http: http)
+        expectEqual(engine.panels().map(\.id), [])
+        try? cache.write("claude.json", ["captured_at": 1])
+        expectEqual(engine.panels().map(\.id), ["claude"])
     }
 
     func testBalanceParsers() throws {
@@ -425,7 +427,7 @@ final class CoreTests {
             AlertProvider(id: "c", problem: "c sign-in expired; run c once", right: "$9.00 left")])
         let panels = engine.panels(refresh: "automatic")
         expectEqual(panels[0].alert, "a API key rejected")
-        expectEqual(panels[1].alert, "Balance low: $0.50 left")
+        expectEqual(panels[1].alert, "Balance low")
         expectNil(panels[2].alert)
         engine.lowBalance = 0.25
         expectNil(engine.panels(refresh: nil)[1].alert)
@@ -443,7 +445,7 @@ final class CoreTests {
         let panel = provider.panel()
         expectEqual(panel.windows.first?.right, "$43.00 left")
         expectTrue(panel.windows[1].right?.hasPrefix("$4.60 of $5.00 today · resets in ") == true)
-        expectEqual(panel.alert, "One: $0.40 left of its cap")
+        expectEqual(panel.alert, "One: near its cap")
     }
     func testRouterCapsResetOnUTCBoundaries() {
         let saturday = Date(timeIntervalSince1970: 1791039600) // 2026-10-03 15:00 UTC
@@ -543,5 +545,32 @@ final class CoreTests {
         expectEqual(GLMProvider.found(home: none, environment: ["ANTHROPIC_BASE_URL": "https://evilz.ai/api", "ANTHROPIC_AUTH_TOKEN": "x"]), [:])
         expectEqual(GLMProvider.found(home: none, environment: ["ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic", "ANTHROPIC_API_KEY": "y"]), ["api.z.ai": "y"])
         expectEqual(GLMProvider.found(home: none, environment: ["ANTHROPIC_BASE_URL": "https://api.anthropic.com", "ANTHROPIC_AUTH_TOKEN": "z"]), [:])
+    }
+    /// A management key sitting in a script lists the team by itself, and your own keys show once, not twice.
+    func testManagementKeyOnTheMacListsTheTeam() throws {
+        let guy = "sk-or-v1-" + String(repeating: "a1", count: 32), boss = "sk-or-v1-" + String(repeating: "b2", count: 32)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "export GUY1_OPENROUTER_KEY=\(guy)\nexport OPENROUTER_MANAGEMENT_KEY=\(boss)".write(to: root.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        http.handler = { url in
+            if url.path.hasSuffix("credits") { return ["data": ["total_credits": 30, "total_usage": 4]] }
+            if url.path.hasSuffix("/keys") { return ["data": [["name": "Guy1", "label": "sk-or-v1-a1a", "usage_daily": 1],
+                                                              ["name": "Other", "label": "sk-or-v1-c3c", "usage_daily": 2]]] }
+            return ["data": ["usage": 1, "label": "sk-or-v1-a1a"]]
+        }
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
+        try provider.refresh()
+        let panel = provider.panel()
+        expectEqual(panel.cells.map { $0.label }, ["guy1", "Other"])
+        expectEqual(panel.cellsTitle, "2 keys · $3.00 today")
+        expectFalse(panel.windows.contains { $0.label == "management" })
+    }
+    /// A revoked key left in an old script is skipped, and with nothing working OpenRouter stays out of sight.
+    func testRevokedFoundKeyStaysQuiet() throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "export OPENROUTER_API_KEY=sk-or-v1-\(String(repeating: "d4", count: 32))".write(to: root.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        http.handler = { _ in throw HTTPFailure(status: 401) }
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
+        expectError(try provider.refresh())
+        expectFalse(provider.shown())
     }
 }

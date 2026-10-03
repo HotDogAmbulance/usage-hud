@@ -1,5 +1,7 @@
 import Cocoa
 import Darwin
+import ServiceManagement
+import CoreText
 
 import UsageHUDCore
 
@@ -10,33 +12,53 @@ final class HoverTracker: NSResponder {
     override func mouseExited(with event: NSEvent) { changed(false) }
 }
 
-/// The hover panel for providers with per-key detail: a few header lines, then each key's cap as a row of cells.
+/// The hover panel for providers with per-key detail: a few header lines, then one small battery per key, green while
+/// plenty is left, yellow under 30%, red under 10% (where your own keys start to pulse). It sizes itself to its text.
 final class CellsView: NSView {
-    let lines: [String], rows: [Window], tint: NSColor
-    init(lines: [String], rows: [Window], tint: NSColor) {
-        self.lines = lines; self.rows = rows; self.tint = tint
-        super.init(frame: NSRect(x: 0, y: 0, width: 380, height: CGFloat(lines.count * 18 + rows.count * 20 + 16)))
+    let lines: [String], rows: [Window]
+    static let head: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor]
+    static let body: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor]
+    let nameWidth: CGFloat
+    init(lines: [String], rows: [Window]) {
+        self.lines = lines; self.rows = rows
+        func width(_ text: String, _ style: [NSAttributedString.Key: Any]) -> CGFloat { ceil((text as NSString).size(withAttributes: style).width) }
+        nameWidth = min(140, rows.map { width($0.label, Self.body) }.max() ?? 0)
+        let text = max(lines.map { width($0, Self.head) }.max() ?? 0, nameWidth + 54 + (rows.map { width($0.right ?? "", Self.body) }.max() ?? 0))
+        super.init(frame: NSRect(x: 0, y: 0, width: min(560, max(260, text + 24)), height: CGFloat(lines.count * 18 + rows.count * 20 + 16)))
     }
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
+    static func color(left: Double) -> NSColor { left <= 0.1 ? .systemRed : left <= 0.3 ? .systemYellow : .systemGreen }
     override func draw(_ dirtyRect: NSRect) {
         let clip = NSMutableParagraphStyle(); clip.lineBreakMode = .byTruncatingTail
-        let head: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor, .paragraphStyle: clip]
-        let body: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: clip]
+        var head = Self.head, body = Self.body; head[.paragraphStyle] = clip; body[.paragraphStyle] = clip
+        let width = bounds.width - 24
         var y: CGFloat = 8
-        for line in lines { (line as NSString).draw(in: NSRect(x: 12, y: y, width: 356, height: 16), withAttributes: head); y += 18 }
+        for line in lines { (line as NSString).draw(in: NSRect(x: 12, y: y, width: width, height: 16), withAttributes: head); y += 18 }
         for row in rows {
-            (row.label as NSString).draw(in: NSRect(x: 12, y: y + 2, width: 96, height: 16), withAttributes: body)
+            (row.label as NSString).draw(in: NSRect(x: 12, y: y + 2, width: nameWidth, height: 16), withAttributes: body)
+            let x = 12 + nameWidth + 8
             if let used = row.pct {
-                // Ten cells of what is left; the last one turns red.
-                let left = Int(((100 - used) / 10).rounded(.up))
-                for index in 0..<10 {
-                    (index >= left ? NSColor.tertiaryLabelColor.withAlphaComponent(0.35) : left <= 1 ? NSColor.systemRed : tint).setFill()
-                    NSBezierPath(roundedRect: NSRect(x: 112 + CGFloat(index) * 10, y: y + 4, width: 8, height: 10), xRadius: 2, yRadius: 2).fill()
+                // A battery like the menu bar's: the share of the cap left, with its digits cut out of the fill.
+                let left = max(0, min(1, (100 - used) / 100)), shell = NSRect(x: x, y: y + 3, width: 36, height: 13)
+                let image = NSImage(size: shell.size, flipped: false) { rect in
+                    let outline = NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 33, height: 13), xRadius: 3.5, yRadius: 3.5)
+                    NSGraphicsContext.saveGraphicsState(); outline.addClip()
+                    NSColor.tertiaryLabelColor.withAlphaComponent(0.35).setFill(); rect.fill()
+                    Self.color(left: left).setFill(); NSRect(x: 0, y: 0, width: 33 * left, height: 13).fill()
+                    NSGraphicsContext.restoreGraphicsState()
+                    NSColor.tertiaryLabelColor.setFill()
+                    NSBezierPath(roundedRect: NSRect(x: 34, y: 4, width: 2, height: 5), xRadius: 1, yRadius: 1).fill()
+                    let digits = String(Int((left * 100).rounded())) as NSString
+                    let style: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold), .foregroundColor: NSColor.black]
+                    let size = digits.size(withAttributes: style)
+                    NSGraphicsContext.current?.cgContext.setBlendMode(.destinationOut)
+                    digits.draw(at: NSPoint(x: 16.5 - size.width / 2, y: 6.5 - size.height / 2), withAttributes: style)
+                    return true
                 }
+                image.draw(in: shell)
             }
-            ((row.right ?? "").replacingOccurrences(of: " · resets in ", with: " · ") as NSString)
-                .draw(in: NSRect(x: 218, y: y + 2, width: 150, height: 16), withAttributes: body)
+            ((row.right ?? "") as NSString).draw(in: NSRect(x: x + 46, y: y + 2, width: bounds.width - x - 58, height: 16), withAttributes: body)
             y += 20
         }
     }
@@ -61,12 +83,18 @@ final class HUD: NSObject, NSApplicationDelegate {
     /// A newer release, offered at the foot of every battery menu.
     var update: (tag: String, page: URL)?
     var busy = false
+    /// A Refresh chosen while a background pass is running; it runs as soon as that pass ends.
+    var pending: String?
     var lockDescriptor: Int32 = -1
     let engine = Engine()
     var home: URL { engine.root }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // An installed app starts at login by itself; a build run from Terminal does not register.
+        if #available(macOS 13, *), Bundle.main.bundleURL.pathExtension == "app", SMAppService.mainApp.status == .notRegistered {
+            try? SMAppService.mainApp.register()
+        }
         do {
             try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         } catch { NSApp.terminate(nil); return }
@@ -109,7 +137,7 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     @objc func openUpdate() { if let page = update?.page { NSWorkspace.shared.open(page) } }
     func load(_ refresh: String?) {
-        guard !busy else { return }
+        guard !busy else { if let refresh = refresh, refresh != "automatic" { pending = refresh }; return }
         busy = true
         DispatchQueue.global(qos: .utility).async {
             let panels = self.engine.panels(refresh: refresh)
@@ -119,18 +147,20 @@ final class HUD: NSObject, NSApplicationDelegate {
                 UserDefaults.standard.set(self.shelf.levels, forKey: "shelfLevels")
                 UserDefaults.standard.set(self.shelf.lastUsed, forKey: "shelfLastUsed")
                 self.arrange(panels.map { $0.id })
+                if let next = self.pending { self.pending = nil; self.load(next) }
             }
         }
     }
     func tint(_ id: String) -> NSColor {
         switch id {
+        // No tint is pale and grey at once, so from across the room no battery reads as the Mac's own white one.
+        // Brand colours where the brand has one; black-and-white marks get distinct mid tones.
         case "codex": return NSColor(srgbRed: 0.40, green: 0.82, blue: 0.74, alpha: 1)
         case "claude": return NSColor(srgbRed: 0.85, green: 0.58, blue: 0.45, alpha: 1)
-        // Brand colours where the brand has one; black-and-white marks get light neutrals so they show on the menu bar.
-        case "glm": return NSColor(srgbRed: 0.96, green: 0.96, blue: 0.97, alpha: 1)
+        case "glm": return NSColor(srgbRed: 0.42, green: 0.36, blue: 0.98, alpha: 1)
         case "antigravity": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
-        case "grok": return NSColor(srgbRed: 0.80, green: 0.80, blue: 0.84, alpha: 1)
-        case "vercel": return NSColor(srgbRed: 0.66, green: 0.64, blue: 0.62, alpha: 1)
+        case "grok": return NSColor(srgbRed: 0.52, green: 0.55, blue: 0.62, alpha: 1)
+        case "vercel": return NSColor(srgbRed: 0.58, green: 0.56, blue: 0.54, alpha: 1)
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
         case "kimi": return NSColor(srgbRed: 0.09, green: 0.51, blue: 1.00, alpha: 1)
         case "openrouter": return NSColor(srgbRed: 0.40, green: 0.93, blue: 0.16, alpha: 1)
@@ -143,14 +173,17 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     /// Fills `rect` with the provider's tint. Antigravity uses its four-colour mark, spread across the whole body.
     /// On a light menu bar, pale tints are deepened and the weekly shade is softened less, so white and silver stay visible.
-    func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, alpha: CGFloat, dark: Bool = true) {
+    /// `muted` is the 7d layer behind 5h: on a dark bar it sinks toward grey instead of toward white, so it reads as the
+    /// same colour further away rather than as a white battery.
+    func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, muted: Bool = false, alpha: CGFloat, dark: Bool = true) {
         let shade = { (color: NSColor) -> NSColor in
             var color = color
             if !dark, let rgb = color.usingColorSpace(.sRGB),
                0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent > 0.6 {
                 color = color.blended(withFraction: 0.45, of: .black)!
             }
-            return (light ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
+            if muted && dark { return color.blended(withFraction: 0.5, of: NSColor(srgbRed: 0.45, green: 0.45, blue: 0.45, alpha: 1))!.withAlphaComponent(alpha) }
+            return (light || muted ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
         }
         guard id == "antigravity" else { shade(tint(id)).setFill(); rect.fill(); return }
         let marks: [(CGFloat, CGFloat, CGFloat)] = [(0.19, 0.53, 1.00), (0.19, 0.53, 1.00), (0.98, 0.27, 0.26), (0.98, 0.74, 0.07), (0.03, 0.73, 0.38)]
@@ -193,6 +226,8 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     /// `weeklyShade` draws the main fill in the same lighter tone the 7d layer uses behind 5h.
     /// `glow` washes the body in soft red, for a battery asking for attention.
+    /// The digits' font, by size. `--self-test` also renders the candidates side by side in font-preview.png.
+    static var digitFont: (CGFloat) -> NSFont = { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .bold) }
     func icon(_ panel: Panel, weeklyShade: Bool = false, glow: CGFloat = 0) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
@@ -206,9 +241,9 @@ final class HUD: NSObject, NSApplicationDelegate {
         let weekly = panel.windows.first(where: {$0.label == "7d" && $0.label != quota?.label && $0.pct != nil})
         let weeklyValid = weekly != nil
         let weeklyRemaining = weeklyValid ? min(100, max(0, 100 - (weekly?.pct ?? 0))) : 0
-        // Native battery digits are taller and lighter than a semibold status label.
+        // Like the system battery's percentage: SF digits, heavy enough to read once cut out of a small fill.
         let baseSize: CGFloat = money != nil ? 10 : 9.5
-        let baseFont = NSFont.monospacedDigitSystemFont(ofSize: baseSize, weight: .medium)
+        let baseFont = Self.digitFont(baseSize)
         let measuredWidth = (text as NSString).size(withAttributes: [.font: baseFont]).width
         // A balance stretches the body to fit its digits: whole amounts keep the standard size, cents widen it.
         let bodyWidth: CGFloat = money != nil ? max(23, (measuredWidth + 6).rounded(.up)) : 23
@@ -226,15 +261,20 @@ final class HUD: NSObject, NSApplicationDelegate {
         let dark = darkMenuBar
         // The empty part and the cap contrast with the menu bar: white on a dark bar, black on a light one.
         let ink = dark ? NSColor.white : NSColor.black
-        ink.withAlphaComponent(dark ? 0.36 : 0.22).setFill(); bodyRect.fill()
-        if money != nil {
-            paint(bodyRect, body: bodyRect, id: panel.id, light: true, alpha: cached ? 0.50 : 1, dark: dark)
+        // Each layer fills only its own span, on whole device pixels. Stacked layers would each blend the same soft edge,
+        // leaving a pale fringe of the track around every full battery.
+        let pixel = { (x: CGFloat) -> CGFloat in (x * 2).rounded() / 2 }
+        let span = { (from: CGFloat, to: CGFloat) in NSRect(x: 1 + from, y: bodyY, width: max(0, to - from), height: bodyHeight) }
+        let fillEnd = money != nil ? bodyWidth : pixel(fillWidth)
+        let weeklyEnd = weeklyValid ? max(fillEnd, pixel(bodyWidth * weeklyRemaining / 100)) : fillEnd
+        let weeklyAlpha: CGFloat = weekly?.stale == true || weekly?.expired == true ? 0.50 : 1, fillAlpha: CGFloat = cached ? (money != nil ? 0.50 : 0.45) : 1
+        // A translucent layer still needs the track behind it.
+        let trackStart = fillAlpha < 1 ? 0 : weeklyAlpha < 1 ? fillEnd : weeklyEnd
+        ink.withAlphaComponent(dark ? 0.36 : 0.22).setFill(); span(trackStart, bodyWidth).fill()
+        if weeklyEnd > fillEnd {
+            paint(span(fillEnd, weeklyEnd), body: bodyRect, id: panel.id, light: false, muted: true, alpha: weeklyAlpha, dark: dark)
         }
-        if weeklyValid {
-            paint(NSRect(x: 1, y: bodyY, width: bodyWidth * weeklyRemaining / 100, height: bodyHeight), body: bodyRect, id: panel.id,
-                  light: true, alpha: weekly?.stale == true || weekly?.expired == true ? 0.50 : 1, dark: dark)
-        }
-        paint(NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight), body: bodyRect, id: panel.id, light: weeklyShade, alpha: cached ? 0.45 : 1, dark: dark)
+        paint(span(0, fillEnd), body: bodyRect, id: panel.id, light: money != nil, muted: weeklyShade, alpha: fillAlpha, dark: dark)
         if glow > 0 { NSColor(srgbRed: 1.0, green: 0.33, blue: 0.30, alpha: glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
@@ -250,14 +290,18 @@ final class HUD: NSObject, NSApplicationDelegate {
         }
         NSGraphicsContext.restoreGraphicsState()
         let fontSize = min(baseSize, baseSize * (bodyWidth - 2) / max(1, measuredWidth))
-        let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .medium)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
-        let size = (text as NSString).size(withAttributes: attrs)
-        let origin = NSPoint(x: 1 + bodyWidth/2-size.width/2, y: 10.5-size.height/2)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current?.cgContext.setBlendMode(.destinationOut)
-        (text as NSString).draw(at: origin, withAttributes: attrs)
-        NSGraphicsContext.restoreGraphicsState()
+        let font = Self.digitFont(fontSize)
+        // Centre the digits' ink, not their line box, the way the system battery does: side bearings and the
+        // descender space would otherwise push "100" left and every number up.
+        if let context = NSGraphicsContext.current?.cgContext {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.white]))
+            let glyphs = CTLineGetImageBounds(line, context)
+            context.saveGState()
+            context.setBlendMode(.destinationOut); context.textMatrix = .identity
+            context.textPosition = CGPoint(x: pixel(1 + bodyWidth / 2 - glyphs.midX), y: pixel(bodyY + bodyHeight / 2 - glyphs.midY))
+            CTLineDraw(line, context)
+            context.restoreGState()
+        }
         image.unlockFocus()
         return image
     }
@@ -271,7 +315,8 @@ final class HUD: NSObject, NSApplicationDelegate {
                 guard let self = self else { return }
                 if inside {
                     self.hovered = id; self.acknowledged[id] = self.panels[id]?.alert
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.showCells(id) }
+                    // Just long enough to ignore a pointer passing over on its way elsewhere.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.showCells(id) }
                 } else {
                     if self.hovered == id { self.hovered = nil }
                     if self.popover.isShown { self.popover.close() }
@@ -370,10 +415,11 @@ final class HUD: NSObject, NSApplicationDelegate {
     /// Opens the per-key panel under a battery that is still hovered.
     func showCells(_ id: String) {
         guard hovered == id, let panel = panels[id], !panel.cells.isEmpty, let button = items[id]?.button, button.window != nil else { return }
+        // A refresh problem rides along too, since this panel replaces the tooltip that would have said so.
         let lines = [panel.alert.map { "⚠︎ " + $0 }, panel.windows.first { $0.label == panel.name }.map { panel.name + " · " + ($0.right ?? "") },
-                     panel.cellsTitle].compactMap { $0 }
+                     panel.cellsTitle, panel.note.isEmpty || panel.note == panel.alert ? nil : panel.note].compactMap { $0 }
         let controller = NSViewController()
-        controller.view = CellsView(lines: lines, rows: Array(panel.cells.prefix(6)), tint: tint(id))
+        controller.view = CellsView(lines: lines, rows: Array(panel.cells.prefix(8)))
         popover.contentViewController = controller
         popover.contentSize = controller.view.frame.size
         popover.animates = false
@@ -382,6 +428,8 @@ final class HUD: NSObject, NSApplicationDelegate {
     @objc func refreshProvider(_ sender: NSMenuItem) { load(sender.representedObject as? String) }
     @objc func quit() { NSApp.terminate(nil) }
 }
+// A CLI that exits before reading its input must not take the app down with it.
+signal(SIGPIPE, SIG_IGN)
 do {
     if try Engine().handleCLI(Array(CommandLine.arguments.dropFirst())) { exit(0) }
 } catch {
@@ -456,7 +504,18 @@ if CommandLine.arguments.contains("--self-test") {
     delegate.render(team)
     precondition(delegate.items["openrouter"]?.button?.toolTip == nil)
     precondition(delegate.items["openrouter"]?.menu?.items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
-    precondition(CellsView(lines: ["a", "b"], rows: team.cells, tint: .white).frame.height == 92)
+    precondition(CellsView(lines: ["a", "b"], rows: team.cells).frame.height == 92)
+    // The panel widens to show a whole reset time instead of cutting it off.
+    let long = Window(label: "Guy1", pct: 0, right: "$0.00 of $5.00 today · resets in 7h 16m")
+    precondition(CellsView(lines: ["OpenRouter"], rows: [long]).frame.width > CellsView(lines: ["OpenRouter"], rows: [Window(label: "a", pct: 0, right: "$1")]).frame.width)
+    // No tint may pass for the system battery's white.
+    for id in ["codex", "claude", "glm", "antigravity", "grok", "vercel", "deepseek", "kimi", "openrouter", "other"] {
+        let rgb = delegate.tint(id).usingColorSpace(.sRGB)!
+        let linear = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
+        let chroma = max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) - min(rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
+        precondition(0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] <= 0.5 || chroma >= 0.3, id + " is too close to white")
+    }
+    precondition(CellsView.color(left: 0.05) == .systemRed && CellsView.color(left: 0.2) == .systemYellow && CellsView.color(left: 0.9) == .systemGreen)
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))
@@ -466,6 +525,34 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(balance("$1026.25 left").size.width > balance("$26.25 left").size.width)
     let representation = NSBitmapImageRep(data: image.tiffRepresentation!)!
     try! representation.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("battery-preview.png"))
+    // Candidate digit fonts, numbered, to compare against the system battery beside them in the menu bar.
+    func proportional(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont { NSFont.systemFont(ofSize: size, weight: weight) }
+    func rounded(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
+        NSFont(descriptor: NSFont.systemFont(ofSize: size, weight: weight).fontDescriptor.withDesign(.rounded) ?? NSFont.systemFont(ofSize: size).fontDescriptor, size: size) ?? .systemFont(ofSize: size)
+    }
+    let candidates: [(String, (CGFloat) -> NSFont)] = [
+        ("1 bold, fixed digits (now)", { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .bold) }),
+        ("2 semibold, fixed digits", { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .semibold) }),
+        ("3 bold", { proportional($0, .bold) }), ("4 semibold", { proportional($0, .semibold) }),
+        ("5 medium", { proportional($0, .medium) }), ("6 heavy", { proportional($0, .heavy) }),
+        ("7 bold, 0.5pt larger", { proportional($0 + 0.5, .bold) }), ("8 semibold, 0.5pt larger", { proportional($0 + 0.5, .semibold) }),
+        ("9 rounded bold", { rounded($0, .bold) }), ("10 rounded semibold", { rounded($0, .semibold) })]
+    let samples = [Panel(id: "codex", name: "Codex", windows: [Window(label: "5h", pct: 30)]),
+                   Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 0)]),
+                   Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$26.25 left")])]
+    let sheet = NSImage(size: NSSize(width: 300, height: CGFloat(candidates.count) * 26 + 8))
+    sheet.lockFocus()
+    NSColor(srgbRed: 0.18, green: 0.20, blue: 0.30, alpha: 1).setFill(); NSRect(origin: .zero, size: sheet.size).fill()
+    for (index, candidate) in candidates.enumerated() {
+        HUD.digitFont = candidate.1
+        let y = sheet.size.height - CGFloat(index + 1) * 26
+        (candidate.0 as NSString).draw(at: NSPoint(x: 8, y: y + 6), withAttributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.white])
+        var x: CGFloat = 160
+        for sample in samples { let battery = delegate.icon(sample); battery.draw(at: NSPoint(x: x, y: y + 2), from: .zero, operation: .sourceOver, fraction: 1); x += battery.size.width + 8 }
+    }
+    sheet.unlockFocus()
+    try! NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("font-preview.png"))
+    HUD.digitFont = candidates[0].1
     print("Battery drawing and note-free menus passed")
     exit(0)
 }

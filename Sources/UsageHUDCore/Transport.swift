@@ -111,6 +111,8 @@ struct KeychainReader: CredentialReading {
         let pipe = try RPCProcess(binary: URL(fileURLWithPath: "/usr/bin/security"), arguments: args, timeout: 20)
         defer { pipe.stop() }
         let text = (try? pipe.allOutput()).flatMap { String(data: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // A slow success is not treated as a prompt: Keychain reads can simply be slow, and pausing a working provider
+        // on a guess stopped Claude updating.
         guard text.isEmpty else { return text }
         // An allowed read or a missing item answers at once; a slow failure means macOS asked for the password.
         if Date().timeIntervalSince(started) > 2 {

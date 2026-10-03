@@ -9,10 +9,13 @@ public final class Engine {
     /// A money battery below this amount, in its own currency, asks for attention.
     public var lowBalance = 1.0
     public static var defaultRoot: URL {
-        if let path = ProcessInfo.processInfo.environment["USAGE_HUD_HOME"] ?? Bundle.main.object(forInfoDictionaryKey: "UsageHUDDataDirectory") as? String {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        // A copied app still names the folder of whoever built it; another person's Mac uses its own home.
+        if let path = ProcessInfo.processInfo.environment["USAGE_HUD_HOME"] ?? (Bundle.main.object(forInfoDictionaryKey: "UsageHUDDataDirectory") as? String)
+            .flatMap({ $0.hasPrefix(home.path + "/") ? $0 : nil }) {
             return URL(fileURLWithPath: path)
         }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".usage-hud")
+        return home.appendingPathComponent(".usage-hud")
     }
     public convenience init(root: URL = Engine.defaultRoot) { self.init(root: root, credentials: KeychainReader(), http: HTTPReader()) }
     init(root: URL, credentials: CredentialReading, http: HTTPReading, providers: [UsageProvider]? = nil) {
@@ -28,13 +31,16 @@ public final class Engine {
                                       BalanceProvider.deepSeek(cache: cache, credentials: credentials, http: http),
                                       BalanceProvider.kimi(cache: cache, credentials: credentials, http: http)]
     }
+    /// After a Keychain prompt, only the user's own Refresh may ask again, or a day passing (a prompt at login can be a fluke).
+    func prompted(_ id: String) -> Bool {
+        let status = cache.read(id + "-status.json")
+        return status["prompted"] as? Bool == true && Date().timeIntervalSince1970 - (number(status["checked_at"]) ?? 0) < 86400
+    }
     public func panels(refresh: String? = nil) -> [Panel] {
         if refresh == "openai-credits" { try? credits.refresh() }
         return providers.compactMap { provider -> Panel? in
             let statusFile = provider.id + "-status.json"
-            // After a Keychain prompt, only the user's own Refresh may ask again.
-            let prompted = cache.read(statusFile)["prompted"] as? Bool == true
-            if refresh == provider.id || refresh == "automatic" && !prompted && provider.automatic {
+            if refresh == provider.id || refresh == "automatic" && !prompted(provider.id) && provider.automatic {
                 do {
                     try provider.refresh()
                     try cache.write(statusFile, ["error": NSNull(), "checked_at": Date().timeIntervalSince1970])
@@ -45,19 +51,19 @@ public final class Engine {
                                                   "checked_at": Date().timeIntervalSince1970])
                 }
             }
-            guard provider.shown() else { return nil }
-            var panel = provider.panel()
             let status = cache.read(statusFile)
+            // A provider not yet read stays hidden, unless it needs the user (a prompt or a rejected key) to get there.
+            guard provider.shown() || status["attention"] as? Bool == true else { return nil }
+            var panel = provider.panel()
             if let message = status["error"] as? String {
                 panel.note = message
                 for index in panel.windows.indices { panel.windows[index].stale = true }
                 // A rejected key won't fix itself; a passing outage or an idle CLI's token will.
                 if status["attention"] as? Bool == true { panel.alert = panel.alert ?? message }
             }
-            if panel.alert == nil, let money = panel.windows.first(where: { $0.label == panel.name && $0.pct == nil }),
-               let level = Shelf.level(panel), -level < lowBalance {
-                panel.alert = "Balance low: " + (money.right ?? "")
-            }
+            // The text stays the same as the balance moves, so one hover silences it until it recovers.
+            if panel.alert == nil, panel.windows.contains(where: { $0.label == panel.name && $0.pct == nil }),
+               let level = Shelf.level(panel), -level < lowBalance { panel.alert = "Balance low" }
             return panel
         }
     }
@@ -108,12 +114,13 @@ public final class Engine {
         return changed
     }
     public func handleCLI(_ arguments: [String]) throws -> Bool {
-        guard !arguments.isEmpty && arguments != ["--self-test"] else { return false }
+        // macOS may pass its own arguments (-psn_…, -NSDocument…); only ours start with two dashes.
+        guard arguments.first?.hasPrefix("--") == true && arguments != ["--self-test"] else { return false }
         if arguments == ["--claude-statusline"] {
             print(try statusline(FileHandle.standardInput.readDataToEndOfFile())); return true
         }
         if arguments == ["--probe-if-stale"] {
-            if Date().timeIntervalSince1970 - (number(cache.read("claude.json")["captured_at"]) ?? 0) > 300 { _ = panels(refresh: "claude") }
+            if !prompted("claude"), Date().timeIntervalSince1970 - (number(cache.read("claude.json")["captured_at"]) ?? 0) > 300 { _ = panels(refresh: "claude") }
             return true
         }
         if arguments == ["--migrate-hooks"] {

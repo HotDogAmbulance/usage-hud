@@ -10,7 +10,7 @@ Built for macOS, entirely in Swift. Small enough to stay out of the way.
 
 Using Codex Pro or Claude Pro/Max? [Here’s how your plan is displayed and how to set it up](PAID_PLANS.md). The same app adapts to your account’s reported windows.
 
-Each provider has its own color: teal for Codex, terracotta for Claude, poison green for OpenRouter, white for GLM (Z.ai's mark), Google's four colours for Antigravity, silver for Grok, warm grey for Vercel, DeepSeek's whale blue and Kimi's azure.
+Each provider has its own color: teal for Codex (its 7d layer a muted teal), terracotta for Claude, poison green for OpenRouter, indigo for GLM, Google's four colours for Antigravity, slate for Grok, warm grey for Vercel, DeepSeek's whale blue and Kimi's azure.
 
 For Codex and Claude, the number is the **percentage remaining** in your 5-hour window. The stronger color follows that reading. Behind it, a lighter shade shows what remains for the week. Grey is the unused part of the battery. The digits are cut out of the fill, so your menu-bar background shows through, just like the reference Mac battery. When the week has less left than the 5-hour window, the 5-hour fill covers it: hover over a battery to see the weekly reading on its own, in that same lighter shade. It returns to the 5-hour view when the pointer moves away.
 
@@ -20,11 +20,11 @@ OpenRouter shows **dollars left**. Its pale green body gives the balance a reada
 
 At most three batteries sit in the menu bar, so a crowded bar or the notch never hides one silently. The ones you used most recently stay; the rest fold into a small **+N** item, and resting the pointer on it opens their batteries and menus. To show more or fewer, run `defaults write local.usage-hud visibleBatteries 4`.
 
-On a light menu bar the batteries switch to dark outlines, and pale colours deepen so white and silver stay visible. Claude's extra usage (spent, cap, or Off) appears in the hover text with any other money rows.
+On a light menu bar the batteries switch to dark outlines, and every colour stays deep enough never to pass for the Mac's own battery. Claude's extra usage (spent, cap, or Off) appears in the hover text with any other money rows.
 
 A battery that needs you breathes a soft red: a key rejected or signed out, an OpenRouter key near its cap, or a balance under $1 (change it with `defaults write local.usage-hud lowBalance 5`). Hover over it to read why; it stays calm until something new happens. OpenRouter keys show their own daily, weekly or monthly cap and when it resets, counted in UTC like OpenRouter itself, with the key closest to its cap first.
 
-OpenRouter needs no setup: keys you already keep in your shell profile, AI tool configs or `.sh` scripts are found and named after their variable (`ALICE_OPENROUTER_KEY` becomes "alice") or their file (`boot-alice.sh` becomes "boot-alice"). OpenRouter teams can add one management key instead of every person's: hovering the battery then opens a small panel with the account balance, a summary like "23 keys · $41.20 today · 3 near cap", and the keys closest to their caps as rows of cells. The full list sits under **All keys** in the menu. See [PROVIDERS.md](PROVIDERS.md).
+OpenRouter needs no setup: keys you already keep in your shell profile, AI tool configs or `.sh` scripts are found and named after their variable (`ALICE_OPENROUTER_KEY` becomes "alice") or their file (`boot-alice.sh` becomes "boot-alice"). A management key kept the same way is recognised by itself, so OpenRouter teams need nothing else: hovering the battery then opens a small panel with the account balance, a summary like "23 keys · $41.20 today · 3 near cap", and the keys closest to their caps as rows of cells. The full list sits under **All keys** in the menu. See [PROVIDERS.md](PROVIDERS.md).
 
 When a newer release is published on GitHub, every battery menu offers **Update available**. Usage endpoints change without notice, so this is how fixes reach you.
 

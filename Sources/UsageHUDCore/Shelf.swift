@@ -13,7 +13,7 @@ public struct Shelf {
         let used = panel.windows.compactMap { $0.pct }
         if !used.isEmpty { return used.reduce(0, +) }
         guard let right = panel.windows.first(where: { $0.label == panel.name })?.right,
-              let amount = Double(String(right.split(separator: " ").first ?? "").filter { "0123456789.".contains($0) }) else { return nil }
+              let amount = Double(String(right.split(separator: " ").first ?? "").filter { "-0123456789.".contains($0) }) else { return nil }
         return -amount
     }
     public mutating func observe(_ panel: Panel, now: Double) {
