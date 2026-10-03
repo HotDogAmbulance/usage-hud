@@ -48,7 +48,7 @@ public final class Engine {
                 for index in panel.windows.indices { panel.windows[index].stale = true }
                 // A rejected key or expired sign-in won't fix itself; a passing outage will.
                 let lower = message.lowercased()
-                if ["rejected", "expired", "sign in", "sign-in", "login"].contains { lower.contains($0) } { panel.alert = panel.alert ?? message }
+                if ["rejected", "expired", "sign in", "sign-in", "login"].contains(where: { lower.contains($0) }) { panel.alert = panel.alert ?? message }
             }
             if panel.alert == nil, let money = panel.windows.first(where: { $0.label == panel.name && $0.pct == nil }),
                let level = Shelf.level(panel), -level < lowBalance {
