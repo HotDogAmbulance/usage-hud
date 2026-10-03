@@ -37,7 +37,8 @@ final class GLMProvider: UsageProvider {
                   let pct = number(limit["percentage"]) else { continue }
             let unit = number(limit["unit"]), count = number(limit["number"]) ?? 1
             // Observed unit codes: 3 = hours, 6 = weeks. Older TOKENS_LIMIT entries describe the 5h window.
-            let minutes: Double? = unit == 3 ? count * 60 : unit == 6 ? count * 10080 : type == "TOKENS_LIMIT" ? 300 : nil
+            // Any other unit is a window we don't know yet, never a 5h one in disguise.
+            let minutes: Double? = unit == 3 ? count * 60 : unit == 6 ? count * 10080 : type == "TOKENS_LIMIT" && (unit == nil || unit == 5) ? 300 : nil
             guard let minutes = minutes else { continue }
             windows["w\(Int(minutes))"] = ["used_percentage": pct, "window_minutes": minutes,
                                            "resets_at": number(limit["nextResetTime"]).map { $0 / 1000 } as Any? ?? NSNull()]
@@ -59,7 +60,9 @@ final class GLMProvider: UsageProvider {
                 lastProblem = error.status == 401 || error.status == 403 ? HUDProblem("GLM API key rejected", attention: true) : HUDProblem("GLM usage HTTP \(error.status)")
                 continue
             }
-            try cache.quota("glm.json", windows: Self.windows(data), extra: ["host": host, "plan": dict(data["data"])["level"] ?? NSNull()])
+            // One host refusing the key (success: false) still leaves the other to try.
+            do { try cache.quota("glm.json", windows: Self.windows(data), extra: ["host": host, "plan": dict(data["data"])["level"] ?? NSNull()]) }
+            catch let problem as HUDProblem { lastProblem = problem; continue }
             return
         }
         throw lastProblem

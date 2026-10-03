@@ -12,6 +12,8 @@ protocol UsageProvider {
 extension UsageProvider { func shown() -> Bool { true } }
 final class ClaudeProvider: UsageProvider {
     let id = "claude", name = "Claude", automatic = true
+    /// Hidden until a first read or a Claude Code status line, so Codex-only people don't carry an empty battery.
+    func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("claude.json").path) }
     let cache: Cache, credentials: CredentialReading, http: HTTPReading
     init(cache: Cache, credentials: CredentialReading, http: HTTPReading) {
         self.cache = cache; self.credentials = credentials; self.http = http
@@ -73,6 +75,8 @@ final class ClaudeProvider: UsageProvider {
 }
 final class CodexProvider: UsageProvider {
     let id = "codex", name = "Codex", automatic = true
+    /// Hidden until a first read, so Claude-only people don't carry an empty battery.
+    func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("codex-quota.json").path) }
     let cache: Cache
     let credits: OpenAICredits
     init(cache: Cache, credits: OpenAICredits) { self.cache = cache; self.credits = credits }
@@ -143,6 +147,7 @@ final class OpenRouterProvider: UsageProvider {
     func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("openrouter.json").path) }
     let cache: Cache, credentials: CredentialReading, http: HTTPReading
     let home: URL, environment: [String: String]
+    var found: (at: Double, slots: [RouterSlot]) = (0, [])
     init(cache: Cache, credentials: CredentialReading, http: HTTPReading,
          home: URL = FileManager.default.homeDirectoryForCurrentUser, environment: [String: String] = ProcessInfo.processInfo.environment) {
         self.cache = cache; self.credentials = credentials; self.http = http; self.home = home; self.environment = environment
@@ -163,10 +168,14 @@ final class OpenRouterProvider: UsageProvider {
         let data = env["USAGE_HUD_PROVIDER_SLOTS"].flatMap { $0.data(using: .utf8) } ?? (try? Data(contentsOf: cache.root.appendingPathComponent("providers.json")))
         if let data = data { return try Self.slots(JSONSerialization.jsonObject(with: data)) }
         guard let service = env["USAGE_HUD_OPENROUTER_SERVICE"], let pairs = env["USAGE_HUD_OPENROUTER_KEYS"] else {
-            // Nothing configured: use the keys already on this Mac.
-            return KeyFinder.find(in: KeyFinder.places(home: home), environment: env).map {
-                RouterSlot(id: "found-" + $0.label, label: $0.label, sources: [["provider": "openrouter", "found": $0.key]])
+            // Nothing configured: use the keys already on this Mac. The search runs at most hourly; keys stay in memory only.
+            let now = Date().timeIntervalSince1970
+            if now - found.at > 3600 {
+                found = (now, KeyFinder.find(in: KeyFinder.places(home: home), environment: env).map {
+                    RouterSlot(id: "found-" + $0.label, label: $0.label, sources: [["provider": "openrouter", "found": $0.key]])
+                })
             }
+            return found.slots
         }
         return pairs.split(separator: ",").enumerated().compactMap { index, pair in
             let values = pair.split(separator: ":", maxSplits: 1)
@@ -186,6 +195,7 @@ final class OpenRouterProvider: UsageProvider {
         let key = dict(try http.get(URL(string: "https://openrouter.ai/api/v1/key")!, token: token, headers: [:], limit: 1024 * 1024)["data"])
         guard let usage = number(key["usage"]) else { throw HUDProblem("OpenRouter response missing usage") }
         var result: JSON = ["usage": max(0, usage), "limit": number(key["limit"]) as Any? ?? NSNull(),
+                            "key_label": key["label"] as? String as Any? ?? NSNull(), "management": key["is_provisioning_key"] as? Bool == true,
                             "usage_daily": number(key["usage_daily"]) as Any? ?? NSNull(),
                             "limit_remaining": number(key["limit_remaining"]) as Any? ?? NSNull(),
                             "limit_reset": key["limit_reset"] as? String as Any? ?? NSNull()]
@@ -199,7 +209,7 @@ final class OpenRouterProvider: UsageProvider {
         let fingerprint = "openrouter:\(source["service"] as? String ?? ""):\(source["account"] as? String ?? "")"
         let usage = number(result["usage"]) ?? 0
         let same = previous["source_id"] as? String == fingerprint && previous["day"] as? String == day
-        return ["slot_id": slot.id, "label": slot.label, "provider": "openrouter", "source_id": fingerprint,
+        return ["slot_id": slot.id, "label": slot.label, "provider": "openrouter", "source_id": fingerprint, "key_label": result["key_label"] ?? NSNull(),
                 "usage": usage, "limit": result["limit"] ?? NSNull(), "day": day,
                 "usage_daily": result["usage_daily"] ?? NSNull(), "limit_remaining": result["limit_remaining"] ?? NSNull(),
                 "limit_reset": result["limit_reset"] ?? NSNull(),
@@ -220,7 +230,7 @@ final class OpenRouterProvider: UsageProvider {
         let reset = nextReset(period).map { " · resets in " + countdown($0.timeIntervalSinceNow) } ?? ""
         let text = "\(usd(limit - remaining)) of \(usd(limit)) " + (periodName[period ?? ""] ?? "cap") + reset
         return (Window(label: label, pct: (1 - left) * 100, right: text, stale: old), left,
-                left > 0.1 ? nil : remaining <= 0 ? "cap reached" : usd(remaining) + " left of its cap")
+                left > 0.1 ? nil : remaining <= 0 ? "cap reached" : "near its cap")
     }
     static let periodName = ["daily": "today", "weekly": "this week", "monthly": "this month"]
     /// When a key's cap resets: OpenRouter counts days, weeks (from Monday) and months in UTC.
@@ -249,7 +259,7 @@ final class OpenRouterProvider: UsageProvider {
     }
     func refresh() throws {
         let slots = try configuredSlots()
-        let team = try credentials.stored(service: Self.teamService, account: "openrouter.ai")
+        var team = try credentials.stored(service: Self.teamService, account: "openrouter.ai"), listed: [JSON]?
         guard !slots.isEmpty || team != nil else { throw HUDProblem("Add an OpenRouter key; see PROVIDERS.md") }
         let previous = cache.read("openrouter.json")
         let oldRows = previous["rows"] as? [JSON] ?? []
@@ -262,12 +272,22 @@ final class OpenRouterProvider: UsageProvider {
         let day = formatter.string(from: Date()), now = Date().timeIntervalSince1970
         for slot in slots {
             let old = oldRows.first(where: { $0["slot_id"] as? String == slot.id || $0["label"] as? String == slot.label }) ?? [:]
-            var winner: (JSON, JSON)?
+            var winner: (JSON, JSON)?, management = false, rejected = false
             for source in slot.sources {
-                do { winner = (source, try probe(source)); break }
+                do { winner = (source, try probe(source)) }
                 catch let problem as HUDProblem where problem.prompted { throw problem }
+                catch let failure as HTTPFailure { rejected = failure.status == 401 || failure.status == 403 }
                 catch {}
+                // A management key found on the Mac lists the team instead of showing as a key of its own: OpenRouter flags it,
+                // its variable says so, or it can't read /key but can list keys.
+                let named = ["management", "provisioning", "admin"].contains { slot.label.lowercased().contains($0) }
+                if let found = source["found"] as? String, team == nil || team == found,
+                   winner?.1["management"] as? Bool == true || named || winner == nil && listed == nil,
+                   let keys = try? teamKeys(found) { team = found; listed = keys; management = true; winner = nil; break }
+                if winner != nil { break }
             }
+            // A revoked key left in an old script is not yours to fix; it simply isn't shown.
+            if management || winner == nil && rejected && slot.sources.allSatisfy({ $0["found"] != nil }) { continue }
             if let (source, result) = winner {
                 rows.append(Self.successfulRow(slot: slot, source: source, result: result, previous: old, day: day))
                 if let balance = number(result["credits_remaining"]) { balances["openrouter"] = balance; balanceCaptured = now }
@@ -279,7 +299,7 @@ final class OpenRouterProvider: UsageProvider {
         var teamRows = previous["team"] as? [JSON], teamProblem: HUDProblem?
         if let team = team {
             do {
-                teamRows = try teamKeys(team)
+                teamRows = try listed ?? teamKeys(team)
                 if let payload = try? http.get(URL(string: "https://openrouter.ai/api/v1/credits")!, token: team, headers: [:], limit: 1024 * 1024),
                    let total = number(dict(payload["data"])["total_credits"]), let used = number(dict(payload["data"])["total_usage"]) {
                     balances["openrouter"] = total - used; balanceCaptured = now
@@ -289,7 +309,9 @@ final class OpenRouterProvider: UsageProvider {
                     : HUDProblem("OpenRouter key list HTTP \(error.status)")
             } catch { teamProblem = error as? HUDProblem ?? HUDProblem("OpenRouter key list unavailable") }
         }
-        let fresh = failures.count < slots.count || team != nil && teamProblem == nil
+        let fresh = failures.count < rows.count || team != nil && teamProblem == nil
+        // Nothing has ever worked: stay hidden rather than show an empty battery.
+        if !fresh && previous.isEmpty { throw teamProblem ?? HUDProblem("No working OpenRouter key found") }
         try cache.write("openrouter.json", ["captured_at": fresh ? now : number(previous["captured_at"]) ?? 0,
                                            "checked_at": now, "balance_captured_at": balanceCaptured, "balances": balances, "rows": rows,
                                            "team": teamRows as Any? ?? NSNull()])
@@ -307,14 +329,16 @@ final class OpenRouterProvider: UsageProvider {
         let ranked = { (rows: [JSON]) -> [(cell: Window, left: Double, warning: String?)] in
             rows.map { Self.keyCell($0, old: old) }.enumerated().sorted { ($0.element.left, $0.offset) < ($1.element.left, $1.offset) }.map { $0.element }
         }
-        let mine = ranked(blob["rows"] as? [JSON] ?? []), team = ranked(blob["team"] as? [JSON] ?? [])
+        // Your own keys also appear in the team list; they show once, as yours.
+        let own = Set((blob["rows"] as? [JSON] ?? []).compactMap { $0["key_label"] as? String })
+        let mine = ranked(blob["rows"] as? [JSON] ?? []), team = ranked((blob["team"] as? [JSON] ?? []).filter { !own.contains($0["label"] as? String ?? "") })
         // Menu rows carry no percentage, so the battery keeps showing money.
         rows += mine.map { Window(label: $0.cell.label, right: $0.cell.right, stale: $0.cell.stale) }
         var title: String?
         if !team.isEmpty {
-            let today = (blob["team"] as? [JSON] ?? []).compactMap { number($0["usage_daily"]) }.reduce(0, +)
+            let all = blob["team"] as? [JSON] ?? [], today = all.compactMap { number($0["usage_daily"]) }.reduce(0, +)
             let near = team.filter { $0.warning != nil }.count
-            title = "\(team.count) keys · \(usd(today)) today" + (near > 0 ? " · \(near) near cap" : "")
+            title = "\(all.count) keys · \(usd(today)) today" + (near > 0 ? " · \(near) near cap" : "")
             rows.append(Window(label: "Team", right: title, stale: old))
         }
         // Only your own keys pulse: a teammate reaching the cap they were given is the cap doing its job.

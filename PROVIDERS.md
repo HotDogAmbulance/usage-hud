@@ -8,7 +8,7 @@ Quota adapters persist `used_percentage`, `window_minutes` where applicable, `re
 
 **Nothing to set up:** OpenRouter has no sign-in file, but its keys (`sk-or-v1-` and 64 hex characters) are unmistakable. When `providers.json` is absent, the app looks for them in `OPENROUTER_API_KEY`, your shell profiles (`.zshrc`, `.zprofile`, `.zshenv`, `.bashrc`, `.bash_profile`, `.profile`, `.env`, fish `config.fish`) common AI tool configs (opencode, aider, crush, Continue, Zed) and `.sh` scripts within three levels of your home folder (at most 500; hidden folders, `Library`, and the Desktop, Documents and Downloads folders macOS guards with a permission prompt are skipped). A key assigned to a named variable takes its name from it (`ALICE_OPENROUTER_KEY` shows as "alice"); otherwise it is named after its file (`boot-alice.sh` shows as "boot-alice"). Keys are sent only to openrouter.ai and are never written to disk. To choose keys yourself, create `providers.json` as below; it replaces the search.
 
-**Team or many keys:** create a management key at openrouter.ai (Settings › Management keys) and add it once:
+**Team or many keys:** create a management key at openrouter.ai (Settings › Management keys). Keep it where your other keys live, for example `export OPENROUTER_MANAGEMENT_KEY=sk-or-v1-…` in `~/.zshrc` or a script; the HUD recognises it (by OpenRouter's flag, its variable name, or because it can list keys but not read one) and shows the team instead of a row for it. Or add it to the Keychain once:
 
 ```bash
 security add-generic-password -U -s "Usage HUD OpenRouter Team" -a openrouter.ai -w

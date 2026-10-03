@@ -73,7 +73,9 @@ let cases: [(String, () throws -> Void)] = [
     ("testKeysAlreadyOnTheMacNeedNoSetup", test.testKeysAlreadyOnTheMacNeedNoSetup),
     ("testKeychainPromptNeverReturnsOnItsOwn", test.testKeychainPromptNeverReturnsOnItsOwn),
     ("testCLIsFoundOutsideTheAppsBarePATH", test.testCLIsFoundOutsideTheAppsBarePATH),
-    ("testGLMKeyComesFromClaudeCodeSettings", test.testGLMKeyComesFromClaudeCodeSettings)
+    ("testGLMKeyComesFromClaudeCodeSettings", test.testGLMKeyComesFromClaudeCodeSettings),
+    ("testManagementKeyOnTheMacListsTheTeam", test.testManagementKeyOnTheMacListsTheTeam),
+    ("testRevokedFoundKeyStaysQuiet", test.testRevokedFoundKeyStaysQuiet)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }

@@ -103,6 +103,8 @@ extension CredentialReading {
     }
 }
 struct KeychainReader: CredentialReading {
+    /// Set when a read only got through after a password prompt, which "Allow" (not "Always Allow") would repeat.
+    static var asked = false
     func password(service: String, account: String?) throws -> String {
         var args = ["find-generic-password", "-s", service]
         if let account = account { args += ["-a", account] }
@@ -111,7 +113,7 @@ struct KeychainReader: CredentialReading {
         let pipe = try RPCProcess(binary: URL(fileURLWithPath: "/usr/bin/security"), arguments: args, timeout: 20)
         defer { pipe.stop() }
         let text = (try? pipe.allOutput()).flatMap { String(data: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard text.isEmpty else { return text }
+        guard text.isEmpty else { if Date().timeIntervalSince(started) > 4 { Self.asked = true }; return text }
         // An allowed read or a missing item answers at once; a slow failure means macOS asked for the password.
         if Date().timeIntervalSince(started) > 2 {
             throw HUDProblem("Keychain asked for your password; choose Refresh here, then Always Allow", prompted: true)
