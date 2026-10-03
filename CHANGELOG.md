@@ -7,7 +7,7 @@
 - OpenRouter's hover panel draws each key as a small battery, green, yellow under 30% and red under 10%, widens to show whole reset times, mentions refresh problems, and opens faster.
 - A management key kept in a profile or script is recognised and lists the team; your own keys appear once, not again in the team list. Revoked keys in old scripts are skipped, and OpenRouter stays hidden until one key works. The key search runs hourly, not every refresh.
 - Codex and Claude stay out of the menu bar until their first read; any hidden provider still appears when it needs you (a Keychain prompt or a rejected key).
-- Keychain: choosing "Allow" rather than "Always Allow" no longer brings the prompt back every five minutes, a prompt's pause lifts after a day, and Claude Code hooks respect it too.
+- Keychain: a prompt's pause lifts after a day, and Claude Code hooks respect it too.
 - A Refresh chosen during a background pass runs right after it instead of being dropped.
 - Balance alerts say "Balance low" and cap alerts "near its cap" without amounts, so one hover silences them; an overdrawn balance alerts.
 - The app opens at login once installed (macOS 13+), ignores launch arguments macOS adds, survives a CLI that exits early, and uses your own home folder when the app was built on another Mac.

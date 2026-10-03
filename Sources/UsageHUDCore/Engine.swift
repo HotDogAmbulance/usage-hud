@@ -41,11 +41,8 @@ public final class Engine {
         return providers.compactMap { provider -> Panel? in
             let statusFile = provider.id + "-status.json"
             if refresh == provider.id || refresh == "automatic" && !prompted(provider.id) && provider.automatic {
-                KeychainReader.asked = false
                 do {
                     try provider.refresh()
-                    // "Allow" instead of "Always Allow" lets the read through but would ask again next time.
-                    if KeychainReader.asked { throw HUDProblem("Keychain asked for your password; next time choose Always Allow", prompted: true) }
                     try cache.write(statusFile, ["error": NSNull(), "checked_at": Date().timeIntervalSince1970])
                 } catch {
                     let message = (error as? HUDProblem)?.message ?? (error as? HTTPFailure).map { "Usage HTTP \($0.status)" } ?? "Usage unavailable"
