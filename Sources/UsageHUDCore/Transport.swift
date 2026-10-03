@@ -23,6 +23,26 @@ enum CLI {
         return environment
     }
 }
+/// Runs a provider's own sign-in command out of sight: the CLI opens the browser and returns once the user approves there.
+/// `done` gets whether it worked and whether it ended within seconds, which means it wanted a terminal after all.
+/// A sign-in left unfinished is stopped after ten minutes. Only these commands ever run.
+public enum SignIn {
+    public static let commands: Set<String> = ["claude auth login", "codex login", "grok login"]
+    public static func start(_ command: String, done: @escaping (_ ok: Bool, _ quick: Bool) -> Void) -> Bool {
+        let words = command.split(separator: " ").map(String.init), env = ProcessInfo.processInfo.environment
+        let configured = ["codex": env["USAGE_HUD_CODEX_CLI"] ?? Bundle.main.object(forInfoDictionaryKey: "UsageHUDCodexCLI") as? String,
+                          "grok": env["USAGE_HUD_GROK_CLI"]][words[0]] ?? nil
+        guard commands.contains(command), let binary = CLI.find(words[0], configured: configured) else { return false }
+        let process = Process(), started = Date()
+        process.executableURL = binary; process.arguments = Array(words.dropFirst())
+        process.environment = CLI.environment(for: binary)
+        process.standardInput = FileHandle.nullDevice; process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { done($0.terminationStatus == 0, Date().timeIntervalSince(started) < 15) }
+        guard (try? process.run()) != nil else { return false }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 600) { if process.isRunning { process.terminate() } }
+        return true
+    }
+}
 final class RPCProcess {
     let process = Process(), input = Pipe(), output = Pipe()
     let deadline: Date

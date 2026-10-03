@@ -373,7 +373,9 @@ final class HUD: NSObject, NSApplicationDelegate {
             menu.addItem(withTitle: title + " (\(rows.count))", action: nil, keyEquivalent: "").submenu = all
         }
         menu.addItem(NSMenuItem.separator())
-        if let fix = panel.fix {
+        if signingIn == panel.id {
+            menu.addItem(withTitle: "Approve the sign-in in your browser…", action: nil, keyEquivalent: "")
+        } else if let fix = panel.fix {
             let item = menu.addItem(withTitle: "Sign in to " + panel.name + " again…", action: #selector(runFix(_:)), keyEquivalent: "")
             item.representedObject = [panel.id, fix]; item.target = self
         }
@@ -439,18 +441,29 @@ final class HUD: NSObject, NSApplicationDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
     @objc func refreshProvider(_ sender: NSMenuItem) { load(sender.representedObject as? String) }
-    /// Opens Terminal on the provider's own sign-in command through a .command file, so no Automation permission is needed
-    /// and nothing is typed: the CLI opens the browser, and once it is done the battery refreshes by itself.
-    /// Only commands written into the providers ever get here.
-    static let fixes: Set<String> = ["claude auth login", "codex login", "grok login"]
+    /// The provider whose sign-in is waiting in the browser.
+    var signingIn: String?
+    /// Signs in without a window: the CLI opens the browser, and the battery refreshes once the user approves there.
+    /// A CLI that turns out to need a terminal gets one, through a .command file so no Automation permission is needed.
+    @objc func runFix(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [String], pair.count == 2, SignIn.commands.contains(pair[1]) else { return }
+        let (id, fix) = (pair[0], pair[1])
+        let started = SignIn.start(fix) { ok, quick in
+            DispatchQueue.main.async {
+                self.signingIn = nil
+                if ok { self.load(id) } else if quick { self.openTerminal(fix, id: id) }
+                if let panel = self.panels[id] { self.render(panel) }
+            }
+        }
+        if started { signingIn = id; if let panel = panels[id] { render(panel) } } else { openTerminal(fix, id: id) }
+    }
     static func fixScript(_ fix: String, id: String, executable: String?) -> String {
         let refresh = executable.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "' --refresh " + id + " >/dev/null 2>&1" } ?? "true"
         return "#!/bin/zsh -l\necho 'Signing in: \(fix)'\n\(fix) && \(refresh) && echo && echo 'Signed in and updated. You can close this window.'\n"
     }
-    @objc func runFix(_ sender: NSMenuItem) {
-        guard let pair = sender.representedObject as? [String], pair.count == 2, HUD.fixes.contains(pair[1]) else { return }
+    func openTerminal(_ fix: String, id: String) {
         let script = home.appendingPathComponent("fix.command")
-        let text = HUD.fixScript(pair[1], id: pair[0], executable: Bundle.main.executablePath)
+        let text = HUD.fixScript(fix, id: id, executable: Bundle.main.executablePath)
         guard (try? text.write(to: script, atomically: true, encoding: .utf8)) != nil else { return }
         chmod(script.path, 0o700)
         NSWorkspace.shared.open(script)
@@ -539,7 +552,10 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.items["claude"]?.menu?.items.contains { $0.title == "Sign in to Claude again…" && $0.action != nil } == true)
     precondition(delegate.items["claude"]?.button?.toolTip?.contains("Click to sign in again") == true)
     precondition(HUD.fixScript("claude auth login", id: "claude", executable: "/A b's/usagehud").contains("claude auth login && '/A b'\\''s/usagehud' --refresh claude"))
-    precondition(HUD.fixes.contains("claude auth login") && !HUD.fixes.contains("rm -rf ~"))
+    precondition(SignIn.commands.contains("claude auth login") && !SignIn.commands.contains("rm -rf ~"))
+    delegate.signingIn = "claude"; delegate.render(signedOut)
+    precondition(delegate.items["claude"]?.menu?.items.contains { $0.title == "Approve the sign-in in your browser…" } == true)
+    delegate.signingIn = nil
     precondition(delegate.items["openrouter"]?.menu?.items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
     precondition(CellsView(lines: ["a", "b"], rows: team.cells).frame.height == 92)
     // The panel widens to show a whole reset time instead of cutting it off.
