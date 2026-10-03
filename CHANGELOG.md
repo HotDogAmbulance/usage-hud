@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Deeper tints so no battery reads as the Mac's own white from a distance: Codex and OpenRouter deepen, Claude takes Anthropic's terracotta, and GLM, Grok and Vercel move from white and silver to indigo, slate and warm grey. The self-test fails if any tint drifts back toward white, and writes font-preview.png to compare digit fonts.
+- The 7d layer behind 5h (and the hovered 7d view) sinks toward grey instead of white on dark menu bars, so it no longer reads as the Mac's own battery from a distance. GLM, Grok and Vercel move from white and silver to indigo, slate and warm grey for the same reason. The self-test fails if any tint drifts back toward white, and writes font-preview.png to compare digit fonts.
 - Batteries lose the faint white fringe around full fills (each layer now fills only its own span), and their digits are bold like the system battery's and centred on their ink, so "100" no longer sits left and high.
 - OpenRouter's hover panel draws each key as a small battery, green, yellow under 30% and red under 10%, widens to show whole reset times, mentions refresh problems, and opens faster.
 - A management key kept in a profile or script is recognised and lists the team; your own keys appear once, not again in the team list. Revoked keys in old scripts are skipped, and OpenRouter stays hidden until one key works. The key search runs hourly, not every refresh.

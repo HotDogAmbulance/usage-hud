@@ -153,17 +153,17 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     func tint(_ id: String) -> NSColor {
         switch id {
-        // Every tint stays well below white (relative luminance at most 0.5), so from across the room no battery reads as
-        // the Mac's own. Brand colours where the brand has one; black-and-white marks get distinct mid tones.
-        case "codex": return NSColor(srgbRed: 0.16, green: 0.66, blue: 0.58, alpha: 1)
-        case "claude": return NSColor(srgbRed: 0.85, green: 0.47, blue: 0.34, alpha: 1)
+        // No tint is pale and grey at once, so from across the room no battery reads as the Mac's own white one.
+        // Brand colours where the brand has one; black-and-white marks get distinct mid tones.
+        case "codex": return NSColor(srgbRed: 0.40, green: 0.82, blue: 0.74, alpha: 1)
+        case "claude": return NSColor(srgbRed: 0.85, green: 0.58, blue: 0.45, alpha: 1)
         case "glm": return NSColor(srgbRed: 0.42, green: 0.36, blue: 0.98, alpha: 1)
         case "gemini": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
         case "grok": return NSColor(srgbRed: 0.52, green: 0.55, blue: 0.62, alpha: 1)
         case "vercel": return NSColor(srgbRed: 0.58, green: 0.56, blue: 0.54, alpha: 1)
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
         case "kimi": return NSColor(srgbRed: 0.09, green: 0.51, blue: 1.00, alpha: 1)
-        case "openrouter": return NSColor(srgbRed: 0.30, green: 0.80, blue: 0.12, alpha: 1)
+        case "openrouter": return NSColor(srgbRed: 0.40, green: 0.93, blue: 0.16, alpha: 1)
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
         }
     }
@@ -173,14 +173,17 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     /// Fills `rect` with the provider's tint. Gemini uses its four-colour mark, spread across the whole body.
     /// On a light menu bar, pale tints are deepened and the weekly shade is softened less, so white and silver stay visible.
-    func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, alpha: CGFloat, dark: Bool = true) {
+    /// `muted` is the 7d layer behind 5h: on a dark bar it sinks toward grey instead of toward white, so it reads as the
+    /// same colour further away rather than as a white battery.
+    func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, muted: Bool = false, alpha: CGFloat, dark: Bool = true) {
         let shade = { (color: NSColor) -> NSColor in
             var color = color
             if !dark, let rgb = color.usingColorSpace(.sRGB),
                0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent > 0.6 {
                 color = color.blended(withFraction: 0.45, of: .black)!
             }
-            return (light ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
+            if muted && dark { return color.blended(withFraction: 0.5, of: NSColor(srgbRed: 0.45, green: 0.45, blue: 0.45, alpha: 1))!.withAlphaComponent(alpha) }
+            return (light || muted ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
         }
         guard id == "gemini" else { shade(tint(id)).setFill(); rect.fill(); return }
         let marks: [(CGFloat, CGFloat, CGFloat)] = [(0.19, 0.53, 1.00), (0.19, 0.53, 1.00), (0.98, 0.27, 0.26), (0.98, 0.74, 0.07), (0.03, 0.73, 0.38)]
@@ -269,9 +272,9 @@ final class HUD: NSObject, NSApplicationDelegate {
         let trackStart = fillAlpha < 1 ? 0 : weeklyAlpha < 1 ? fillEnd : weeklyEnd
         ink.withAlphaComponent(dark ? 0.36 : 0.22).setFill(); span(trackStart, bodyWidth).fill()
         if weeklyEnd > fillEnd {
-            paint(span(fillEnd, weeklyEnd), body: bodyRect, id: panel.id, light: true, alpha: weeklyAlpha, dark: dark)
+            paint(span(fillEnd, weeklyEnd), body: bodyRect, id: panel.id, light: false, muted: true, alpha: weeklyAlpha, dark: dark)
         }
-        paint(span(0, fillEnd), body: bodyRect, id: panel.id, light: money != nil || weeklyShade, alpha: fillAlpha, dark: dark)
+        paint(span(0, fillEnd), body: bodyRect, id: panel.id, light: money != nil, muted: weeklyShade, alpha: fillAlpha, dark: dark)
         if glow > 0 { NSColor(srgbRed: 1.0, green: 0.33, blue: 0.30, alpha: glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
@@ -508,7 +511,8 @@ if CommandLine.arguments.contains("--self-test") {
     for id in ["codex", "claude", "glm", "gemini", "grok", "vercel", "deepseek", "kimi", "openrouter", "other"] {
         let rgb = delegate.tint(id).usingColorSpace(.sRGB)!
         let linear = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
-        precondition(0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] <= 0.5, id + " is too close to white")
+        let chroma = max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) - min(rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
+        precondition(0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] <= 0.5 || chroma >= 0.3, id + " is too close to white")
     }
     precondition(CellsView.color(left: 0.05) == .systemRed && CellsView.color(left: 0.2) == .systemYellow && CellsView.color(left: 0.9) == .systemGreen)
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
