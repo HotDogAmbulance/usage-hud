@@ -60,10 +60,12 @@ final class HUD: NSObject, NSApplicationDelegate {
         let weekly = panel.windows.first(where: {$0.label == "7d" && $0.label != quota?.label && $0.pct != nil})
         let weeklyValid = weekly != nil
         let weeklyRemaining = weeklyValid ? min(100, max(0, 100 - (weekly?.pct ?? 0))) : 0
-        let bodyWidth: CGFloat = 23
+        let bodyWidth: CGFloat = money != nil ? 32 : 23
+        let bodyHeight: CGFloat = money != nil ? 13 : 12
+        let bodyY = 10.5 - bodyHeight / 2
         let image = NSImage(size: NSSize(width: bodyWidth + 5, height: 22))
         image.lockFocus()
-        let body = NSBezierPath(roundedRect: NSRect(x: 1, y: 4, width: bodyWidth, height: 13), xRadius: 3.5, yRadius: 3.5)
+        let body = NSBezierPath(roundedRect: NSRect(x: 1, y: bodyY, width: bodyWidth, height: bodyHeight), xRadius: 3.5, yRadius: 3.5)
         let color = tint(panel.id)
         let fillWidth = valid ? bodyWidth * remaining / 100 : 0
         NSColor.white.withAlphaComponent(0.36).setFill(); body.fill()
@@ -75,22 +77,23 @@ final class HUD: NSObject, NSApplicationDelegate {
         body.addClip()
         if weeklyValid {
             color.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.50 : 1).setFill()
-            NSRect(x: 1, y: 4, width: bodyWidth * weeklyRemaining / 100, height: 13).fill()
+            NSRect(x: 1, y: bodyY, width: bodyWidth * weeklyRemaining / 100, height: bodyHeight).fill()
         }
         color.withAlphaComponent(cached ? 0.45 : 1).setFill()
-        NSRect(x: 1, y: 4, width: fillWidth, height: 13).fill()
+        NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight).fill()
         // A pale boundary keeps 7d visible even when the 5h fill covers it.
         if weeklyValid && weeklyRemaining > 0 && weeklyRemaining < 100 {
             NSColor.white.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.45 : 0.85).setFill()
-            NSRect(x: 1 + bodyWidth * weeklyRemaining / 100 - 0.5, y: 4, width: 1, height: 13).fill()
+            NSRect(x: 1 + bodyWidth * weeklyRemaining / 100 - 0.5, y: bodyY, width: 1, height: bodyHeight).fill()
         }
         NSGraphicsContext.restoreGraphicsState()
         NSColor.white.withAlphaComponent(0.40).setFill()
         NSBezierPath(roundedRect: NSRect(x: bodyWidth + 2, y: 8, width: 2, height: 5), xRadius: 1, yRadius: 1).fill()
         // Native battery digits are taller and lighter than a semibold status label.
-        let baseFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
+        let baseSize: CGFloat = money != nil ? 10 : 11.5
+        let baseFont = NSFont.monospacedDigitSystemFont(ofSize: baseSize, weight: .medium)
         let measuredWidth = (text as NSString).size(withAttributes: [.font: baseFont]).width
-        let fontSize = min(11.5, 11.5 * (bodyWidth - 2) / max(1, measuredWidth))
+        let fontSize = min(baseSize, baseSize * (bodyWidth - 2) / max(1, measuredWidth))
         let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .medium)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
         let size = (text as NSString).size(withAttributes: attrs)
@@ -166,8 +169,8 @@ if CommandLine.arguments.contains("--self-test") {
         delegate.render(panel)
         precondition(delegate.items[id]?.menu?.items.allSatisfy{!$0.title.contains("note")} == true)
         let battery = delegate.icon(panel)
-        precondition(battery.size == NSSize(width: 28, height: 22))
-        precondition(delegate.items[id]?.length == 32)
+        precondition(battery.size == NSSize(width: id == "openrouter" ? 37 : 28, height: 22))
+        precondition(delegate.items[id]?.length == (id == "openrouter" ? 41 : 32))
         battery.draw(in: NSRect(x: CGFloat(index*48), y: 11, width: battery.size.width, height: 22))
     }
     image.unlockFocus()
