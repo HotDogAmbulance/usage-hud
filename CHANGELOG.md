@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Hovering over a Codex or Claude battery shows its 7d window on its own; moving away returns to 5h.
+- Hovering over a Codex or Claude battery shows its 7d window on its own, in the lighter weekly shade; moving away returns to 5h.
+- Remove the white weekly boundary marker.
 
 ## 2.0.1 — 2026-10-03
 

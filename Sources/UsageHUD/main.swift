@@ -66,9 +66,11 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     func drawIcon(_ id: String) {
         guard let panel = panels[id], let button = items[id]?.button else { return }
-        button.image = icon(hovered == id ? hoverPanel(panel) ?? panel : panel)
+        if hovered == id, let weekly = hoverPanel(panel) { button.image = icon(weekly, weeklyShade: true) }
+        else { button.image = icon(panel) }
     }
-    func icon(_ panel: Panel) -> NSImage {
+    /// `weeklyShade` draws the main fill in the same lighter tone the 7d layer uses behind 5h.
+    func icon(_ panel: Panel, weeklyShade: Bool = false) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
         let moneyWindow = quota == nil ? panel.windows.first(where: {$0.label == panel.name}) : nil
@@ -86,7 +88,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         let image = NSImage(size: NSSize(width: bodyWidth + 5, height: 22))
         image.lockFocus()
         let body = NSBezierPath(roundedRect: NSRect(x: 1, y: bodyY, width: bodyWidth, height: bodyHeight), xRadius: 3.5, yRadius: 3.5)
-        let color = tint(panel.id)
+        let base = tint(panel.id)
+        let color = weeklyShade ? base.blended(withFraction: 0.65, of: .white)! : base
         let fillWidth = valid ? bodyWidth * remaining / 100 : 0
         let bodyRect = NSRect(x: 1, y: bodyY, width: bodyWidth, height: bodyHeight)
         NSGraphicsContext.saveGraphicsState()
@@ -95,20 +98,15 @@ final class HUD: NSObject, NSApplicationDelegate {
         } else { body.addClip() }
         NSColor.white.withAlphaComponent(0.36).setFill(); bodyRect.fill()
         if money != nil {
-            color.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(cached ? 0.50 : 1).setFill()
+            base.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(cached ? 0.50 : 1).setFill()
             bodyRect.fill()
         }
         if weeklyValid {
-            color.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.50 : 1).setFill()
+            base.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.50 : 1).setFill()
             NSRect(x: 1, y: bodyY, width: bodyWidth * weeklyRemaining / 100, height: bodyHeight).fill()
         }
         color.withAlphaComponent(cached ? 0.45 : 1).setFill()
         NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight).fill()
-        // A pale boundary keeps 7d visible even when the 5h fill covers it.
-        if weeklyValid && weeklyRemaining > 0 && weeklyRemaining < 100 {
-            NSColor.white.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.45 : 0.85).setFill()
-            NSRect(x: 1 + bodyWidth * weeklyRemaining / 100 - 0.5, y: bodyY, width: 1, height: bodyHeight).fill()
-        }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
         if let mask = SystemBattery.cap {
