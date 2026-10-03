@@ -1,14 +1,24 @@
 # Usage HUD
 
-**macOS only. Pure Swift.** A compact native menu-bar app for Codex, Claude and OpenRouter usage. No Python, Tkinter, JavaScript runtime, web view or third-party packages.
+A little room for your AI usage, right in the Mac menu bar.
 
-One battery per provider: teal Codex, terracotta Claude, violet OpenRouter. Inside the same battery body, solid brand color shows remaining 5-hour quota, lighter color behind it shows remaining 7-day quota, and neutral grey fills the empty space. There are no separate bars or floating notes.
+I wanted to see how much Codex and Claude I had left without opening another window. Usage HUD puts that information inside a few small batteries, borrowing the familiar shape of the Mac’s own battery icon. OpenRouter sits beside them with its dollar balance.
 
-Numbers use the macOS system font and transparent cutouts. The pale weekly layer has a subtle boundary so it remains visible when the 5-hour fill overlaps it. If 5-hour data is missing or has reset, the most recent weekly reading replaces it. Cached weekly data is dimmed and identified in the menu. Click for all windows, reset countdowns and refresh. OpenRouter is a dollar balance, not a quota percentage: its slightly wider battery uses a pale violet body and cutout digits. OpenAI API credits remain a separate manual estimate in the Codex menu.
+Built for macOS, entirely in Swift. Small enough to stay out of the way.
 
-## Install
+## Reading the batteries
 
-Requires macOS 12+ and Xcode Command Line Tools to build. Sign in through standalone Codex CLI (`~/.local/bin/codex`) and Claude Code. Their desktop apps are not required. CLI availability and authenticated credentials are still required for retrieving subscription quotas.
+Each provider has its own color: teal for Codex, terracotta for Claude, and pale violet for OpenRouter.
+
+For Codex and Claude, the number is the **percentage remaining** in your 5-hour window. The stronger color follows that reading. Behind it, a lighter shade shows what remains for the week; a thin pale marker keeps the weekly boundary visible when the two fills overlap. Grey is the unused part of the battery. The digits are cut out of the fill, so your menu-bar background shows through, just like the reference Mac battery.
+
+If the 5-hour reading is unavailable or its window has reset, the battery falls back to the latest 7-day reading. Older readings look dimmer, and the menu tells you when you’re seeing cached information. Click any battery to see the individual windows, reset times, and refresh controls.
+
+OpenRouter shows **dollars left**. Its pale violet body gives the balance a readable home; the fill doesn’t represent a percentage. Any OpenAI API credit estimate lives separately in the Codex menu.
+
+## Make it at home on your Mac
+
+You’ll need macOS 12 or later and Xcode Command Line Tools to build the app. For subscription usage, sign in through the standalone Codex CLI (`~/.local/bin/codex`) and Claude Code. You can use Usage HUD without the Codex or Claude desktop apps; their CLI tools and sign-ins still need to be available.
 
 ```bash
 git clone https://github.com/HotDogAmbulance/usage-hud.git
@@ -16,31 +26,41 @@ cd usage-hud
 ./install.sh --launch
 ```
 
-The app contains its complete executable; `~/.usage-hud` holds private cache and provider settings. There are no installed runtime source files. A `usagehud` symlink provides a stable CLI path. You can delete the checkout after installing.
+That installs the app in `~/Applications`. If you prefer keeping it on your Desktop:
 
 ```bash
 ./install.sh --dest "$HOME/Desktop" --launch
 ```
 
-Optional `USAGE_HUD_HOME` selects a different cache directory. Existing quota caches, credit seeds and Keychain selectors are read without a reset. Installation migrates only this HUD's retired Python hook/statusline commands in Claude Code settings, preserving unrelated commands and making a private local backup. Runtime credentials are never copied or changed.
+The installed app carries its own executable, so you can remove the source checkout afterwards. Your settings and cached readings stay in the private `~/.usage-hud` folder. Set `USAGE_HUD_HOME` if you’d like to keep them somewhere else.
 
-## Code
+If you’re coming from the older Python version, the installer keeps your existing configuration and readings. It also moves Usage HUD’s own Claude hook and statusline commands to the Swift executable, with a local backup of the settings file. Other Claude commands stay as they were.
 
-- `Sources/UsageHUD`: AppKit batteries, menus and lifecycle.
-- `Sources/UsageHUDCore`: shared models, private atomic cache, provider protocol, CLI, native networking and bounded subprocess transport.
-- `Providers.swift`: Codex, Claude and OpenRouter adapters.
-- `OpenAICredits.swift`: retained Decimal accounting, isolated from subscription quotas.
-- `Tests`: native Swift checks without third-party test frameworks or a full Xcode dependency.
+## A few things to know
 
-One background refresh at a time. Subscription usage refreshes every five minutes; cached displays redraw every 30 seconds. There is no Python collector subprocess, file-system session scan or activity watcher. The provider registry isolates failures, and partial responses preserve missing windows with their original timestamps. Cache writes share a file lock so statusline and refresh writes do not lose each other's fields.
+Codex and Claude refresh in the background every five minutes. OpenRouter balances and OpenAI API credit estimates refresh when you ask for them from the menu. The display checks its local cache every 30 seconds, including readings supplied by Claude’s statusline.
 
-Codex uses the documented `account/rateLimits/read` method through its standalone app-server, without creating a thread or running inference. Claude uses GET `/api/oauth/usage` with Claude Code's existing OAuth token; this provider-specific endpoint can change. Tokens are read through macOS's existing Keychain tool, kept only in memory and sent only in the corresponding provider request. The app does not refresh OAuth tokens or write Keychain credentials. Expired Claude authentication requires Claude Code sign-in.
+Credentials stay in your existing macOS Keychain. Usage HUD reads them when needed and keeps tokens in memory for the corresponding requests. It doesn’t change your Keychain entries, renew your Claude sign-in, or send app telemetry. If Claude’s authentication expires, sign in again through Claude Code.
 
-OpenRouter and OpenAI Admin-key requests stay manual. Supported credit tariffs are pinned; unknown models or service tiers fail closed. Credit estimates use the greater of settled costs and metered token spend rather than adding both. The billing page remains authoritative. No app telemetry is sent.
+The Claude usage endpoint can change, and an API credit estimate may differ from your final bill. The estimate supports a pinned set of tariffs and stops when it encounters an unsupported model or service tier. Your provider’s billing page is the place to check the final amount.
 
-See [PROVIDERS.md](PROVIDERS.md) for configuration and the plugin contract.
+## If you’d like to work on it
 
-## CLI and checks
+The app has no third-party packages or interpreter to install. The code is split into a small AppKit interface and a shared Swift core, with a provider protocol so another service can have its own adapter.
+
+| Where | What lives there |
+| --- | --- |
+| `Sources/UsageHUD` | Battery drawing, menus, and app lifecycle |
+| `Sources/UsageHUDCore` | Models, cache, provider protocol, networking, and CLI |
+| `Providers.swift` | Codex, Claude, and OpenRouter adapters |
+| `OpenAICredits.swift` | Separate API credit accounting |
+| `Tests` | Native Swift checks |
+
+Only one refresh runs at a time. Missing windows retain their previous readings and timestamps, and shared cache writes use a lock so the app and Claude hooks can work together. Codex reads quota through `account/rateLimits/read` in its standalone app-server, without starting an inference session. Claude reads its usage endpoint with the existing Claude Code OAuth token.
+
+[PROVIDERS.md](PROVIDERS.md) explains provider configuration and how to add an adapter.
+
+These commands are handy for checking readings or working on the app:
 
 ```bash
 ~/.usage-hud/usagehud --json
@@ -52,13 +72,20 @@ swift run usagehud --self-test
 swift build --configuration release --product usagehud
 ```
 
-`--claude-statusline` preserves the context cache used by existing Claude burn guards. `--probe-if-stale` preserves the existing hook behavior, now in Swift.
+The `--claude-statusline` command also keeps the context cache used by existing Claude burn guards. `--probe-if-stale` lets the Claude hook refresh a reading when it’s getting old.
 
-## Uninstall
+## When you want to remove it
 
 ```bash
 ./uninstall.sh
+```
+
+To remove the cached readings and provider configuration as well:
+
+```bash
 ./uninstall.sh --purge
 ```
 
-Remove the app's Claude Code hooks if no longer needed. Purging deletes HUD cache/config, not provider credentials. MIT license: [LICENSE](LICENSE).
+If you added Usage HUD hooks to Claude Code, remove those entries from Claude’s settings too. Your provider credentials stay in the Keychain.
+
+Usage HUD is available under the [MIT license](LICENSE). Make it your own.
