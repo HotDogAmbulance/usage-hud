@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Draw for light menu bars too: dark outlines, and pale tints deepen so white and silver batteries stay visible.
+- Read Claude extra usage in the currency's minor units (`decimal_places`, cents by default); show spend without a cap, and Off when disabled. Money rows now appear in hover text.
+- Offer newer GitHub releases from every battery menu.
 - Show at most three batteries, the most recently used; the rest fold into a +N item that opens on hover. Set `visibleBatteries` to change the limit.
 - Balance batteries stretch with their digits: $26 keeps the standard size, $26.25 widens to fit.
 - Match battery colours to each brand: DeepSeek's whale blue, Kimi's azure, Gemini's four-colour mark; black-and-white brands (GLM, Grok, Vercel) use light neutrals. OpenRouter turns poison green.
