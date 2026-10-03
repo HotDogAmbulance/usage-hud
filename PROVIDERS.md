@@ -6,7 +6,15 @@ Quota adapters persist `used_percentage`, `window_minutes` where applicable, `re
 
 ## OpenRouter
 
-Create `~/.usage-hud/providers.json` with your own Keychain selectors:
+**Team or many keys:** create a management key at openrouter.ai (Settings › Management keys) and add it once:
+
+```bash
+security add-generic-password -U -s "Usage HUD OpenRouter Team" -a openrouter.ai -w
+```
+
+Every enabled key on the account then appears in the hover panel, closest to its cap first, under a summary such as "23 keys · $41.20 today · 3 near cap". Teammates reaching their caps never make the battery pulse; a rejected management key or a low account balance does.
+
+**Your own keys:** Create `~/.usage-hud/providers.json` with your own Keychain selectors:
 
 ```json
 [
@@ -20,9 +28,9 @@ Create `~/.usage-hud/providers.json` with your own Keychain selectors:
 ]
 ```
 
-Ordered sources provide fallbacks. Keep slot IDs stable. A source change or new local day resets the daily baseline. Today's spend is measured since the day's first manual check, not a billing-day guarantee. Failed sources preserve prior readings as stale. Credentials never belong in config, cache or logs.
+Ordered sources provide fallbacks. Keep slot IDs stable. Failed sources preserve prior readings as stale. Credentials never belong in config, cache or logs. A key within 10% of its cap makes the battery pulse.
 
-OpenRouter uses `/api/v1/key` for cumulative key usage and `/api/v1/credits` for the account's USD balance. It refreshes only on request. A money balance has no percentage denominator.
+OpenRouter reads `/api/v1/key` (today's spend, cap, remaining and reset period), `/api/v1/keys` with a management key, and `/api/v1/credits` for the account's USD balance. Days and caps follow OpenRouter's UTC calendar. It refreshes in the background once a key is configured. A money balance has no percentage denominator.
 
 ## GLM, Gemini and Grok
 

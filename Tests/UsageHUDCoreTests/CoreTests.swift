@@ -4,7 +4,13 @@ import Foundation
 final class FakeCredentials: CredentialReading {
     var calls = 0
     var text = "fixture"
-    func password(service: String, account: String?) throws -> String { calls += 1; return text }
+    /// Services with nothing stored; no team key unless a test asks for one.
+    var missing: Set<String> = [OpenRouterProvider.teamService]
+    func password(service: String, account: String?) throws -> String {
+        calls += 1
+        if missing.contains(service) { throw HUDProblem("not found") }
+        return text
+    }
 }
 final class FakeHTTP: HTTPReading {
     var calls = 0
@@ -344,7 +350,7 @@ final class CoreTests {
     }
     func testUnusedPlansStayOutOfMenuBar() {
         let panels = Engine(root: root, credentials: credentials, http: http).panels()
-        expectEqual(panels.map(\.id), ["codex", "claude", "openrouter"])
+        expectEqual(panels.map(\.id), ["codex", "claude"])
     }
 
     func testBalanceParsers() throws {
@@ -441,5 +447,25 @@ final class CoreTests {
         expectEqual(OpenRouterProvider.nextReset("monthly", after: saturday)?.timeIntervalSince1970, 1793491200)
         expectNil(OpenRouterProvider.nextReset(nil, after: saturday))
         expectEqual(Shelf().arrange(["codex", "claude", "openrouter", "kimi"], limit: 3, urgent: ["kimi"]).hidden, ["openrouter"])
+    }
+    func testRouterTeamListsEveryKeyWithoutPulsing() throws {
+        credentials.missing = []
+        let first: [JSON] = (0..<100).map { ["name": "k\($0)", "usage_daily": 0.5, "limit": 5, "limit_reset": "daily",
+                                              "limit_remaining": $0 == 7 ? 0.2 : 4.5, "disabled": $0 == 99] }
+        http.handler = { url in
+            if url.path.hasSuffix("credits") { return ["data": ["total_credits": 50, "total_usage": 7]] }
+            return ["data": url.query == "offset=0" ? first : [["name": "", "label": "sk-or-v1-abc", "usage_daily": 1]]]
+        }
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http)
+        expectTrue(provider.automatic)
+        try provider.refresh()
+        let panel = provider.panel()
+        expectEqual(panel.windows.first?.right, "$43.00 left")
+        expectEqual(panel.cellsTitle, "100 keys · $50.50 today · 1 near cap")
+        expectEqual(panel.cells.first?.label, "k7"); expectEqual(panel.cells.last?.label, "sk-or-v1-abc")
+        expectNil(panel.alert); expectNil(panel.displayedQuota)
+        http.handler = { _ in throw HTTPFailure(status: 401) }
+        do { try provider.refresh(); fail("Expected rejection") } catch { expectTrue((error as? HUDProblem)?.attention == true) }
+        expectEqual(provider.panel().cells.count, 100)
     }
 }

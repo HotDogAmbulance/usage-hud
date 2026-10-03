@@ -68,7 +68,8 @@ let cases: [(String, () throws -> Void)] = [
     ("testUpdateTagsCompareNumerically", test.testUpdateTagsCompareNumerically),
     ("testAlertsForRejectedKeysAndLowBalanceOnly", test.testAlertsForRejectedKeysAndLowBalanceOnly),
     ("testRouterKeyCapUsesOpenRouterNumbersAndAlerts", test.testRouterKeyCapUsesOpenRouterNumbersAndAlerts),
-    ("testRouterCapsResetOnUTCBoundaries", test.testRouterCapsResetOnUTCBoundaries)
+    ("testRouterCapsResetOnUTCBoundaries", test.testRouterCapsResetOnUTCBoundaries),
+    ("testRouterTeamListsEveryKeyWithoutPulsing", test.testRouterTeamListsEveryKeyWithoutPulsing)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }

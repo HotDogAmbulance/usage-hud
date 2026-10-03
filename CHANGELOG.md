@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- OpenRouter team mode: one management key lists every enabled key (paged), with a hover panel of per-key cap cells and an All keys menu. Teammates at their caps don't pulse; your own keys do. OpenRouter now refreshes in the background once a key is configured, and stays out of the menu bar until its first read.
 - Batteries that need attention pulse soft red until hovered: a rejected key or expired sign-in, an OpenRouter key within 10% of its cap, or a balance under `lowBalance` ($1 by default). Alerting batteries always stay in the menu bar.
 - OpenRouter keys read today's spend, remaining cap and reset period from OpenRouter, count days in UTC, and list the key closest to its cap first.
 - Draw for light menu bars too: dark outlines, and pale tints deepen so white and silver batteries stay visible.

@@ -52,8 +52,14 @@ public struct Panel: Codable {
     public var note: String
     /// Something the user should look at (a cap reached, money running out, a rejected key). The battery pulses until hovered.
     public var alert: String?
-    public init(id: String, name: String, windows: [Window] = [], note: String = "", alert: String? = nil) {
+    /// Per-key detail for the hover panel: `pct` is the share of a cap used, `right` the readable amount.
+    public var cells: [Window]
+    /// A one-line overview above the cells, such as "23 keys · $41.20 today · 3 near cap".
+    public var cellsTitle: String?
+    public init(id: String, name: String, windows: [Window] = [], note: String = "", alert: String? = nil,
+                cells: [Window] = [], cellsTitle: String? = nil) {
         self.id = id; self.name = name; self.windows = windows; self.note = note; self.alert = alert
+        self.cells = cells; self.cellsTitle = cellsTitle
     }
     public var displayedQuota: Window? {
         if let five = windows.first(where: { $0.label == "5h" && $0.pct != nil && $0.stale != true && $0.expired != true }) { return five }
