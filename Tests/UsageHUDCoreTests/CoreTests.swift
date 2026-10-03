@@ -573,4 +573,32 @@ final class CoreTests {
         expectError(try provider.refresh())
         expectFalse(provider.shown())
     }
+    /// Models sharing a quota pool show as one row named by their families; the battery leads with the tightest pool.
+    func testAntigravityPoolsModelsThatShareAQuota() throws {
+        func model(_ label: String, _ left: Double) -> JSON { ["label": label, "quotaInfo": ["remainingFraction": left, "resetTime": "2099-10-10T00:00:00Z"]] }
+        let response: JSON = ["userStatus": ["cascadeModelConfigData": ["clientModelConfigs": [
+            model("Claude Opus 4.6 (Thinking)", 0.97), model("Claude Sonnet 4.6", 0.97), model("GPT-OSS 120B (Medium)", 0.97),
+            model("Gemini 3.1 Pro (High)", 1), model("Gemini 3.6 Flash (Low)", 1)]]]]
+        let provider = AntigravityProvider(cache: cache, read: { response })
+        try provider.refresh()
+        let panel = provider.panel()
+        expectEqual(panel.cells.map { $0.label }, ["Claude & GPT", "Gemini"])
+        expectTrue(panel.cells.first?.right?.hasPrefix("97% left · resets in ") == true)
+        expectTrue(panel.cells.first?.right?.hasSuffix("· 3 models") == true)
+        expectEqual(panel.details.count, 5); expectEqual(panel.displayedQuota?.label, "Claude & GPT")
+        // Closed app: no pulse, last reading kept and still shown.
+        let closed = Engine(root: root, credentials: credentials, http: http, providers: [AntigravityProvider(cache: cache, read: { throw HUDProblem("Open Antigravity to update its quota") })])
+        let shown = closed.panels(refresh: "automatic")[0]
+        expectNil(shown.alert); expectEqual(shown.displayedQuota?.pct ?? 0, 3, accuracy: 0.01)
+    }
+    /// A problem with a known harmless fix carries it to the menu.
+    func testSignInProblemsOfferTheirFix() {
+        let engine = Engine(root: root, credentials: credentials, http: http, providers: [
+            AlertProvider(id: "a", problem: "a needs sign-in", attention: true, right: "$9.00 left")])
+        expectNil(engine.panels(refresh: "automatic")[0].fix)
+        credentials.text = "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"expiresAt\":1000}}"
+        try? cache.write("claude.json", ["captured_at": 1])
+        let claude = Engine(root: root, credentials: credentials, http: http).panels(refresh: "claude")
+        expectEqual(claude.first { $0.id == "claude" }?.fix, "claude auth login")
+    }
 }

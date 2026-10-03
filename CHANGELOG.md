@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Antigravity groups models that share a quota into one row each ("Claude & GPT", "Gemini"), leads the battery with the tightest pool, keeps every model under All models, and folds untouched pools into one row when a plan has many. A closed Antigravity no longer pulses; its battery dims with the last reading.
+- Sign-in problems offer their fix: the hover says so, and the battery menu can run `claude auth login` in Terminal (through a .command file, so no Automation permission). Only commands built into the app can run.
 - The 7d layer behind 5h (and the hovered 7d view) sinks toward grey instead of white on dark menu bars, so it no longer reads as the Mac's own battery from a distance. GLM, Grok and Vercel move from white and silver to indigo, slate and warm grey for the same reason. The self-test fails if any tint drifts back toward white, and writes font-preview.png to compare digit fonts.
 - Batteries lose the faint white fringe around full fills (each layer now fills only its own span), and their digits are bold like the system battery's and centred on their ink, so "100" no longer sits left and high.
 - OpenRouter's hover panel draws each key as a small battery, green, yellow under 30% and red under 10%, widens to show whole reset times, mentions refresh problems, and opens faster.

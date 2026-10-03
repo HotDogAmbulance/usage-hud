@@ -48,6 +48,7 @@ public final class Engine {
                     let message = (error as? HUDProblem)?.message ?? (error as? HTTPFailure).map { "Usage HTTP \($0.status)" } ?? "Usage unavailable"
                     try? cache.write(statusFile, ["error": message, "attention": (error as? HUDProblem)?.attention == true,
                                                   "prompted": (error as? HUDProblem)?.prompted == true,
+                                                  "fix": (error as? HUDProblem)?.fix as Any? ?? NSNull(),
                                                   "checked_at": Date().timeIntervalSince1970])
                 }
             }
@@ -56,7 +57,7 @@ public final class Engine {
             guard provider.shown() || status["attention"] as? Bool == true else { return nil }
             var panel = provider.panel()
             if let message = status["error"] as? String {
-                panel.note = message
+                panel.note = message; panel.fix = status["fix"] as? String
                 for index in panel.windows.indices { panel.windows[index].stale = true }
                 // A rejected key won't fix itself; a passing outage or an idle CLI's token will.
                 if status["attention"] as? Bool == true { panel.alert = panel.alert ?? message }
