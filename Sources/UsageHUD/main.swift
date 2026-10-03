@@ -73,7 +73,9 @@ final class HUD: NSObject, NSApplicationDelegate {
     var overflow: NSStatusItem?
     let overflowTracker = HoverTracker()
     var shelf = Shelf(levels: UserDefaults.standard.dictionary(forKey: "shelfLevels") as? [String: Double] ?? [:],
-                      lastUsed: UserDefaults.standard.dictionary(forKey: "shelfLastUsed") as? [String: Double] ?? [:])
+                      lastUsed: UserDefaults.standard.dictionary(forKey: "shelfLastUsed") as? [String: Double] ?? [:],
+                      scores: UserDefaults.standard.dictionary(forKey: "shelfScores") as? [String: Double] ?? [:],
+                      scoredAt: UserDefaults.standard.double(forKey: "shelfScoredAt"))
     /// Change with `defaults write local.usage-hud visibleBatteries 4`.
     var visibleLimit: Int { UserDefaults.standard.integer(forKey: "visibleBatteries") > 0 ? UserDefaults.standard.integer(forKey: "visibleBatteries") : 3 }
     /// Alerts the user has already seen by hovering, by provider; those batteries stop pulsing until the alert changes.
@@ -143,9 +145,15 @@ final class HUD: NSObject, NSApplicationDelegate {
             let panels = self.engine.panels(refresh: refresh)
             DispatchQueue.main.async {
                 self.busy = false
-                for panel in panels { self.render(panel); self.shelf.observe(panel, now: Date().timeIntervalSince1970) }
+                // Batteries are placed as they first appear, so the most used one takes the first spot, then the next.
+                let rank = self.shelf.ranked(panels.map { $0.id })
+                for panel in panels.sorted(by: { rank.firstIndex(of: $0.id)! < rank.firstIndex(of: $1.id)! }) {
+                    self.render(panel); self.shelf.observe(panel, now: Date().timeIntervalSince1970)
+                }
                 UserDefaults.standard.set(self.shelf.levels, forKey: "shelfLevels")
                 UserDefaults.standard.set(self.shelf.lastUsed, forKey: "shelfLastUsed")
+                UserDefaults.standard.set(self.shelf.scores, forKey: "shelfScores")
+                UserDefaults.standard.set(self.shelf.scoredAt, forKey: "shelfScoredAt")
                 self.arrange(panels.map { $0.id })
                 if let next = self.pending { self.pending = nil; self.load(next) }
             }
@@ -337,7 +345,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         let money = panel.windows.filter { $0.pct == nil && $0.right != nil && $0.label != panel.name }.map { "\n" + $0.label + ": " + ($0.right ?? "") }
         if panel.alert == nil { acknowledged[panel.id] = nil }
         // Providers with per-key cells get the hover panel instead of a tooltip.
-        item.button?.toolTip = !panel.cells.isEmpty ? nil : (panel.alert.map { "⚠︎ " + $0 + "\n" } ?? "") + (panel.fix.map { "Fix: click, then run “" + $0 + "”\n" } ?? "") + panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
+        item.button?.toolTip = !panel.cells.isEmpty ? nil : (panel.alert.map { "⚠︎ " + $0 + "\n" } ?? "") + (panel.fix.map { _ in "Click to sign in again\n" } ?? "") + panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
         item.button?.setAccessibilityLabel(panel.name + " usage" + (panel.alert.map { ", " + $0 } ?? ""))
         updatePulse()
         let menu = NSMenu()
@@ -366,8 +374,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         }
         menu.addItem(NSMenuItem.separator())
         if let fix = panel.fix {
-            let item = menu.addItem(withTitle: "Fix: run “" + fix + "” in Terminal", action: #selector(runFix(_:)), keyEquivalent: "")
-            item.representedObject = fix; item.target = self
+            let item = menu.addItem(withTitle: "Sign in to " + panel.name + " again…", action: #selector(runFix(_:)), keyEquivalent: "")
+            item.representedObject = [panel.id, fix]; item.target = self
         }
         let refresh = menu.addItem(withTitle: "Refresh " + panel.name, action: #selector(refreshProvider(_:)), keyEquivalent: "r")
         refresh.representedObject = panel.id; refresh.target = self
@@ -431,13 +439,18 @@ final class HUD: NSObject, NSApplicationDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
     @objc func refreshProvider(_ sender: NSMenuItem) { load(sender.representedObject as? String) }
-    /// Opens Terminal on the provider's own fix (a sign-in command) through a .command file, so no Automation permission
-    /// is needed, and the user sees and answers it themselves. Only commands written into the providers ever get here.
+    /// Opens Terminal on the provider's own sign-in command through a .command file, so no Automation permission is needed
+    /// and nothing is typed: the CLI opens the browser, and once it is done the battery refreshes by itself.
+    /// Only commands written into the providers ever get here.
     static let fixes: Set<String> = ["claude auth login", "codex login", "grok login"]
+    static func fixScript(_ fix: String, id: String, executable: String?) -> String {
+        let refresh = executable.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "' --refresh " + id + " >/dev/null 2>&1" } ?? "true"
+        return "#!/bin/zsh -l\necho 'Signing in: \(fix)'\n\(fix) && \(refresh) && echo && echo 'Signed in and updated. You can close this window.'\n"
+    }
     @objc func runFix(_ sender: NSMenuItem) {
-        guard let fix = sender.representedObject as? String, HUD.fixes.contains(fix) else { return }
+        guard let pair = sender.representedObject as? [String], pair.count == 2, HUD.fixes.contains(pair[1]) else { return }
         let script = home.appendingPathComponent("fix.command")
-        let text = "#!/bin/zsh -l\necho '$ \(fix)'\n\(fix)\necho; echo 'Done. Choose Refresh in the battery menu.'\n"
+        let text = HUD.fixScript(pair[1], id: pair[0], executable: Bundle.main.executablePath)
         guard (try? text.write(to: script, atomically: true, encoding: .utf8)) != nil else { return }
         chmod(script.path, 0o700)
         NSWorkspace.shared.open(script)
@@ -520,11 +533,12 @@ if CommandLine.arguments.contains("--self-test") {
     delegate.render(team)
     precondition(delegate.items["openrouter"]?.button?.toolTip == nil)
     // A sign-in problem offers its harmless fix in the menu and says so on hover.
-    var signedOut = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 20)], note: "Claude authentication expired")
+    var signedOut = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 20)], note: "Claude needs sign-in")
     signedOut.fix = "claude auth login"
     delegate.render(signedOut)
-    precondition(delegate.items["claude"]?.menu?.items.contains { $0.title == "Fix: run “claude auth login” in Terminal" && $0.action != nil } == true)
-    precondition(delegate.items["claude"]?.button?.toolTip?.contains("Fix: click, then run “claude auth login”") == true)
+    precondition(delegate.items["claude"]?.menu?.items.contains { $0.title == "Sign in to Claude again…" && $0.action != nil } == true)
+    precondition(delegate.items["claude"]?.button?.toolTip?.contains("Click to sign in again") == true)
+    precondition(HUD.fixScript("claude auth login", id: "claude", executable: "/A b's/usagehud").contains("claude auth login && '/A b'\\''s/usagehud' --refresh claude"))
     precondition(HUD.fixes.contains("claude auth login") && !HUD.fixes.contains("rm -rf ~"))
     precondition(delegate.items["openrouter"]?.menu?.items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
     precondition(CellsView(lines: ["a", "b"], rows: team.cells).frame.height == 92)

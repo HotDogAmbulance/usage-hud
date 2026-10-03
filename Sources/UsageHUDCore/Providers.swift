@@ -24,7 +24,8 @@ final class ClaudeProvider: UsageProvider {
         }
         let oauth = (object["claudeAiOauth"] as? JSON) ?? object
         guard let token = oauth["accessToken"] as? String, !token.isEmpty else { throw HUDProblem("Claude token missing") }
-        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Claude authentication expired; run claude auth login", fix: "claude auth login") }
+        // Claude Code renews its token while in use, so an old one only means it sat idle; nothing needs signing in.
+        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Claude Code is idle; this updates the next time you use it") }
         return token
     }
     func refresh() throws {

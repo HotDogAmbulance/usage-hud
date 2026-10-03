@@ -70,7 +70,9 @@ Like OpenRouter, these show **money left** rather than a percentage. Each stays 
 | DeepSeek | `GET https://api.deepseek.com/user/balance` (USD, or CNY shown as ¥) | `api.deepseek.com` |
 | Kimi (Moonshot) | `GET https://api.moonshot.ai/v1/users/me/balance` (USD) or `api.moonshot.cn` (CNY) | `api.moonshot.ai` or `api.moonshot.cn` |
 
-Store the API key once; macOS asks for it without echoing:
+Usually there is nothing to set up: the HUD uses the key you already keep in `AI_GATEWAY_API_KEY`, `DEEPSEEK_API_KEY`, `MOONSHOT_API_KEY` or `KIMI_API_KEY` (in the environment, a shell profile, an AI tool's config or a `.sh` script near home), or the one Claude Code uses when it points at DeepSeek's or Moonshot's Anthropic-compatible endpoint. Each key goes only to its own provider's balance host and stays in memory; the search runs at most hourly. A found key that stops working dims the battery instead of pulsing.
+
+To use a different key, store it once (a stored key wins); macOS asks for it without echoing:
 
 ```bash
 security add-generic-password -s "Usage HUD Vercel" -a ai-gateway.vercel.sh -w

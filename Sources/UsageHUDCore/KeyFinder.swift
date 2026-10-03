@@ -58,4 +58,30 @@ enum KeyFinder {
         }
         return found
     }
+    /// Keys for providers whose Anthropic-compatible endpoint Claude Code is pointed at (Z.ai, DeepSeek, Moonshot), keyed by
+    /// whichever of `hosts` shares that endpoint's domain. The key only ever goes to our fixed host, never to the URL found beside it.
+    static func claudeCode(hosts: [String], home: URL, environment: [String: String]) -> [String: String] {
+        let settings = (try? Data(contentsOf: home.appendingPathComponent(".claude/settings.json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+        var keys: [String: String] = [:]
+        for source in [environment, dict(dict(settings)["env"]).compactMapValues { $0 as? String }] {
+            guard let base = URL(string: source["ANTHROPIC_BASE_URL"] ?? "")?.host?.lowercased(),
+                  let key = source["ANTHROPIC_AUTH_TOKEN"] ?? source["ANTHROPIC_API_KEY"], !key.isEmpty,
+                  let host = hosts.first(where: { let domain = $0.split(separator: ".").suffix(2).joined(separator: ".")
+                                                  return base == domain || base.hasSuffix("." + domain) }) else { continue }
+            keys[host] = keys[host] ?? key
+        }
+        return keys
+    }
+    /// The value given to one of `variables` (`DEEPSEEK_API_KEY=…`, `export …`, or a JSON `"…": "…"`) in the environment or
+    /// the usual places. These keys look like any other provider's, so only the variable's name can say whose they are.
+    static func assigned(_ variables: [String], in files: [URL], environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+        if let key = variables.lazy.compactMap({ environment[$0] }).first(where: { $0.count >= 16 }) { return key }
+        guard let pattern = try? NSRegularExpression(pattern: "\\b(?:" + variables.joined(separator: "|") + ")[\"']?\\s*[=:]\\s*[\"']?([A-Za-z0-9._-]{16,})") else { return nil }
+        for file in files where ((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? .max) < 1 << 20 {
+            guard let text = try? String(contentsOf: file, encoding: .utf8),
+                  let match = pattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { continue }
+            return (text as NSString).substring(with: match.range(at: 1))
+        }
+        return nil
+    }
 }

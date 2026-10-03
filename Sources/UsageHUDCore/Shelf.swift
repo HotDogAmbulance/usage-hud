@@ -1,12 +1,16 @@
 import Foundation
 
-/// Decides which batteries stay in the menu bar. A provider counts as used when its quota rises or its balance falls,
-/// so the most recently used ones stay visible and the rest move into one overflow item.
+/// Decides which batteries stay in the menu bar, learning each person's main tools from use. A provider counts as used
+/// when its quota rises or its balance falls; the most used ones stay visible and the rest move into one overflow item.
 public struct Shelf {
     public var levels: [String: Double]
     public var lastUsed: [String: Double]
-    public init(levels: [String: Double] = [:], lastUsed: [String: Double] = [:]) {
-        self.levels = levels; self.lastUsed = lastUsed
+    /// One point per five-minute stretch with use, halving every week, so a main tool outranks one tried yesterday
+    /// and a switch of main tools shows within days. Every tool is counted the same, however often it reports.
+    public var scores: [String: Double]
+    public var scoredAt: Double
+    public init(levels: [String: Double] = [:], lastUsed: [String: Double] = [:], scores: [String: Double] = [:], scoredAt: Double = 0) {
+        self.levels = levels; self.lastUsed = lastUsed; self.scores = scores; self.scoredAt = scoredAt
     }
     /// One number that grows with use: the sum of used percentages, or the negated balance.
     public static func level(_ panel: Panel) -> Double? {
@@ -18,19 +22,27 @@ public struct Shelf {
     }
     public mutating func observe(_ panel: Panel, now: Double) {
         guard let level = Self.level(panel) else { return }
-        if let old = levels[panel.id], level > old + 0.001 { lastUsed[panel.id] = now }
+        if scoredAt > 0 { let fade = pow(0.5, max(0, now - scoredAt) / 604_800); scores = scores.mapValues { $0 * fade } }
+        scoredAt = now
+        if let old = levels[panel.id] {
+            if level > old + 0.001 {
+                if Int(now / 300) != Int((lastUsed[panel.id] ?? -300) / 300) { scores[panel.id, default: 0] += 1 }
+                lastUsed[panel.id] = now
+            }
+        } else if level > 0, scores[panel.id] == nil {
+            // Quota already spent at first sight means the tool is in use, so a main tool leads from day one.
+            scores[panel.id] = min(1, level / 100)
+        }
         levels[panel.id] = level
     }
+    /// Most used first: batteries asking for attention, then by score, then by last use; ties keep the engine's order.
+    public func ranked(_ ids: [String], urgent: Set<String> = []) -> [String] {
+        let key = { (id: String) in (urgent.contains(id) ? 1 : 0, self.scores[id] ?? 0, self.lastUsed[id] ?? 0) }
+        return ids.enumerated().sorted { key($0.element) != key($1.element) ? key($0.element) > key($1.element) : $0.offset < $1.offset }.map { $0.element }
+    }
     /// Splits `ids` into those shown and those moved to the overflow item, both in their original order.
-    /// Batteries asking for attention come first, then the most recently used; providers never seen in use keep the engine's order.
     public func arrange(_ ids: [String], limit: Int, urgent: Set<String> = []) -> (shown: [String], hidden: [String]) {
-        guard ids.count > limit else { return (ids, []) }
-        let ranked = ids.enumerated().sorted { a, b in
-            let x = urgent.contains(a.element) ? Double.infinity : lastUsed[a.element] ?? 0
-            let y = urgent.contains(b.element) ? Double.infinity : lastUsed[b.element] ?? 0
-            return x != y ? x > y : a.offset < b.offset
-        }
-        let shown = Set(ranked.prefix(max(0, limit)).map { $0.element })
+        let shown = Set(ranked(ids, urgent: urgent).prefix(max(0, limit)))
         return (ids.filter { shown.contains($0) }, ids.filter { !shown.contains($0) })
     }
 }
