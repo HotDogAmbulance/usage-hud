@@ -71,7 +71,9 @@ let cases: [(String, () throws -> Void)] = [
     ("testRouterCapsResetOnUTCBoundaries", test.testRouterCapsResetOnUTCBoundaries),
     ("testRouterTeamListsEveryKeyWithoutPulsing", test.testRouterTeamListsEveryKeyWithoutPulsing),
     ("testKeysAlreadyOnTheMacNeedNoSetup", test.testKeysAlreadyOnTheMacNeedNoSetup),
-    ("testKeychainPromptNeverReturnsOnItsOwn", test.testKeychainPromptNeverReturnsOnItsOwn)
+    ("testKeychainPromptNeverReturnsOnItsOwn", test.testKeychainPromptNeverReturnsOnItsOwn),
+    ("testCLIsFoundOutsideTheAppsBarePATH", test.testCLIsFoundOutsideTheAppsBarePATH),
+    ("testGLMKeyComesFromClaudeCodeSettings", test.testGLMKeyComesFromClaudeCodeSettings)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }

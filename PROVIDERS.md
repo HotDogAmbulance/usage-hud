@@ -40,11 +40,11 @@ These three stay out of the menu bar until their first successful read, so peopl
 
 | Provider | What it reads | Setup |
 | --- | --- | --- |
-| GLM Coding Plan | 5h and weekly credit windows from `/api/monitor/usage/quota/limit` | Store your Coding Plan API key in the Keychain (below) |
+| GLM Coding Plan | 5h and weekly credit windows from `/api/monitor/usage/quota/limit` | Nothing, if Claude Code already points at Z.ai or Zhipu; otherwise store the key in the Keychain (below) |
 | Gemini | Daily per-model pools (Pro, Flash, Flash Lite) from the Gemini CLI quota endpoint | Install [Gemini CLI](https://github.com/google-gemini/gemini-cli) and sign in with Google |
 | Grok | Monthly spend against the plan limit, via `grok agent stdio` | Install Grok CLI and run `grok login` |
 
-**GLM.** Use `api.z.ai` as the account for Z.ai, or `open.bigmodel.cn` for Zhipu:
+**GLM.** The HUD reads the key Z.ai's setup puts in `~/.claude/settings.json` (`ANTHROPIC_BASE_URL` on `z.ai` or `bigmodel.cn`, with `ANTHROPIC_AUTH_TOKEN`) and sends it only to that provider's own quota host. To use a different key, store it with `api.z.ai` as the account for Z.ai, or `open.bigmodel.cn` for Zhipu; a stored key wins:
 
 ```bash
 security add-generic-password -s "Usage HUD GLM" -a api.z.ai -w
@@ -54,7 +54,7 @@ macOS asks for the key without echoing it. Z.ai reports credit windows (`CREDIT_
 
 **Gemini.** The app reads `~/.gemini/oauth_creds.json` and never renews or rewrites it. Google access tokens are short-lived, so when the token has expired the battery keeps its last reading as cached until you next use `gemini`. API-key and Vertex sign-ins are not supported.
 
-**Grok.** Set `USAGE_HUD_GROK_CLI` to an absolute path if `grok` is not in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin` or the app's PATH.
+**Grok.** Set `USAGE_HUD_GROK_CLI` to an absolute path if `grok` is not in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.npm-global/bin`, `~/.bun/bin`, `~/.volta/bin`, an nvm Node version or the app's PATH. Codex is found the same way.
 
 The Gemini quota endpoint, the Z.ai monitor endpoint and Grok's billing RPC are not documented public APIs. Field handling is defensive, and these adapters were written from fixtures rather than live accounts.
 

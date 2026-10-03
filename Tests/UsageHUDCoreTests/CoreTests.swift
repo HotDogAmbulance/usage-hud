@@ -309,7 +309,7 @@ final class CoreTests {
             if url.host == "api.z.ai" { throw HTTPFailure(status: 401) }
             return ["data": ["limits": [["type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 10]]]]
         }
-        let provider = GLMProvider(cache: cache, credentials: credentials, http: http)
+        let provider = GLMProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
         expectFalse(provider.shown())
         try provider.refresh()
         expectTrue(provider.shown()); expectEqual(http.sentHeaders["Authorization"], "zai-key")
@@ -510,5 +510,39 @@ final class CoreTests {
         credentials.missing = ["absent"]
         let absent = try credentials.stored(service: "absent", account: nil), present = try credentials.stored(service: "present", account: nil)
         expectNil(absent); expectEqual(present, "fixture")
+    }
+    /// An app opened from Finder has a bare PATH; npm and nvm installs must still be found and able to reach node.
+    func testCLIsFoundOutsideTheAppsBarePATH() throws {
+        let old = root.appendingPathComponent(".nvm/versions/node/v9.0.0/bin"), new = root.appendingPathComponent(".nvm/versions/node/v22.1.0/bin")
+        for folder in [old, new] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let file = folder.appendingPathComponent("usagehud-fake-cli")
+            try "#!/bin/sh\n".write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
+        let found = CLI.find("usagehud-fake-cli", home: root, environment: ["PATH": "/usr/bin:/bin"])
+        expectEqual(found?.path, new.appendingPathComponent("usagehud-fake-cli").path)
+        expectEqual(CLI.environment(for: found!, ["PATH": "/usr/bin:/opt/homebrew/bin:/bin"])["PATH"], new.path + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        expectEqual(CLI.find("usagehud-fake-cli", configured: old.appendingPathComponent("usagehud-fake-cli").path, home: root, environment: [:])?.path,
+                    old.appendingPathComponent("usagehud-fake-cli").path)
+        expectNil(CLI.find("usagehud-fake-cli", configured: "relative/cli", home: root.appendingPathComponent("none"), environment: [:]))
+    }
+    /// GLM Coding Plan users already gave Claude Code their key; a lookalike domain gets nothing.
+    func testGLMKeyComesFromClaudeCodeSettings() throws {
+        credentials.missing = [GLMProvider.service]
+        let settings = root.appendingPathComponent(".claude")
+        try FileManager.default.createDirectory(at: settings, withIntermediateDirectories: true)
+        try "{\"env\":{\"ANTHROPIC_BASE_URL\":\"https://open.bigmodel.cn/api/anthropic\",\"ANTHROPIC_AUTH_TOKEN\":\"cc-key\"}}"
+            .write(to: settings.appendingPathComponent("settings.json"), atomically: true, encoding: .utf8)
+        http.handler = { url in
+            expectEqual(url.host, "open.bigmodel.cn")
+            return ["data": ["limits": [["type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 20]]]]
+        }
+        try GLMProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:]).refresh()
+        expectEqual(http.sentHeaders["Authorization"], "cc-key")
+        let none = root.appendingPathComponent("none")
+        expectEqual(GLMProvider.found(home: none, environment: ["ANTHROPIC_BASE_URL": "https://evilz.ai/api", "ANTHROPIC_AUTH_TOKEN": "x"]), [:])
+        expectEqual(GLMProvider.found(home: none, environment: ["ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic", "ANTHROPIC_API_KEY": "y"]), ["api.z.ai": "y"])
+        expectEqual(GLMProvider.found(home: none, environment: ["ANTHROPIC_BASE_URL": "https://api.anthropic.com", "ANTHROPIC_AUTH_TOKEN": "z"]), [:])
     }
 }

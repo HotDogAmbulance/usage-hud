@@ -98,18 +98,10 @@ final class CodexProvider: UsageProvider {
         return windows
     }
     func refresh() throws {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let environment = ProcessInfo.processInfo.environment
-        let configured = environment["USAGE_HUD_CODEX_CLI"] ?? Bundle.main.object(forInfoDictionaryKey: "UsageHUDCodexCLI") as? String
-        let candidates = [configured].compactMap { $0 } +
-            [home.appendingPathComponent(".local/bin/codex").path, "/opt/homebrew/bin/codex", "/usr/local/bin/codex"] +
-            (environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/codex" }
-        guard let path = candidates.first(where: { $0.hasPrefix("/") && FileManager.default.isExecutableFile(atPath: $0) }) else {
-            throw HUDProblem("Install Codex CLI and sign in with codex login")
-        }
-        let binary = URL(fileURLWithPath: path)
-        var env = ProcessInfo.processInfo.environment
-        env["CODEX_HOME"] = env["CODEX_HOME"] ?? home.appendingPathComponent(".codex").path
+        let configured = ProcessInfo.processInfo.environment["USAGE_HUD_CODEX_CLI"] ?? Bundle.main.object(forInfoDictionaryKey: "UsageHUDCodexCLI") as? String
+        guard let binary = CLI.find("codex", configured: configured) else { throw HUDProblem("Install Codex CLI and sign in with codex login") }
+        var env = CLI.environment(for: binary)
+        env["CODEX_HOME"] = env["CODEX_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
         let rpc = try RPCProcess(binary: binary, arguments: ["app-server", "--stdio"], environment: env)
         defer { rpc.stop() }
         try rpc.send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "usage_hud", "version": "2.0"]]])

@@ -1,16 +1,32 @@
 import Foundation
 
-/// Z.ai / Zhipu GLM Coding Plan. The API key lives in the Keychain under `GLMProvider.service`,
-/// with the API host as the account, so the international and mainland endpoints both work.
+/// Z.ai / Zhipu GLM Coding Plan. The key is the one Claude Code already uses for Z.ai, or one stored in the Keychain
+/// under `GLMProvider.service` with the API host as the account, so the international and mainland endpoints both work.
 final class GLMProvider: UsageProvider {
     let id = "glm", name = "GLM", automatic = true
     static let service = "Usage HUD GLM"
     static let hosts = ["api.z.ai", "open.bigmodel.cn"]
     let cache: Cache, credentials: CredentialReading, http: HTTPReading
-    init(cache: Cache, credentials: CredentialReading, http: HTTPReading) {
-        self.cache = cache; self.credentials = credentials; self.http = http
+    let home: URL, environment: [String: String]
+    init(cache: Cache, credentials: CredentialReading, http: HTTPReading,
+         home: URL = FileManager.default.homeDirectoryForCurrentUser, environment: [String: String] = ProcessInfo.processInfo.environment) {
+        self.cache = cache; self.credentials = credentials; self.http = http; self.home = home; self.environment = environment
     }
     func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("glm.json").path) }
+    /// Z.ai's setup points Claude Code at its Anthropic-compatible endpoint, so that key is the plan's key, keyed by our API host.
+    /// The key only ever goes to our fixed host, never to the URL found beside it.
+    static func found(home: URL, environment: [String: String]) -> [String: String] {
+        let settings = (try? Data(contentsOf: home.appendingPathComponent(".claude/settings.json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+        var keys: [String: String] = [:]
+        for source in [environment, dict(dict(settings)["env"]).compactMapValues { $0 as? String }] {
+            guard let base = URL(string: source["ANTHROPIC_BASE_URL"] ?? "")?.host?.lowercased(),
+                  let key = source["ANTHROPIC_AUTH_TOKEN"] ?? source["ANTHROPIC_API_KEY"], !key.isEmpty,
+                  let host = hosts.first(where: { let domain = $0.split(separator: ".").suffix(2).joined(separator: ".")
+                                                  return base == domain || base.hasSuffix("." + domain) }) else { continue }
+            keys[host] = keys[host] ?? key
+        }
+        return keys
+    }
     static func windows(_ response: JSON) throws -> JSON {
         if response["success"] as? Bool == false { throw HUDProblem("GLM quota unavailable: " + (response["msg"] as? String ?? "unknown error")) }
         let limits = dict(response["data"])["limits"] as? [JSON] ?? []
@@ -30,9 +46,10 @@ final class GLMProvider: UsageProvider {
         return windows
     }
     func refresh() throws {
-        var lastProblem = HUDProblem("Add a GLM Coding Plan API key to the Keychain; see PROVIDERS.md")
+        var lastProblem = HUDProblem("Set up GLM in Claude Code, or add its API key to the Keychain; see PROVIDERS.md")
+        let found = Self.found(home: home, environment: environment)
         for host in Self.hosts {
-            guard let key = try credentials.stored(service: Self.service, account: host) else { continue }
+            guard let key = try credentials.stored(service: Self.service, account: host) ?? found[host] else { continue }
             let data: JSON
             do {
                 // Z.ai expects the raw key, without a Bearer prefix.
@@ -128,15 +145,10 @@ final class GrokProvider: UsageProvider {
         return ["month": ["used_percentage": used / limit * 100, "resets_at": resetTime(dict(billing["billingCycle"])["billingPeriodEnd"]) as Any? ?? NSNull()]]
     }
     func refresh() throws {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let environment = ProcessInfo.processInfo.environment
-        let candidates = [environment["USAGE_HUD_GROK_CLI"]].compactMap { $0 } +
-            [home.appendingPathComponent(".local/bin/grok").path, "/opt/homebrew/bin/grok", "/usr/local/bin/grok"] +
-            (environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/grok" }
-        guard let path = candidates.first(where: { $0.hasPrefix("/") && FileManager.default.isExecutableFile(atPath: $0) }) else {
+        guard let binary = CLI.find("grok", configured: ProcessInfo.processInfo.environment["USAGE_HUD_GROK_CLI"]) else {
             throw HUDProblem("Install Grok CLI and sign in with grok login")
         }
-        let rpc = try RPCProcess(binary: URL(fileURLWithPath: path), arguments: ["agent", "stdio"], environment: environment)
+        let rpc = try RPCProcess(binary: binary, arguments: ["agent", "stdio"], environment: CLI.environment(for: binary))
         defer { rpc.stop() }
         rpc.errorMessage = "Grok billing unavailable; check grok login"
         let capabilities: JSON = ["fs": ["readTextFile": false, "writeTextFile": false], "terminal": false]
