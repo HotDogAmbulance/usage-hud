@@ -10,13 +10,19 @@ Built for macOS, entirely in Swift. Small enough to stay out of the way.
 
 Using Codex Pro or Claude Pro/Max? [Here’s how your plan is displayed and how to set it up](PAID_PLANS.md). The same app adapts to your account’s reported windows.
 
-Each provider has its own color: teal for Codex, terracotta for Claude, pale violet for OpenRouter, blue for GLM, gold for Gemini and silver for Grok.
+Each provider has its own color: teal for Codex, terracotta for Claude, poison green for OpenRouter, white for GLM (Z.ai's mark), Google's four colours for Gemini, silver for Grok, warm grey for Vercel, DeepSeek's whale blue and Kimi's azure.
 
 For Codex and Claude, the number is the **percentage remaining** in your 5-hour window. The stronger color follows that reading. Behind it, a lighter shade shows what remains for the week. Grey is the unused part of the battery. The digits are cut out of the fill, so your menu-bar background shows through, just like the reference Mac battery. When the week has less left than the 5-hour window, the 5-hour fill covers it: hover over a battery to see the weekly reading on its own, in that same lighter shade. It returns to the 5-hour view when the pointer moves away.
 
 If the 5-hour reading is unavailable or its window has reset, the battery falls back to the latest 7-day reading. Older readings look dimmer, and the menu tells you when you’re seeing cached information. Click any battery to see the individual windows, reset times, and refresh controls.
 
-OpenRouter shows **dollars left**. Its pale violet body gives the balance a readable home; the fill doesn’t represent a percentage. Any OpenAI API credit estimate lives separately in the Codex menu.
+OpenRouter shows **dollars left**. Its pale green body gives the balance a readable home; the fill doesn’t represent a percentage. Whole amounts keep the standard battery size; cents stretch the body to fit. Any OpenAI API credit estimate lives separately in the Codex menu.
+
+At most three batteries sit in the menu bar, so a crowded bar or the notch never hides one silently. The ones you used most recently stay; the rest fold into a small **+N** item, and resting the pointer on it opens their batteries and menus. To show more or fewer, run `defaults write local.usage-hud visibleBatteries 4`.
+
+On a light menu bar the batteries switch to dark outlines, and pale colours deepen so white and silver stay visible. Claude's extra usage (spent, cap, or Off) appears in the hover text with any other money rows.
+
+When a newer release is published on GitHub, every battery menu offers **Update available**. Usage endpoints change without notice, so this is how fixes reach you.
 
 ## Make it at home on your Mac
 
@@ -56,6 +62,7 @@ The app has no third-party packages or interpreter to install. The code is split
 | `Sources/UsageHUDCore` | Models, cache, provider protocol, networking, and CLI |
 | `Providers.swift` | Codex, Claude, and OpenRouter adapters |
 | `CodingPlans.swift` | Optional GLM, Gemini and Grok adapters, shown once signed in |
+| `Balances.swift` | Optional Vercel AI Gateway, DeepSeek and Kimi money balances |
 | `OpenAICredits.swift` | Separate API credit accounting |
 | `Tests` | Native Swift checks |
 

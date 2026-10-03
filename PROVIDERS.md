@@ -48,6 +48,24 @@ macOS asks for the key without echoing it. Z.ai reports credit windows (`CREDIT_
 
 The Gemini quota endpoint, the Z.ai monitor endpoint and Grok's billing RPC are not documented public APIs. Field handling is defensive, and these adapters were written from fixtures rather than live accounts.
 
+## Vercel AI Gateway, DeepSeek and Kimi balances
+
+Like OpenRouter, these show **money left** rather than a percentage. Each stays hidden until its first successful read and then refreshes in the background. All three use the provider's documented balance endpoint.
+
+| Battery | Endpoint | Keychain account |
+| --- | --- | --- |
+| Vercel | `GET https://ai-gateway.vercel.sh/v1/credits` (USD) | `ai-gateway.vercel.sh` |
+| DeepSeek | `GET https://api.deepseek.com/user/balance` (USD, or CNY shown as ¥) | `api.deepseek.com` |
+| Kimi (Moonshot) | `GET https://api.moonshot.ai/v1/users/me/balance` (USD) or `api.moonshot.cn` (CNY) | `api.moonshot.ai` or `api.moonshot.cn` |
+
+Store the API key once; macOS asks for it without echoing:
+
+```bash
+security add-generic-password -s "Usage HUD Vercel" -a ai-gateway.vercel.sh -w
+security add-generic-password -s "Usage HUD DeepSeek" -a api.deepseek.com -w
+security add-generic-password -s "Usage HUD Kimi" -a api.moonshot.ai -w
+```
+
 ## OpenAI API credit estimate
 
 `~/.usage-hud/credits.json` can select a restricted organization Admin key:

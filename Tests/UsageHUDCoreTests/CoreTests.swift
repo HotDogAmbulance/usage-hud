@@ -336,4 +336,65 @@ final class CoreTests {
         let panels = Engine(root: root, credentials: credentials, http: http).panels()
         expectEqual(panels.map(\.id), ["codex", "claude", "openrouter"])
     }
+
+    func testBalanceParsers() throws {
+        let vercel = try BalanceProvider.vercelBalance(["balance": "95.50", "total_used": "4.50"], "ai-gateway.vercel.sh")
+        expectEqual(vercel.0, 95.5); expectEqual(vercel.1, "$")
+        let deepSeek = try BalanceProvider.deepSeekBalance(["is_available": true, "balance_infos": [
+            ["currency": "CNY", "total_balance": "110.00"], ["currency": "USD", "total_balance": "12.30"]]], "api.deepseek.com")
+        expectEqual(deepSeek.0, 12.3); expectEqual(deepSeek.1, "$")
+        let yuan = try BalanceProvider.deepSeekBalance(["balance_infos": [["currency": "CNY", "total_balance": "110.00"]]], "api.deepseek.com")
+        expectEqual(yuan.1, "¥")
+        let kimi = try BalanceProvider.kimiBalance(["code": 0, "data": ["available_balance": 49.58894]], "api.moonshot.cn")
+        expectEqual(kimi.0, 49.58894); expectEqual(kimi.1, "¥")
+        expectError(try BalanceProvider.vercelBalance([:], "ai-gateway.vercel.sh"))
+    }
+    func testBalanceProviderFallsBackToSecondHostAndShowsMoney() throws {
+        http.handler = { url in
+            if url.host == "api.moonshot.ai" { throw HTTPFailure(status: 401) }
+            return ["data": ["available_balance": 3.5]]
+        }
+        let provider = BalanceProvider.kimi(cache: cache, credentials: credentials, http: http)
+        expectFalse(provider.shown())
+        try provider.refresh()
+        expectTrue(provider.shown())
+        expectEqual(provider.panel().windows.first?.label, "Kimi")
+        expectEqual(provider.panel().windows.first?.right, "¥3.50 left")
+    }
+    func testShelfKeepsMostRecentlyUsedBatteries() {
+        func quota(_ id: String, _ pct: Double) -> Panel { Panel(id: id, name: id, windows: [Window(label: "5h", pct: pct)]) }
+        func balance(_ id: String, _ right: String) -> Panel { Panel(id: id, name: id, windows: [Window(label: id, right: right)]) }
+        var shelf = Shelf()
+        let ids = ["codex", "claude", "openrouter", "glm", "kimi"]
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "claude", "openrouter"])
+        expectEqual(shelf.arrange(ids, limit: 3).hidden, ["glm", "kimi"])
+        expectEqual(shelf.arrange(["codex", "claude"], limit: 3).hidden, [])
+        // First sightings and falling quota (a window reset) are not use.
+        shelf.observe(quota("glm", 40), now: 10); shelf.observe(balance("kimi", "¥9.00 left"), now: 10)
+        shelf.observe(quota("glm", 5), now: 20)
+        expectEqual(shelf.arrange(ids, limit: 3).hidden, ["glm", "kimi"])
+        // Rising quota and a falling balance are.
+        shelf.observe(quota("glm", 12), now: 30)
+        shelf.observe(balance("kimi", "¥8.75 left"), now: 40)
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "glm", "kimi"])
+        expectEqual(shelf.arrange(ids, limit: 3).hidden, ["claude", "openrouter"])
+        expectEqual(Shelf.level(balance("vercel", "$1026.25 left")), -1026.25)
+    }
+    func testClaudeExtraUsageInMinorUnits() throws {
+        try seed()
+        try cache.merge("claude.json", ["usage_credits": ["is_enabled": true, "monthly_limit": 5000, "used_credits": 1234,
+                                                          "utilization": 24.68, "currency": "USD", "decimal_places": 2]])
+        let provider = ClaudeProvider(cache: cache, credentials: credentials, http: http)
+        expectEqual(provider.panel().windows.first { $0.label == "extra usage" }?.right, "$12.34 of $50.00 this month · 25%")
+        try cache.merge("claude.json", ["usage_credits": ["is_enabled": true, "monthly_limit": NSNull(), "used_credits": 250]])
+        expectEqual(provider.panel().windows.first { $0.label == "extra usage" }?.right, "$2.50 spent this month")
+        try cache.merge("claude.json", ["usage_credits": ["is_enabled": false, "user_disabled": true, "used_credits": NSNull()]])
+        expectEqual(provider.panel().windows.first { $0.label == "extra usage" }?.right, "Off")
+    }
+    func testUpdateTagsCompareNumerically() {
+        expectTrue(Updates.isNewer("v2.10", than: "2.9")); expectTrue(Updates.isNewer("2.1.1", than: "2.1"))
+        expectFalse(Updates.isNewer("v2.1", than: "2.1")); expectFalse(Updates.isNewer("v2.0.9", than: "2.1"))
+        expectEqual(Updates.newer(["tag_name": "v2.2", "html_url": "https://github.com/o/r/releases/tag/v2.2"], than: "2.1")?.tag, "v2.2")
+        expectNil(Updates.newer(["tag_name": "v2.1", "html_url": "https://github.com/o/r"], than: "2.1"))
+    }
 }
