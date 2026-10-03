@@ -60,7 +60,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         let weekly = panel.windows.first(where: {$0.label == "7d" && $0.label != quota?.label && $0.pct != nil})
         let weeklyValid = weekly != nil
         let weeklyRemaining = weeklyValid ? min(100, max(0, 100 - (weekly?.pct ?? 0))) : 0
-        let bodyWidth: CGFloat = money != nil ? 32 : 23
+        let bodyWidth: CGFloat = 23
         let image = NSImage(size: NSSize(width: bodyWidth + 5, height: 22))
         image.lockFocus()
         let body = NSBezierPath(roundedRect: NSRect(x: 1, y: 4, width: bodyWidth, height: 13), xRadius: 3.5, yRadius: 3.5)
@@ -88,7 +88,10 @@ final class HUD: NSObject, NSApplicationDelegate {
         NSColor.white.withAlphaComponent(0.40).setFill()
         NSBezierPath(roundedRect: NSRect(x: bodyWidth + 2, y: 8, width: 2, height: 5), xRadius: 1, yRadius: 1).fill()
         // Native battery digits are taller and lighter than a semibold status label.
-        let font = NSFont.monospacedDigitSystemFont(ofSize: money != nil ? 10 : 11.5, weight: .medium)
+        let baseFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
+        let measuredWidth = (text as NSString).size(withAttributes: [.font: baseFont]).width
+        let fontSize = min(11.5, 11.5 * (bodyWidth - 2) / max(1, measuredWidth))
+        let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .medium)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
         let size = (text as NSString).size(withAttributes: attrs)
         let origin = NSPoint(x: 1 + bodyWidth/2-size.width/2, y: 10.5-size.height/2)
@@ -163,6 +166,8 @@ if CommandLine.arguments.contains("--self-test") {
         delegate.render(panel)
         precondition(delegate.items[id]?.menu?.items.allSatisfy{!$0.title.contains("note")} == true)
         let battery = delegate.icon(panel)
+        precondition(battery.size == NSSize(width: 28, height: 22))
+        precondition(delegate.items[id]?.length == 32)
         battery.draw(in: NSRect(x: CGFloat(index*48), y: 11, width: battery.size.width, height: 22))
     }
     image.unlockFocus()
