@@ -87,7 +87,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         NSGraphicsContext.restoreGraphicsState()
         NSColor.white.withAlphaComponent(0.40).setFill()
         NSBezierPath(roundedRect: NSRect(x: bodyWidth + 2, y: 8, width: 2, height: 5), xRadius: 1, yRadius: 1).fill()
-        let font = NSFont.systemFont(ofSize: money != nil ? 9.5 : 10.5, weight: .semibold)
+        // Native battery digits are taller and lighter than a semibold status label.
+        let font = NSFont.monospacedDigitSystemFont(ofSize: money != nil ? 10 : 11.5, weight: .medium)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
         let size = (text as NSString).size(withAttributes: attrs)
         let origin = NSPoint(x: 1 + bodyWidth/2-size.width/2, y: 10.5-size.height/2)
