@@ -53,12 +53,20 @@ final class ClaudeProvider: UsageProvider {
         let blob = cache.read("claude.json")
         var rows = quotaWindows(blob)
         let credits = dict(blob["usage_credits"])
-        if credits["is_enabled"] as? Bool == true, let limit = number(credits["monthly_limit"]), limit > 0,
-           let used = number(credits["used_credits"]) {
-            let scale = limit >= 500 ? 100.0 : 1.0
-            let percent = number(credits["utilization"]) ?? used / limit * 100
-            rows.append(Window(label: "credits", right: "\(usd(used / scale)) of \(usd(limit / scale)) · \(Int(percent.rounded()))%",
-                               stale: Date().timeIntervalSince1970 - (number(credits["captured_at"]) ?? 0) > 21600))
+        let old = Date().timeIntervalSince1970 - (number(credits["captured_at"]) ?? 0) > 21600
+        if credits["is_enabled"] as? Bool == true, let used = number(credits["used_credits"]) {
+            // Amounts are in minor units; `decimal_places` says how many, and cents when it is absent.
+            let scale = pow(10, number(credits["decimal_places"]) ?? 2)
+            let code = credits["currency"] as? String ?? "USD"
+            let money = { (value: Double) in (code == "USD" ? "$" : code + " ") + String(format: "%.2f", value / scale) }
+            if let limit = number(credits["monthly_limit"]), limit > 0 {
+                let percent = number(credits["utilization"]) ?? used / limit * 100
+                rows.append(Window(label: "extra usage", right: "\(money(used)) of \(money(limit)) this month · \(Int(percent.rounded()))%", stale: old))
+            } else {
+                rows.append(Window(label: "extra usage", right: "\(money(used)) spent this month", stale: old))
+            }
+        } else if credits["user_disabled"] as? Bool == true || credits["credits_ever_enabled"] as? Bool == true {
+            rows.append(Window(label: "extra usage", right: "Off", stale: old))
         }
         return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Refresh Claude to read quota" : "")
     }

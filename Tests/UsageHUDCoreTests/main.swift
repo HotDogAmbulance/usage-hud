@@ -63,7 +63,9 @@ let cases: [(String, () throws -> Void)] = [
     ("testUnusedPlansStayOutOfMenuBar", test.testUnusedPlansStayOutOfMenuBar),
     ("testBalanceParsers", test.testBalanceParsers),
     ("testBalanceProviderFallsBackToSecondHostAndShowsMoney", test.testBalanceProviderFallsBackToSecondHostAndShowsMoney),
-    ("testShelfKeepsMostRecentlyUsedBatteries", test.testShelfKeepsMostRecentlyUsedBatteries)
+    ("testShelfKeepsMostRecentlyUsedBatteries", test.testShelfKeepsMostRecentlyUsedBatteries),
+    ("testClaudeExtraUsageInMinorUnits", test.testClaudeExtraUsageInMinorUnits),
+    ("testUpdateTagsCompareNumerically", test.testUpdateTagsCompareNumerically)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }
