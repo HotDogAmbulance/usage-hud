@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add optional GLM Coding Plan, Gemini CLI and Grok CLI batteries. Each appears only after its first successful read; see PROVIDERS.md for setup.
+
 ## 2.0.1 — 2026-10-03
 
 - Use transparent cutout digits and the system semibold font, matching the macOS battery reference.

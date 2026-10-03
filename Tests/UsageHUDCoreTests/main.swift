@@ -52,7 +52,15 @@ let cases: [(String, () throws -> Void)] = [
     ("testLongContextConservativeAggregation", test.testLongContextConservativeAggregation),
     ("testUnsupportedAccountingFailsClosed", test.testUnsupportedAccountingFailsClosed),
     ("testCreditReconciliationUsesGreaterSpendAndMemoizesCredential", test.testCreditReconciliationUsesGreaterSpendAndMemoizesCredential),
-    ("testPaginationCycleRejected", test.testPaginationCycleRejected)
+    ("testPaginationCycleRejected", test.testPaginationCycleRejected),
+    ("testGLMCreditWindowsBecomeFiveHourAndWeek", test.testGLMCreditWindowsBecomeFiveHourAndWeek),
+    ("testGLMLegacyTokensLimitIsFiveHour", test.testGLMLegacyTokensLimitIsFiveHour),
+    ("testGLMSendsRawKeyAndTriesMainlandHost", test.testGLMSendsRawKeyAndTriesMainlandHost),
+    ("testGeminiFamiliesKeepTightestPool", test.testGeminiFamiliesKeepTightestPool),
+    ("testExpiredGeminiNeverCallsNetwork", test.testExpiredGeminiNeverCallsNetwork),
+    ("testGeminiPostsProjectFromTier", test.testGeminiPostsProjectFromTier),
+    ("testGrokMonthlyBillingInCents", test.testGrokMonthlyBillingInCents),
+    ("testUnusedPlansStayOutOfMenuBar", test.testUnusedPlansStayOutOfMenuBar)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }

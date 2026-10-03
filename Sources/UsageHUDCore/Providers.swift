@@ -6,7 +6,10 @@ protocol UsageProvider {
     var automatic: Bool { get }
     func refresh() throws
     func panel() -> Panel
+    /// Optional providers stay out of the menu bar until they have read a quota once.
+    func shown() -> Bool
 }
+extension UsageProvider { func shown() -> Bool { true } }
 final class ClaudeProvider: UsageProvider {
     let id = "claude", name = "Claude", automatic = true
     let cache: Cache, credentials: CredentialReading, http: HTTPReading

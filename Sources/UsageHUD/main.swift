@@ -42,6 +42,9 @@ final class HUD: NSObject, NSApplicationDelegate {
         switch id {
         case "codex": return NSColor(srgbRed: 0.40, green: 0.82, blue: 0.74, alpha: 1)
         case "claude": return NSColor(srgbRed: 0.85, green: 0.58, blue: 0.45, alpha: 1)
+        case "glm": return NSColor(srgbRed: 0.42, green: 0.60, blue: 0.98, alpha: 1)
+        case "gemini": return NSColor(srgbRed: 0.95, green: 0.76, blue: 0.32, alpha: 1)
+        case "grok": return NSColor(srgbRed: 0.80, green: 0.80, blue: 0.84, alpha: 1)
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
         }
     }

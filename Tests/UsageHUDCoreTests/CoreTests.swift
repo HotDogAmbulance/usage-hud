@@ -12,9 +12,14 @@ final class FakeHTTP: HTTPReading {
     var error: Error?
     var handler: ((URL) throws -> JSON)?
     func get(_ url: URL, token: String, headers: [String: String], limit: Int) throws -> JSON {
-        calls += 1
+        calls += 1; sentHeaders = headers
         if let error = error { throw error }
         return try handler?(url) ?? response
+    }
+    var bodies: [JSON] = [], sentHeaders: [String: String] = [:]
+    func post(_ url: URL, token: String, headers: [String: String], body: JSON, limit: Int) throws -> JSON {
+        bodies.append(body)
+        return try get(url, token: token, headers: headers, limit: limit)
     }
 }
 struct FakeProvider: UsageProvider {
@@ -260,5 +265,75 @@ final class CoreTests {
     func testPaginationCycleRejected() throws {
         http.response = ["data": [], "has_more": true, "next_page": "same"]
         expectError(try OpenAICredits(cache: cache, credentials: credentials, http: http).pages(path: "costs", start: 1, end: 2, usage: false, token: "fixture"))
+    }
+
+    func testGLMCreditWindowsBecomeFiveHourAndWeek() throws {
+        let windows = try GLMProvider.windows(["success": true, "data": ["level": "lite", "limits": [
+            ["type": "TIME_LIMIT", "unit": 5, "number": 1, "percentage": 1],
+            ["type": "CREDIT_LIMIT", "unit": 6, "number": 1, "percentage": 52, "nextResetTime": 1788784466996],
+            ["type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 20, "nextResetTime": 1788351145586]]]])
+        let rows = quotaWindows(["captured_at": 1000, "rate_limits": windows], now: 1000)
+        expectEqual(rows.map(\.label), ["5h", "7d"]); expectEqual(rows.map(\.pct), [20, 52])
+        expectEqual(rows[0].resets_at, 1788351145.586)
+    }
+    func testGLMLegacyTokensLimitIsFiveHour() throws {
+        let windows = try GLMProvider.windows(["data": ["limits": [["type": "TOKENS_LIMIT", "unit": 5, "number": 1, "percentage": 66]]]])
+        expectEqual(quotaWindows(["captured_at": 1000, "rate_limits": windows], now: 1000).first?.label, "5h")
+        expectError(try GLMProvider.windows(["success": false, "msg": "invalid key"]))
+    }
+    func testGLMSendsRawKeyAndTriesMainlandHost() throws {
+        credentials.text = "zai-key"
+        http.handler = { url in
+            if url.host == "api.z.ai" { throw HTTPFailure(status: 401) }
+            return ["data": ["limits": [["type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 10]]]]
+        }
+        let provider = GLMProvider(cache: cache, credentials: credentials, http: http)
+        expectFalse(provider.shown())
+        try provider.refresh()
+        expectTrue(provider.shown()); expectEqual(http.sentHeaders["Authorization"], "zai-key")
+        expectEqual(cache.read("glm.json")["host"] as? String, "open.bigmodel.cn")
+    }
+    func testGeminiFamiliesKeepTightestPool() throws {
+        let windows = try GeminiProvider.windows(["buckets": [
+            ["modelId": "gemini-2.5-pro", "remainingFraction": 0.75, "resetTime": "2026-10-04T00:00:00Z"],
+            ["modelId": "gemini-3-pro-preview", "remainingFraction": 0.40, "resetTime": "2026-10-03T20:00:00Z"],
+            ["modelId": "gemini-2.5-flash", "remainingFraction": 0.9],
+            ["modelId": "gemini-2.5-flash-lite", "remainingFraction": 1]]])
+        expectEqual(Set(windows.keys), ["pro", "flash", "flash_lite"])
+        expectEqual(number(dict(windows["pro"])["used_percentage"]) ?? 0, 60, accuracy: 0.001)
+        expectEqual(number(dict(windows["pro"])["resets_at"]), resetTime("2026-10-03T20:00:00Z"))
+    }
+    func testExpiredGeminiNeverCallsNetwork() throws {
+        let file = root.appendingPathComponent("oauth_creds.json")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("{\"access_token\":\"fixture\",\"expiry_date\":1}".utf8).write(to: file)
+        expectError(try GeminiProvider(cache: cache, http: http, credentialFile: file).refresh())
+        expectEqual(http.calls, 0)
+    }
+    func testGeminiPostsProjectFromTier() throws {
+        let file = root.appendingPathComponent("oauth_creds.json")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("{\"access_token\":\"fixture\"}".utf8).write(to: file)
+        http.handler = { url in url.absoluteString.hasSuffix("loadCodeAssist") ?
+            ["cloudaicompanionProject": "proj-1", "currentTier": ["name": "Gemini Code Assist"]] :
+            ["buckets": [["modelId": "gemini-2.5-pro", "remainingFraction": 0.5]]] }
+        let provider = GeminiProvider(cache: cache, http: http, credentialFile: file)
+        try provider.refresh()
+        expectEqual(http.bodies.last?["project"] as? String, "proj-1")
+        expectEqual(provider.panel().note, "Plan: Gemini Code Assist")
+        expectEqual(provider.panel().windows.first?.pct, 50)
+    }
+    func testGrokMonthlyBillingInCents() throws {
+        let billing: JSON = ["monthlyLimit": ["val": 5000], "usage": ["totalUsed": ["val": 1250]],
+                             "billingCycle": ["billingPeriodEnd": "2026-11-01T00:00:00Z"]]
+        let windows = try GrokProvider.windows(billing)
+        expectEqual(number(dict(windows["month"])["used_percentage"]), 25)
+        try cache.quota("grok.json", windows: windows, extra: ["spent_cents": 1250, "limit_cents": 5000])
+        expectEqual(GrokProvider(cache: cache).panel().windows.last?.right, "$12.50 of $50.00 this month")
+        expectError(try GrokProvider.windows(["usage": ["totalUsed": ["val": 1]]]))
+    }
+    func testUnusedPlansStayOutOfMenuBar() {
+        let panels = Engine(root: root, credentials: credentials, http: http).panels()
+        expectEqual(panels.map(\.id), ["codex", "claude", "openrouter"])
     }
 }
