@@ -145,14 +145,15 @@ final class OpenRouterProvider: UsageProvider {
     let id = "openrouter", name = "OpenRouter"
     /// A management key lists every key on the account, so a team lead adds one secret instead of each person's.
     static let teamService = "Usage HUD OpenRouter Team"
-    /// Refreshes in the background once anything is configured.
-    var automatic: Bool { teamKey() != nil || (try? configuredSlots().isEmpty == false) == true }
+    /// Refreshes in the background; with nothing configured it stays hidden and quiet.
+    let automatic = true
     /// Hidden until its first read, so people without OpenRouter don't spend a menu bar slot on it.
     func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("openrouter.json").path) }
-    func teamKey() -> String? { try? credentials.password(service: Self.teamService, account: "openrouter.ai") }
     let cache: Cache, credentials: CredentialReading, http: HTTPReading
-    init(cache: Cache, credentials: CredentialReading, http: HTTPReading) {
-        self.cache = cache; self.credentials = credentials; self.http = http
+    let home: URL, environment: [String: String]
+    init(cache: Cache, credentials: CredentialReading, http: HTTPReading,
+         home: URL = FileManager.default.homeDirectoryForCurrentUser, environment: [String: String] = ProcessInfo.processInfo.environment) {
+        self.cache = cache; self.credentials = credentials; self.http = http; self.home = home; self.environment = environment
     }
     static func slots(_ array: Any) throws -> [RouterSlot] {
         guard let values = array as? [JSON] else { throw HUDProblem("Invalid provider slots") }
@@ -166,10 +167,15 @@ final class OpenRouterProvider: UsageProvider {
         }
     }
     func configuredSlots() throws -> [RouterSlot] {
-        let env = ProcessInfo.processInfo.environment
+        let env = environment
         let data = env["USAGE_HUD_PROVIDER_SLOTS"].flatMap { $0.data(using: .utf8) } ?? (try? Data(contentsOf: cache.root.appendingPathComponent("providers.json")))
         if let data = data { return try Self.slots(JSONSerialization.jsonObject(with: data)) }
-        guard let service = env["USAGE_HUD_OPENROUTER_SERVICE"], let pairs = env["USAGE_HUD_OPENROUTER_KEYS"] else { return [] }
+        guard let service = env["USAGE_HUD_OPENROUTER_SERVICE"], let pairs = env["USAGE_HUD_OPENROUTER_KEYS"] else {
+            // Nothing configured: use the keys already on this Mac.
+            return KeyFinder.find(in: KeyFinder.places(home: home), environment: env).map {
+                RouterSlot(id: "found-" + $0.label, label: $0.label, sources: [["provider": "openrouter", "found": $0.key]])
+            }
+        }
         return pairs.split(separator: ",").enumerated().compactMap { index, pair in
             let values = pair.split(separator: ":", maxSplits: 1)
             guard values.count == 2 else { return nil }
@@ -178,10 +184,13 @@ final class OpenRouterProvider: UsageProvider {
     }
     func probe(_ source: JSON) throws -> JSON {
         guard source["provider"] as? String == "openrouter" else { throw HUDProblem("Unsupported provider source") }
-        guard let service = source["service"] as? String, !service.isEmpty, let account = source["account"] as? String, !account.isEmpty else {
-            throw HUDProblem("OpenRouter source requires service and account")
+        let token: String
+        if let found = source["found"] as? String { token = found } else {
+            guard let service = source["service"] as? String, !service.isEmpty, let account = source["account"] as? String, !account.isEmpty else {
+                throw HUDProblem("OpenRouter source requires service and account")
+            }
+            token = try credentials.password(service: service, account: account)
         }
-        let token = try credentials.password(service: service, account: account)
         let key = dict(try http.get(URL(string: "https://openrouter.ai/api/v1/key")!, token: token, headers: [:], limit: 1024 * 1024)["data"])
         guard let usage = number(key["usage"]) else { throw HUDProblem("OpenRouter response missing usage") }
         var result: JSON = ["usage": max(0, usage), "limit": number(key["limit"]) as Any? ?? NSNull(),
@@ -248,7 +257,7 @@ final class OpenRouterProvider: UsageProvider {
     }
     func refresh() throws {
         let slots = try configuredSlots()
-        let team = teamKey()
+        let team = try credentials.stored(service: Self.teamService, account: "openrouter.ai")
         guard !slots.isEmpty || team != nil else { throw HUDProblem("Add an OpenRouter key; see PROVIDERS.md") }
         let previous = cache.read("openrouter.json")
         let oldRows = previous["rows"] as? [JSON] ?? []
@@ -263,7 +272,9 @@ final class OpenRouterProvider: UsageProvider {
             let old = oldRows.first(where: { $0["slot_id"] as? String == slot.id || $0["label"] as? String == slot.label }) ?? [:]
             var winner: (JSON, JSON)?
             for source in slot.sources {
-                if let result = try? probe(source) { winner = (source, result); break }
+                do { winner = (source, try probe(source)); break }
+                catch let problem as HUDProblem where problem.prompted { throw problem }
+                catch {}
             }
             if let (source, result) = winner {
                 rows.append(Self.successfulRow(slot: slot, source: source, result: result, previous: old, day: day))

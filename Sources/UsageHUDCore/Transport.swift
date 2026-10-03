@@ -72,17 +72,29 @@ final class RPCProcess {
     }
 }
 protocol CredentialReading { func password(service: String, account: String?) throws -> String }
+extension CredentialReading {
+    /// nil when nothing is stored. A Keychain prompt still surfaces, so the caller backs off instead of asking again.
+    func stored(service: String, account: String?) throws -> String? {
+        do { return try password(service: service, account: account) }
+        catch let problem as HUDProblem where problem.prompted { throw problem }
+        catch { return nil }
+    }
+}
 struct KeychainReader: CredentialReading {
     func password(service: String, account: String?) throws -> String {
         var args = ["find-generic-password", "-s", service]
         if let account = account { args += ["-a", account] }
         args.append("-w")
-        let pipe = try RPCProcess(binary: URL(fileURLWithPath: "/usr/bin/security"), arguments: args, timeout: 30)
+        let started = Date()
+        let pipe = try RPCProcess(binary: URL(fileURLWithPath: "/usr/bin/security"), arguments: args, timeout: 20)
         defer { pipe.stop() }
-        let data = try pipe.allOutput()
-        let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !text.isEmpty else { throw HUDProblem("Keychain credential unavailable") }
-        return text
+        let text = (try? pipe.allOutput()).flatMap { String(data: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard text.isEmpty else { return text }
+        // An allowed read or a missing item answers at once; a slow failure means macOS asked for the password.
+        if Date().timeIntervalSince(started) > 2 {
+            throw HUDProblem("Keychain asked for your password; choose Refresh here, then Always Allow", prompted: true)
+        }
+        throw HUDProblem("Keychain credential unavailable")
     }
 }
 protocol HTTPReading {
