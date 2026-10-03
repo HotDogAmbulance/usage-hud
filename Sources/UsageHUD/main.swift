@@ -235,7 +235,12 @@ final class HUD: NSObject, NSApplicationDelegate {
     /// `weeklyShade` draws the main fill in the same lighter tone the 7d layer uses behind 5h.
     /// `glow` washes the body in soft red, for a battery asking for attention.
     /// The digits' font, by size. `--self-test` also renders the candidates side by side in font-preview.png.
-    static var digitFont: (CGFloat) -> NSFont = { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .bold) }
+    /// macOS 27's battery uses narrow SF digits, taller and lighter than plain bold; macOS 12 has no narrow cut.
+    static var digitFont: (CGFloat) -> NSFont = { condensed($0 + 1, .bold) }
+    static func condensed(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
+        if #available(macOS 13, *) { return NSFont.systemFont(ofSize: size, weight: weight, width: .condensed) }
+        return NSFont.monospacedDigitSystemFont(ofSize: size - 1, weight: .bold)
+    }
     func icon(_ panel: Panel, weeklyShade: Bool = false, glow: CGFloat = 0) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
@@ -579,25 +584,12 @@ if CommandLine.arguments.contains("--self-test") {
     let representation = NSBitmapImageRep(data: image.tiffRepresentation!)!
     try! representation.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("battery-preview.png"))
     // Candidate digit fonts, numbered, to compare against the system battery beside them in the menu bar.
-    func proportional(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont { NSFont.systemFont(ofSize: size, weight: weight) }
-    func rounded(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
-        NSFont(descriptor: NSFont.systemFont(ofSize: size, weight: weight).fontDescriptor.withDesign(.rounded) ?? NSFont.systemFont(ofSize: size).fontDescriptor, size: size) ?? .systemFont(ofSize: size)
-    }
-    // Narrower cuts fit "100" the way the system battery does; macOS 13 added them.
-    func narrow(_ size: CGFloat, _ weight: NSFont.Weight, compressed: Bool = false) -> NSFont {
-        if #available(macOS 13, *) { return NSFont.systemFont(ofSize: size, weight: weight, width: compressed ? .compressed : .condensed) }
-        return proportional(size, weight)
-    }
+    // Around the near match (old 7, condensed heavy): lighter strokes and taller digits, like macOS 27's own.
     let candidates: [(String, (CGFloat) -> NSFont)] = [
-        ("1 bold, fixed digits (now)", { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .bold) }),
-        ("2 rounded semibold", { rounded($0, .semibold) }), ("3 rounded medium", { rounded($0, .medium) }),
-        ("4 rounded bold", { rounded($0, .bold) }),
-        ("5 condensed semibold", { narrow($0, .semibold) }),
-        ("6 condensed bold", { narrow($0, .bold) }),
-        ("7 condensed heavy", { narrow($0, .heavy) }),
-        ("8 compressed semibold", { narrow($0, .semibold, compressed: true) }),
-        ("9 compressed bold", { narrow($0, .bold, compressed: true) }),
-        ("10 compressed heavy", { narrow($0, .heavy, compressed: true) })]
+        ("1 condensed heavy (old 7)", { HUD.condensed($0, .heavy) }), ("2 condensed bold", { HUD.condensed($0, .bold) }),
+        ("3 cond. bold +0.5pt", { HUD.condensed($0 + 0.5, .bold) }), ("4 cond. bold +1pt (now)", { HUD.condensed($0 + 1, .bold) }),
+        ("5 cond. semibold +0.5pt", { HUD.condensed($0 + 0.5, .semibold) }), ("6 cond. semibold +1pt", { HUD.condensed($0 + 1, .semibold) }),
+        ("7 cond. semibold +1.5pt", { HUD.condensed($0 + 1.5, .semibold) }), ("8 cond. medium +1.5pt", { HUD.condensed($0 + 1.5, .medium) })]
     let samples = [Panel(id: "codex", name: "Codex", windows: [Window(label: "5h", pct: 30)]),
                    Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 0)]),
                    Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$26.25 left")])]
@@ -613,7 +605,7 @@ if CommandLine.arguments.contains("--self-test") {
     }
     sheet.unlockFocus()
     try! NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("font-preview.png"))
-    HUD.digitFont = candidates[0].1
+    HUD.digitFont = candidates[3].1
     print("Battery drawing and note-free menus passed; fonts: " + delegate.home.appendingPathComponent("font-preview.png").path)
     exit(0)
 }

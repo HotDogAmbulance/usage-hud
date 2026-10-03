@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Keychain prompts can't come back every few minutes, even for someone who clicks Allow instead of Always Allow: secrets stay in memory and are fetched again only when the Keychain item itself changes (its attributes are read without asking). While Claude Code's statusline reports, Claude's battery doesn't touch the Keychain at all; extra-usage credits still update hourly.
-- The font preview adds SF Pro Rounded, condensed and compressed cuts, and the self-test prints where it saved the preview.
+- Battery digits use condensed SF, 1pt taller and lighter than before, to match macOS 27's own battery; the font preview compares the nearby cuts, and the self-test prints where it saved it.
 - Antigravity groups models that share a quota into one row each ("Claude & GPT", "Gemini"), leads the battery with the tightest pool, keeps every model under All models, and folds untouched pools into one row when a plan has many. A closed Antigravity no longer pulses; its battery dims with the last reading.
 - Sign-in problems offer their fix: "Sign in to Claude again…" in the battery menu runs `claude auth login` out of sight, the browser opens, and the battery refreshes once you approve there; no Terminal, nothing to type. A CLI that needs a terminal after all gets one (through a .command file, so no Automation permission). Only commands built into the app can run.
 - An idle Claude Code token is no longer a sign-in problem: the battery keeps its last reading and heals by itself the next time Claude Code runs, including from its statusline.
