@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Codex and Grok work when the app is opened from Finder or at login: npm, nvm, bun and Volta installs are found, and each CLI runs with its own folder on PATH so `node` resolves.
+- GLM needs no setup when Claude Code already points at Z.ai or Zhipu: the key comes from `~/.claude/settings.json` and goes only to the quota host.
 - A Keychain password prompt can never repeat on its own: after one, background refreshes leave that provider alone and its battery asks you to choose Refresh (then Always Allow). OpenRouter no longer touches the Keychain just to decide whether to refresh.
 - OpenRouter needs no setup: keys already in `OPENROUTER_API_KEY`, shell profiles, AI tool configs or `.sh` scripts within three levels of home (skipping folders macOS guards) are found by their exact format and named after their variable or file. `providers.json` still overrides.
 - OpenRouter team mode: one management key lists every enabled key (paged), with a hover panel of per-key cap cells and an All keys menu. Teammates at their caps don't pulse; your own keys do. OpenRouter now refreshes in the background once a key is configured, and stays out of the menu bar until its first read.

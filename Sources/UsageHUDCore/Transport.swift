@@ -1,6 +1,28 @@
 import Foundation
 import Darwin
 
+/// The command-line tools the HUD talks to. An app opened from Finder or at login gets launchd's bare PATH, so the
+/// usual install folders are searched here, and each CLI runs with its own folder on PATH so npm's `env node` resolves.
+enum CLI {
+    static func find(_ name: String, configured: String? = nil, home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                     environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
+        let nvm = home.appendingPathComponent(".nvm/versions/node")
+        let versions = ((try? FileManager.default.contentsOfDirectory(atPath: nvm.path)) ?? [])
+            .sorted { $0.compare($1, options: .numeric) == .orderedDescending }.map { nvm.path + "/" + $0 + "/bin" }
+        let folders = [home.appendingPathComponent(".local/bin").path, "/opt/homebrew/bin", "/usr/local/bin"] +
+            (environment["PATH"] ?? "").split(separator: ":").map(String.init) +
+            [".npm-global/bin", ".bun/bin", ".volta/bin"].map { home.appendingPathComponent($0).path } + versions
+        return ([configured].compactMap { $0 } + folders.map { $0 + "/" + name })
+            .first { $0.hasPrefix("/") && FileManager.default.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
+    }
+    static func environment(for binary: URL, _ base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        var environment = base, seen = Set<String>()
+        let folders = [binary.deletingLastPathComponent().path, "/opt/homebrew/bin", "/usr/local/bin"] +
+            (base["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin").split(separator: ":").map(String.init)
+        environment["PATH"] = folders.filter { seen.insert($0).inserted }.joined(separator: ":")
+        return environment
+    }
+}
 final class RPCProcess {
     let process = Process(), input = Pipe(), output = Pipe()
     let deadline: Date
