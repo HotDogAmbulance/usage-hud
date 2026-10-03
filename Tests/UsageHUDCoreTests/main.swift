@@ -17,6 +17,9 @@ func expectError(_ action: @autoclosure () throws -> Any, file: StaticString = #
 }
 let test = CoreTests()
 let cases: [(String, () throws -> Void)] = [
+    ("testAntigravityModelQuotaAndPrivateCache", test.testAntigravityModelQuotaAndPrivateCache),
+    ("testAntigravityUnavailableKeepsLastReading", test.testAntigravityUnavailableKeepsLastReading),
+    ("testAntigravityRejectsInvalidQuotaAndParsesFlags", test.testAntigravityRejectsInvalidQuotaAndParsesFlags),
     ("testCachePrivatePermissions", test.testCachePrivatePermissions),
     ("testPartialQuotaPreservesPreviousWeekAndContext", test.testPartialQuotaPreservesPreviousWeekAndContext),
     ("testMissingFiveHourCannotBecomeFresh", test.testMissingFiveHourCannotBecomeFresh),
@@ -56,9 +59,6 @@ let cases: [(String, () throws -> Void)] = [
     ("testGLMCreditWindowsBecomeFiveHourAndWeek", test.testGLMCreditWindowsBecomeFiveHourAndWeek),
     ("testGLMLegacyTokensLimitIsFiveHour", test.testGLMLegacyTokensLimitIsFiveHour),
     ("testGLMSendsRawKeyAndTriesMainlandHost", test.testGLMSendsRawKeyAndTriesMainlandHost),
-    ("testGeminiFamiliesKeepTightestPool", test.testGeminiFamiliesKeepTightestPool),
-    ("testExpiredGeminiNeverCallsNetwork", test.testExpiredGeminiNeverCallsNetwork),
-    ("testGeminiPostsProjectFromTier", test.testGeminiPostsProjectFromTier),
     ("testGrokMonthlyBillingInCents", test.testGrokMonthlyBillingInCents),
     ("testUnusedPlansStayOutOfMenuBar", test.testUnusedPlansStayOutOfMenuBar),
     ("testBalanceParsers", test.testBalanceParsers),

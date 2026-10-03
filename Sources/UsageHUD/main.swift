@@ -128,7 +128,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         case "claude": return NSColor(srgbRed: 0.85, green: 0.58, blue: 0.45, alpha: 1)
         // Brand colours where the brand has one; black-and-white marks get light neutrals so they show on the menu bar.
         case "glm": return NSColor(srgbRed: 0.96, green: 0.96, blue: 0.97, alpha: 1)
-        case "gemini": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
+        case "antigravity": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
         case "grok": return NSColor(srgbRed: 0.80, green: 0.80, blue: 0.84, alpha: 1)
         case "vercel": return NSColor(srgbRed: 0.66, green: 0.64, blue: 0.62, alpha: 1)
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
@@ -141,7 +141,7 @@ final class HUD: NSObject, NSApplicationDelegate {
     var darkMenuBar: Bool {
         (items.values.first?.button?.effectiveAppearance ?? NSApp.effectiveAppearance).bestMatch(from: [.darkAqua, .aqua]) != .aqua
     }
-    /// Fills `rect` with the provider's tint. Gemini uses its four-colour mark, spread across the whole body.
+    /// Fills `rect` with the provider's tint. Antigravity uses its four-colour mark, spread across the whole body.
     /// On a light menu bar, pale tints are deepened and the weekly shade is softened less, so white and silver stay visible.
     func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, alpha: CGFloat, dark: Bool = true) {
         let shade = { (color: NSColor) -> NSColor in
@@ -152,7 +152,7 @@ final class HUD: NSObject, NSApplicationDelegate {
             }
             return (light ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
         }
-        guard id == "gemini" else { shade(tint(id)).setFill(); rect.fill(); return }
+        guard id == "antigravity" else { shade(tint(id)).setFill(); rect.fill(); return }
         let marks: [(CGFloat, CGFloat, CGFloat)] = [(0.19, 0.53, 1.00), (0.19, 0.53, 1.00), (0.98, 0.27, 0.26), (0.98, 0.74, 0.07), (0.03, 0.73, 0.38)]
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: rect).addClip()
@@ -315,7 +315,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         if panel.cellsTitle != nil {
             let all = NSMenu()
             for cell in panel.cells { all.addItem(withTitle: cell.label + " · " + (cell.right ?? ""), action: nil, keyEquivalent: "") }
-            menu.addItem(withTitle: "All keys (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
+            let title = panel.id == "antigravity" ? "All models" : "All keys"
+            menu.addItem(withTitle: title + " (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
         }
         menu.addItem(NSMenuItem.separator())
         let refresh = menu.addItem(withTitle: "Refresh " + panel.name, action: #selector(refreshProvider(_:)), keyEquivalent: "r")
