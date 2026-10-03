@@ -22,6 +22,8 @@ At most three batteries sit in the menu bar, so a crowded bar or the notch never
 
 On a light menu bar the batteries switch to dark outlines, and pale colours deepen so white and silver stay visible. Claude's extra usage (spent, cap, or Off) appears in the hover text with any other money rows.
 
+A battery that needs you breathes a soft red: a key rejected or signed out, an OpenRouter key near its cap, or a balance under $1 (change it with `defaults write local.usage-hud lowBalance 5`). Hover over it to read why; it stays calm until something new happens. OpenRouter keys show their own daily, weekly or monthly cap and when it resets, counted in UTC like OpenRouter itself, with the key closest to its cap first.
+
 When a newer release is published on GitHub, every battery menu offers **Update available**. Usage endpoints change without notice, so this is how fixes reach you.
 
 ## Make it at home on your Mac

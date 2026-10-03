@@ -30,6 +30,15 @@ struct FakeProvider: UsageProvider {
     func refresh() throws { if fail { throw HUDProblem("offline") } }
     func panel() -> Panel { Panel(id: id, name: name, windows: [Window(label: "5h", pct: 20)]) }
 }
+struct AlertProvider: UsageProvider {
+    let id: String
+    var name: String { id }
+    let automatic = true
+    let problem: String?
+    let right: String
+    func refresh() throws { if let problem = problem { throw HUDProblem(problem) } }
+    func panel() -> Panel { Panel(id: id, name: name, windows: [Window(label: id, right: right)]) }
+}
 final class CoreTests {
     var root: URL!, cache: Cache!, credentials: FakeCredentials!, http: FakeHTTP!
     func setUpWithError() throws {
@@ -396,5 +405,39 @@ final class CoreTests {
         expectFalse(Updates.isNewer("v2.1", than: "2.1")); expectFalse(Updates.isNewer("v2.0.9", than: "2.1"))
         expectEqual(Updates.newer(["tag_name": "v2.2", "html_url": "https://github.com/o/r/releases/tag/v2.2"], than: "2.1")?.tag, "v2.2")
         expectNil(Updates.newer(["tag_name": "v2.1", "html_url": "https://github.com/o/r"], than: "2.1"))
+    }
+    func testAlertsForRejectedKeysAndLowBalanceOnly() {
+        let engine = Engine(root: root, credentials: credentials, http: http, providers: [
+            AlertProvider(id: "a", problem: "a API key rejected", right: "$9.00 left"),
+            AlertProvider(id: "b", problem: nil, right: "$0.50 left"),
+            AlertProvider(id: "c", problem: "c balance HTTP 503", right: "$9.00 left")])
+        let panels = engine.panels(refresh: "automatic")
+        expectEqual(panels[0].alert, "a API key rejected")
+        expectEqual(panels[1].alert, "Balance low: $0.50 left")
+        expectNil(panels[2].alert)
+        engine.lowBalance = 0.25
+        expectNil(engine.panels(refresh: nil)[1].alert)
+    }
+    func testRouterKeyCapUsesOpenRouterNumbersAndAlerts() throws {
+        let config = [["id": "one", "label": "One", "sources": [["provider": "openrouter", "service": "fixture", "account": "one"]]]]
+        try JSONSerialization.data(withJSONObject: config).write(to: root.appendingPathComponent("providers.json"))
+        http.handler = { url in
+            url.path.hasSuffix("credits") ? ["data": ["total_credits": 50, "total_usage": 7]]
+                : ["data": ["usage": 120, "usage_daily": 4.6, "limit": 5, "limit_remaining": 0.4, "limit_reset": "daily"]]
+        }
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http)
+        try provider.refresh()
+        let panel = provider.panel()
+        expectEqual(panel.windows.first?.right, "$43.00 left")
+        expectTrue(panel.windows[1].right?.hasPrefix("$4.60 of $5.00 today · resets in ") == true)
+        expectEqual(panel.alert, "One: $0.40 left of its cap")
+    }
+    func testRouterCapsResetOnUTCBoundaries() {
+        let saturday = Date(timeIntervalSince1970: 1791039600) // 2026-10-03 15:00 UTC
+        expectEqual(OpenRouterProvider.nextReset("daily", after: saturday)?.timeIntervalSince1970, 1791072000)
+        expectEqual(OpenRouterProvider.nextReset("weekly", after: saturday)?.timeIntervalSince1970, 1791158400)
+        expectEqual(OpenRouterProvider.nextReset("monthly", after: saturday)?.timeIntervalSince1970, 1793491200)
+        expectNil(OpenRouterProvider.nextReset(nil, after: saturday))
+        expectEqual(Shelf().arrange(["codex", "claude", "openrouter", "kimi"], limit: 3, urgent: ["kimi"]).hidden, ["openrouter"])
     }
 }

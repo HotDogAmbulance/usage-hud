@@ -16,6 +16,11 @@ func number(_ value: Any?) -> Double? {
 }
 func dict(_ value: Any?) -> JSON { value as? JSON ?? [:] }
 func usd(_ value: Double) -> String { String(format: "$%.2f", value) }
+/// "3h 12m" or "2d 5h"; never negative.
+func countdown(_ seconds: Double) -> String {
+    let minutes = max(0, Int(seconds / 60))
+    return minutes >= 1440 ? "\(minutes / 1440)d \(minutes % 1440 / 60)h" : "\(minutes / 60)h \(minutes % 60)m"
+}
 func resetTime(_ value: Any?) -> Double? {
     if let n = number(value) { return n }
     guard let text = value as? String else { return nil }
@@ -42,8 +47,10 @@ public struct Panel: Codable {
     public let name: String
     public var windows: [Window]
     public var note: String
-    public init(id: String, name: String, windows: [Window] = [], note: String = "") {
-        self.id = id; self.name = name; self.windows = windows; self.note = note
+    /// Something the user should look at (a cap reached, money running out, a rejected key). The battery pulses until hovered.
+    public var alert: String?
+    public init(id: String, name: String, windows: [Window] = [], note: String = "", alert: String? = nil) {
+        self.id = id; self.name = name; self.windows = windows; self.note = note; self.alert = alert
     }
     public var displayedQuota: Window? {
         if let five = windows.first(where: { $0.label == "5h" && $0.pct != nil && $0.stale != true && $0.expired != true }) { return five }

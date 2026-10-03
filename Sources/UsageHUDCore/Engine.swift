@@ -6,6 +6,8 @@ public final class Engine {
     let cache: Cache
     let providers: [UsageProvider]
     let credits: OpenAICredits
+    /// A money battery below this amount, in its own currency, asks for attention.
+    public var lowBalance = 1.0
     public static var defaultRoot: URL {
         if let path = ProcessInfo.processInfo.environment["USAGE_HUD_HOME"] ?? Bundle.main.object(forInfoDictionaryKey: "UsageHUDDataDirectory") as? String {
             return URL(fileURLWithPath: path)
@@ -44,6 +46,13 @@ public final class Engine {
             if let message = cache.read(statusFile)["error"] as? String {
                 panel.note = message
                 for index in panel.windows.indices { panel.windows[index].stale = true }
+                // A rejected key or expired sign-in won't fix itself; a passing outage will.
+                let lower = message.lowercased()
+                if ["rejected", "expired", "sign in", "sign-in", "login"].contains(where: lower.contains) { panel.alert = panel.alert ?? message }
+            }
+            if panel.alert == nil, let money = panel.windows.first(where: { $0.label == panel.name && $0.pct == nil }),
+               let level = Shelf.level(panel), -level < lowBalance {
+                panel.alert = "Balance low: " + (money.right ?? "")
             }
             return panel
         }

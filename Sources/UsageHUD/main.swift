@@ -22,6 +22,9 @@ final class HUD: NSObject, NSApplicationDelegate {
                       lastUsed: UserDefaults.standard.dictionary(forKey: "shelfLastUsed") as? [String: Double] ?? [:])
     /// Change with `defaults write local.usage-hud visibleBatteries 4`.
     var visibleLimit: Int { UserDefaults.standard.integer(forKey: "visibleBatteries") > 0 ? UserDefaults.standard.integer(forKey: "visibleBatteries") : 3 }
+    /// Alerts the user has already seen by hovering, by provider; those batteries stop pulsing until the alert changes.
+    var acknowledged: [String: String] = [:]
+    var pulse: Timer?
     /// A newer release, offered at the foot of every battery menu.
     var update: (tag: String, page: URL)?
     var busy = false
@@ -40,6 +43,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.load("automatic") }
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.load("automatic") }
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.load(nil) }
+        let lowBalance = UserDefaults.standard.double(forKey: "lowBalance")
+        if lowBalance > 0 { engine.lowBalance = lowBalance }
         checkForUpdate()
         Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
@@ -133,10 +138,29 @@ final class HUD: NSObject, NSApplicationDelegate {
     func drawIcon(_ id: String) {
         guard let panel = panels[id], let button = items[id]?.button else { return }
         if hovered == id, let weekly = hoverPanel(panel) { button.image = icon(weekly, weeklyShade: true) }
-        else { button.image = icon(panel) }
+        else { button.image = icon(panel, glow: pulsing(id) ? glow() : 0) }
+    }
+    func pulsing(_ id: String) -> Bool {
+        guard let alert = panels[id]?.alert else { return false }
+        return acknowledged[id] != alert
+    }
+    /// A slow, soft breath: about three seconds a cycle, never fully red.
+    func glow(at time: TimeInterval = Date().timeIntervalSinceReferenceDate) -> CGFloat {
+        CGFloat(0.55 * (1 - cos(2 * Double.pi * time / 3.2)) / 2)
+    }
+    /// Runs the pulse only while some battery is asking for attention.
+    func updatePulse() {
+        let ids = panels.keys.filter(pulsing)
+        if ids.isEmpty { pulse?.invalidate(); pulse = nil; return }
+        guard pulse == nil else { return }
+        pulse = Timer.scheduledTimer(withTimeInterval: 1.0 / 12, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            for id in self.panels.keys where self.pulsing(id) { self.drawIcon(id) }
+        }
     }
     /// `weeklyShade` draws the main fill in the same lighter tone the 7d layer uses behind 5h.
-    func icon(_ panel: Panel, weeklyShade: Bool = false) -> NSImage {
+    /// `glow` washes the body in soft red, for a battery asking for attention.
+    func icon(_ panel: Panel, weeklyShade: Bool = false, glow: CGFloat = 0) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
         let moneyWindow = quota == nil ? panel.windows.first(where: {$0.label == panel.name}) : nil
@@ -178,6 +202,7 @@ final class HUD: NSObject, NSApplicationDelegate {
                   light: true, alpha: weekly?.stale == true || weekly?.expired == true ? 0.50 : 1, dark: dark)
         }
         paint(NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight), body: bodyRect, id: panel.id, light: weeklyShade, alpha: cached ? 0.45 : 1, dark: dark)
+        if glow > 0 { NSColor(srgbRed: 1.0, green: 0.33, blue: 0.30, alpha: glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
         if let mask = SystemBattery.cap {
@@ -211,7 +236,8 @@ final class HUD: NSObject, NSApplicationDelegate {
             let tracker = HoverTracker(), id = panel.id
             tracker.changed = { [weak self] inside in
                 guard let self = self else { return }
-                if inside { self.hovered = id } else if self.hovered == id { self.hovered = nil }
+                if inside { self.hovered = id; self.acknowledged[id] = self.panels[id]?.alert } else if self.hovered == id { self.hovered = nil }
+                self.updatePulse()
                 self.drawIcon(id)
             }
             button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
@@ -225,10 +251,13 @@ final class HUD: NSObject, NSApplicationDelegate {
         let reading = displayed.map { $0.label + (cached ? " · cached" : " · remaining") } ?? "balance in USD"
         // Money rows (credits, extra usage) ride along in the hover text, so balances need no click.
         let money = panel.windows.filter { $0.pct == nil && $0.right != nil && $0.label != panel.name }.map { "\n" + $0.label + ": " + ($0.right ?? "") }
-        item.button?.toolTip = panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
-        item.button?.setAccessibilityLabel(panel.name + " usage")
+        if panel.alert == nil { acknowledged[panel.id] = nil }
+        item.button?.toolTip = (panel.alert.map { "⚠︎ " + $0 + "\n" } ?? "") + panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
+        item.button?.setAccessibilityLabel(panel.name + " usage" + (panel.alert.map { ", " + $0 } ?? ""))
+        updatePulse()
         let menu = NSMenu()
         menu.addItem(withTitle: panel.name + " · Usage HUD", action: nil, keyEquivalent: "")
+        if let alert = panel.alert { menu.addItem(withTitle: "⚠︎ " + alert, action: nil, keyEquivalent: "") }
         if displayed?.label == "7d" { menu.addItem(withTitle: "Showing 7d" + (cached ? " · cached" : ""), action: nil, keyEquivalent: "") }
         if !panel.note.isEmpty { menu.addItem(withTitle: panel.note, action: nil, keyEquivalent: "") }
         for window in panel.windows {
@@ -258,7 +287,7 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     /// Keeps the most recently used batteries in the menu bar, so a crowded bar or the notch never hides them silently.
     func arrange(_ ids: [String]) {
-        let hidden = shelf.arrange(ids, limit: visibleLimit).hidden
+        let hidden = shelf.arrange(ids, limit: visibleLimit, urgent: Set(ids.filter { panels[$0]?.alert != nil })).hidden
         for id in ids { items[id]?.isVisible = !hidden.contains(id) }
         guard !hidden.isEmpty else { overflow?.isVisible = false; return }
         let item = overflow ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -351,6 +380,18 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.overflow?.menu?.items.first?.submenu?.items.contains { $0.title.hasPrefix("Refresh GLM") } == true)
     delegate.arrange(["codex", "claude"])
     precondition(delegate.overflow?.isVisible == false)
+    // An alert pulses until hovered, and the hover text says what is wrong.
+    let capped = Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$0.40 left")], alert: "Balance low: $0.40 left")
+    delegate.render(capped)
+    precondition(delegate.pulsing("openrouter") && delegate.pulse != nil)
+    precondition(delegate.items["openrouter"]?.button?.toolTip?.hasPrefix("⚠︎ Balance low") == true)
+    precondition(delegate.glow(at: 0) == 0 && delegate.glow(at: 1.6) > 0.5)
+    precondition(delegate.icon(capped, glow: 0.5).size == delegate.icon(capped).size)
+    delegate.trackers["openrouter"]?.changed(true)
+    precondition(!delegate.pulsing("openrouter") && delegate.pulse == nil)
+    delegate.trackers["openrouter"]?.changed(false)
+    delegate.render(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$9.00 left")]))
+    precondition(delegate.acknowledged["openrouter"] == nil)
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))

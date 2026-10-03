@@ -177,7 +177,10 @@ final class OpenRouterProvider: UsageProvider {
         let token = try credentials.password(service: service, account: account)
         let key = dict(try http.get(URL(string: "https://openrouter.ai/api/v1/key")!, token: token, headers: [:], limit: 1024 * 1024)["data"])
         guard let usage = number(key["usage"]) else { throw HUDProblem("OpenRouter response missing usage") }
-        var result: JSON = ["usage": max(0, usage), "limit": number(key["limit"]) as Any? ?? NSNull()]
+        var result: JSON = ["usage": max(0, usage), "limit": number(key["limit"]) as Any? ?? NSNull(),
+                            "usage_daily": number(key["usage_daily"]) as Any? ?? NSNull(),
+                            "limit_remaining": number(key["limit_remaining"]) as Any? ?? NSNull(),
+                            "limit_reset": key["limit_reset"] as? String as Any? ?? NSNull()]
         if let payload = try? http.get(URL(string: "https://openrouter.ai/api/v1/credits")!, token: token, headers: [:], limit: 1024 * 1024) {
             let data = dict(payload["data"])
             if let total = number(data["total_credits"]), let used = number(data["total_usage"]) { result["credits_remaining"] = total - used }
@@ -190,7 +193,23 @@ final class OpenRouterProvider: UsageProvider {
         let same = previous["source_id"] as? String == fingerprint && previous["day"] as? String == day
         return ["slot_id": slot.id, "label": slot.label, "provider": "openrouter", "source_id": fingerprint,
                 "usage": usage, "limit": result["limit"] ?? NSNull(), "day": day,
+                "usage_daily": result["usage_daily"] ?? NSNull(), "limit_remaining": result["limit_remaining"] ?? NSNull(),
+                "limit_reset": result["limit_reset"] ?? NSNull(),
                 "day_start_usage": same ? number(previous["day_start_usage"]) ?? usage : usage]
+    }
+    static let periodName = ["daily": "today", "weekly": "this week", "monthly": "this month"]
+    /// When a key's cap resets: OpenRouter counts days, weeks (from Monday) and months in UTC.
+    static func nextReset(_ period: String?, after now: Date = Date()) -> Date? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let match: DateComponents
+        switch period {
+        case "daily": match = DateComponents(hour: 0, minute: 0, second: 0)
+        case "weekly": match = DateComponents(hour: 0, minute: 0, second: 0, weekday: 2)
+        case "monthly": match = DateComponents(day: 1, hour: 0, minute: 0, second: 0)
+        default: return nil
+        }
+        return calendar.nextDate(after: now, matching: match, matchingPolicy: .nextTime)
     }
     func refresh() throws {
         let slots = try configuredSlots()
@@ -200,7 +219,9 @@ final class OpenRouterProvider: UsageProvider {
         var rows: [JSON] = [], balances = dict(previous["balances"]), failures: [String] = []
         if balances["openrouter"] == nil { balances["openrouter"] = previous["credits_remaining"] }
         var balanceCaptured = number(previous["balance_captured_at"]) ?? number(previous["captured_at"]) ?? 0
+        // OpenRouter's days, and its daily caps, turn over at midnight UTC.
         let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd"; formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
         let day = formatter.string(from: Date()), now = Date().timeIntervalSince1970
         for slot in slots {
             let old = oldRows.first(where: { $0["slot_id"] as? String == slot.id || $0["label"] as? String == slot.label }) ?? [:]
@@ -228,13 +249,26 @@ final class OpenRouterProvider: UsageProvider {
         let balance = number(balances["openrouter"]) ?? number(blob["credits_remaining"])
         let balanceOld = Date().timeIntervalSince1970 - (number(blob["balance_captured_at"]) ?? number(blob["captured_at"]) ?? 0) > 21600
         if let balance = balance { rows.append(Window(label: name, right: usd(balance) + " left", stale: balanceOld)) }
+        var keys: [(Window, Double)] = [], alert: String?
         for row in blob["rows"] as? [JSON] ?? [] {
             let label = row["label"] as? String ?? "Slot"
-            if row["error"] != nil { rows.append(Window(label: label, right: "Unavailable · cached", stale: true)); continue }
+            if row["error"] != nil { keys.append((Window(label: label, right: "Unavailable · cached", stale: true), 2)); continue }
             let usage = number(row["usage"]) ?? 0
-            let text = number(row["day_start_usage"]).map { usd(max(0, usage - $0)) + " today" } ?? usd(usage) + " total; baseline pending"
-            rows.append(Window(label: label, right: text, stale: old))
+            let today = number(row["usage_daily"]) ?? number(row["day_start_usage"]).map { max(0, usage - $0) }
+            var text = today.map { usd($0) + " today" } ?? usd(usage) + " total; baseline pending"
+            var left = 1.0
+            if let limit = number(row["limit"]), limit > 0 {
+                let period = row["limit_reset"] as? String
+                let remaining = number(row["limit_remaining"]) ?? max(0, limit - usage)
+                left = remaining / limit
+                text = "\(usd(limit - remaining)) of \(usd(limit)) " + (Self.periodName[period ?? ""] ?? "cap")
+                if let reset = Self.nextReset(period) { text += " · resets in " + countdown(reset.timeIntervalSinceNow) }
+                if left <= 0.1, alert == nil { alert = label + ": " + (remaining <= 0 ? "cap reached" : usd(remaining) + " left of its cap") }
+            }
+            keys.append((Window(label: label, right: text, stale: old), left))
         }
-        return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Refresh OpenRouter from its menu" : "")
+        // The key closest to its cap leads.
+        rows += keys.enumerated().sorted { ($0.element.1, $0.offset) < ($1.element.1, $1.offset) }.map { $0.element.0 }
+        return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Refresh OpenRouter from its menu" : "", alert: alert)
     }
 }

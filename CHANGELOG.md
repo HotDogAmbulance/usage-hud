@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Batteries that need attention pulse soft red until hovered: a rejected key or expired sign-in, an OpenRouter key within 10% of its cap, or a balance under `lowBalance` ($1 by default). Alerting batteries always stay in the menu bar.
+- OpenRouter keys read today's spend, remaining cap and reset period from OpenRouter, count days in UTC, and list the key closest to its cap first.
 - Draw for light menu bars too: dark outlines, and pale tints deepen so white and silver batteries stay visible.
 - Read Claude extra usage in the currency's minor units (`decimal_places`, cents by default); show spend without a cap, and Off when disabled. Money rows now appear in hover text.
 - Offer newer GitHub releases from every battery menu.
