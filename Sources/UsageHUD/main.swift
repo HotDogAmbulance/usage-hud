@@ -15,6 +15,13 @@ final class HUD: NSObject, NSApplicationDelegate {
     var panels: [String: Panel] = [:]
     var trackers: [String: HoverTracker] = [:]
     var hovered: String?
+    /// Batteries past `visibleLimit` move into this item; hovering it opens their menu.
+    var overflow: NSStatusItem?
+    let overflowTracker = HoverTracker()
+    var shelf = Shelf(levels: UserDefaults.standard.dictionary(forKey: "shelfLevels") as? [String: Double] ?? [:],
+                      lastUsed: UserDefaults.standard.dictionary(forKey: "shelfLastUsed") as? [String: Double] ?? [:])
+    /// Change with `defaults write local.usage-hud visibleBatteries 4`.
+    var visibleLimit: Int { UserDefaults.standard.integer(forKey: "visibleBatteries") > 0 ? UserDefaults.standard.integer(forKey: "visibleBatteries") : 3 }
     var busy = false
     var lockDescriptor: Int32 = -1
     let engine = Engine()
@@ -44,7 +51,10 @@ final class HUD: NSObject, NSApplicationDelegate {
             let panels = self.engine.panels(refresh: refresh)
             DispatchQueue.main.async {
                 self.busy = false
-                for panel in panels { self.render(panel) }
+                for panel in panels { self.render(panel); self.shelf.observe(panel, now: Date().timeIntervalSince1970) }
+                UserDefaults.standard.set(self.shelf.levels, forKey: "shelfLevels")
+                UserDefaults.standard.set(self.shelf.lastUsed, forKey: "shelfLastUsed")
+                self.arrange(panels.map { $0.id })
             }
         }
     }
@@ -200,6 +210,42 @@ final class HUD: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
         item.menu = menu
     }
+    /// Keeps the most recently used batteries in the menu bar, so a crowded bar or the notch never hides them silently.
+    func arrange(_ ids: [String]) {
+        let hidden = shelf.arrange(ids, limit: visibleLimit).hidden
+        for id in ids { items[id]?.isVisible = !hidden.contains(id) }
+        guard !hidden.isEmpty else { overflow?.isVisible = false; return }
+        let item = overflow ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if overflow == nil, let button = item.button {
+            overflow = item
+            overflowTracker.changed = { [weak self] inside in
+                guard inside else { return }
+                // A short pause, so sweeping the pointer across the bar doesn't pop the menu open.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    guard let button = self?.overflow?.button, let window = button.window,
+                          button.bounds.contains(button.convert(window.mouseLocationOutsideOfEventStream, from: nil)) else { return }
+                    button.performClick(nil)
+                }
+            }
+            button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                                  owner: overflowTracker, userInfo: nil))
+        }
+        item.isVisible = true
+        item.button?.title = "+\(hidden.count)"
+        item.button?.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        item.button?.toolTip = "\(hidden.count) more: " + hidden.compactMap { panels[$0]?.name }.joined(separator: ", ")
+        item.button?.setAccessibilityLabel("\(hidden.count) more usage batteries")
+        let menu = NSMenu()
+        for id in hidden {
+            guard let panel = panels[id] else { continue }
+            let entry = menu.addItem(withTitle: items[id]?.button?.toolTip ?? panel.name, action: nil, keyEquivalent: "")
+            entry.image = icon(panel)
+            entry.submenu = items[id]?.menu?.copy() as? NSMenu
+        }
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
+        item.menu = menu
+    }
     @objc func refreshProvider(_ sender: NSMenuItem) { load(sender.representedObject as? String) }
     @objc func quit() { NSApp.terminate(nil) }
 }
@@ -250,6 +296,15 @@ if CommandLine.arguments.contains("--self-test") {
         battery.draw(in: NSRect(x: CGFloat(index*48), y: 11, width: battery.size.width, height: 22))
     }
     image.unlockFocus()
+    // Past the limit, the least recently used batteries move into one overflow item.
+    for id in ["glm", "deepseek"] { delegate.render(Panel(id: id, name: id.uppercased(), windows: [Window(label: "5h", pct: 10)])) }
+    delegate.shelf = Shelf()
+    delegate.arrange(["codex", "claude", "openrouter", "glm", "deepseek"])
+    precondition(delegate.items["glm"]?.isVisible == false && delegate.items["deepseek"]?.isVisible == false)
+    precondition(delegate.items["codex"]?.isVisible == true && delegate.overflow?.button?.title == "+2")
+    precondition(delegate.overflow?.menu?.items.first?.submenu?.items.contains { $0.title.hasPrefix("Refresh GLM") } == true)
+    delegate.arrange(["codex", "claude"])
+    precondition(delegate.overflow?.isVisible == false)
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))

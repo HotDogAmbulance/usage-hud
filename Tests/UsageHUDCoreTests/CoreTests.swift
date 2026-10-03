@@ -361,4 +361,23 @@ final class CoreTests {
         expectEqual(provider.panel().windows.first?.label, "Kimi")
         expectEqual(provider.panel().windows.first?.right, "¥3.50 left")
     }
+    func testShelfKeepsMostRecentlyUsedBatteries() {
+        func quota(_ id: String, _ pct: Double) -> Panel { Panel(id: id, name: id, windows: [Window(label: "5h", pct: pct)]) }
+        func balance(_ id: String, _ right: String) -> Panel { Panel(id: id, name: id, windows: [Window(label: id, right: right)]) }
+        var shelf = Shelf()
+        let ids = ["codex", "claude", "openrouter", "glm", "kimi"]
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "claude", "openrouter"])
+        expectEqual(shelf.arrange(ids, limit: 3).hidden, ["glm", "kimi"])
+        expectEqual(shelf.arrange(["codex", "claude"], limit: 3).hidden, [])
+        // First sightings and falling quota (a window reset) are not use.
+        shelf.observe(quota("glm", 40), now: 10); shelf.observe(balance("kimi", "¥9.00 left"), now: 10)
+        shelf.observe(quota("glm", 5), now: 20)
+        expectEqual(shelf.arrange(ids, limit: 3).hidden, ["glm", "kimi"])
+        // Rising quota and a falling balance are.
+        shelf.observe(quota("glm", 12), now: 30)
+        shelf.observe(balance("kimi", "¥8.75 left"), now: 40)
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "glm", "kimi"])
+        expectEqual(shelf.arrange(ids, limit: 3).hidden, ["claude", "openrouter"])
+        expectEqual(Shelf.level(balance("vercel", "$1026.25 left")), -1026.25)
+    }
 }

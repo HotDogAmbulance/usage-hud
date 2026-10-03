@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Show at most three batteries, the most recently used; the rest fold into a +N item that opens on hover. Set `visibleBatteries` to change the limit.
 - Balance batteries stretch with their digits: $26 keeps the standard size, $26.25 widens to fit.
 - Match battery colours to each brand: DeepSeek's whale blue, Kimi's azure, Gemini's four-colour mark; black-and-white brands (GLM, Grok, Vercel) use light neutrals. OpenRouter turns poison green.
 - Add optional Vercel AI Gateway, DeepSeek and Kimi balance batteries, read from each provider's documented balance endpoint.
