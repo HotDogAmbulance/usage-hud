@@ -65,7 +65,13 @@ let cases: [(String, () throws -> Void)] = [
     ("testBalanceProviderFallsBackToSecondHostAndShowsMoney", test.testBalanceProviderFallsBackToSecondHostAndShowsMoney),
     ("testShelfKeepsMostRecentlyUsedBatteries", test.testShelfKeepsMostRecentlyUsedBatteries),
     ("testClaudeExtraUsageInMinorUnits", test.testClaudeExtraUsageInMinorUnits),
-    ("testUpdateTagsCompareNumerically", test.testUpdateTagsCompareNumerically)
+    ("testUpdateTagsCompareNumerically", test.testUpdateTagsCompareNumerically),
+    ("testAlertsForRejectedKeysAndLowBalanceOnly", test.testAlertsForRejectedKeysAndLowBalanceOnly),
+    ("testRouterKeyCapUsesOpenRouterNumbersAndAlerts", test.testRouterKeyCapUsesOpenRouterNumbersAndAlerts),
+    ("testRouterCapsResetOnUTCBoundaries", test.testRouterCapsResetOnUTCBoundaries),
+    ("testRouterTeamListsEveryKeyWithoutPulsing", test.testRouterTeamListsEveryKeyWithoutPulsing),
+    ("testKeysAlreadyOnTheMacNeedNoSetup", test.testKeysAlreadyOnTheMacNeedNoSetup),
+    ("testKeychainPromptNeverReturnsOnItsOwn", test.testKeychainPromptNeverReturnsOnItsOwn)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }

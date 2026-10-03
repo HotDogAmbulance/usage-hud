@@ -22,11 +22,12 @@ public struct Shelf {
         levels[panel.id] = level
     }
     /// Splits `ids` into those shown and those moved to the overflow item, both in their original order.
-    /// The most recently used win; providers never seen in use keep the engine's order.
-    public func arrange(_ ids: [String], limit: Int) -> (shown: [String], hidden: [String]) {
+    /// Batteries asking for attention come first, then the most recently used; providers never seen in use keep the engine's order.
+    public func arrange(_ ids: [String], limit: Int, urgent: Set<String> = []) -> (shown: [String], hidden: [String]) {
         guard ids.count > limit else { return (ids, []) }
         let ranked = ids.enumerated().sorted { a, b in
-            let x = lastUsed[a.element] ?? 0, y = lastUsed[b.element] ?? 0
+            let x = urgent.contains(a.element) ? Double.infinity : lastUsed[a.element] ?? 0
+            let y = urgent.contains(b.element) ? Double.infinity : lastUsed[b.element] ?? 0
             return x != y ? x > y : a.offset < b.offset
         }
         let shown = Set(ranked.prefix(max(0, limit)).map { $0.element })

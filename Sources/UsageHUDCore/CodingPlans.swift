@@ -32,14 +32,14 @@ final class GLMProvider: UsageProvider {
     func refresh() throws {
         var lastProblem = HUDProblem("Add a GLM Coding Plan API key to the Keychain; see PROVIDERS.md")
         for host in Self.hosts {
-            guard let key = try? credentials.password(service: Self.service, account: host) else { continue }
+            guard let key = try credentials.stored(service: Self.service, account: host) else { continue }
             let data: JSON
             do {
                 // Z.ai expects the raw key, without a Bearer prefix.
                 data = try http.get(URL(string: "https://\(host)/api/monitor/usage/quota/limit")!, token: key,
                                     headers: ["Authorization": key, "Accept-Language": "en-US,en"], limit: 1024 * 1024)
             } catch let error as HTTPFailure {
-                lastProblem = HUDProblem(error.status == 401 || error.status == 403 ? "GLM API key rejected" : "GLM usage HTTP \(error.status)")
+                lastProblem = error.status == 401 || error.status == 403 ? HUDProblem("GLM API key rejected", attention: true) : HUDProblem("GLM usage HTTP \(error.status)")
                 continue
             }
             try cache.quota("glm.json", windows: Self.windows(data), extra: ["host": host, "plan": dict(data["data"])["level"] ?? NSNull()])

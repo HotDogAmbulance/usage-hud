@@ -6,6 +6,8 @@ public final class Engine {
     let cache: Cache
     let providers: [UsageProvider]
     let credits: OpenAICredits
+    /// A money battery below this amount, in its own currency, asks for attention.
+    public var lowBalance = 1.0
     public static var defaultRoot: URL {
         if let path = ProcessInfo.processInfo.environment["USAGE_HUD_HOME"] ?? Bundle.main.object(forInfoDictionaryKey: "UsageHUDDataDirectory") as? String {
             return URL(fileURLWithPath: path)
@@ -30,20 +32,31 @@ public final class Engine {
         if refresh == "openai-credits" { try? credits.refresh() }
         return providers.compactMap { provider -> Panel? in
             let statusFile = provider.id + "-status.json"
-            if refresh == provider.id || refresh == "automatic" && provider.automatic {
+            // After a Keychain prompt, only the user's own Refresh may ask again.
+            let prompted = cache.read(statusFile)["prompted"] as? Bool == true
+            if refresh == provider.id || refresh == "automatic" && !prompted && provider.automatic {
                 do {
                     try provider.refresh()
                     try cache.write(statusFile, ["error": NSNull(), "checked_at": Date().timeIntervalSince1970])
                 } catch {
                     let message = (error as? HUDProblem)?.message ?? (error as? HTTPFailure).map { "Usage HTTP \($0.status)" } ?? "Usage unavailable"
-                    try? cache.write(statusFile, ["error": message, "checked_at": Date().timeIntervalSince1970])
+                    try? cache.write(statusFile, ["error": message, "attention": (error as? HUDProblem)?.attention == true,
+                                                  "prompted": (error as? HUDProblem)?.prompted == true,
+                                                  "checked_at": Date().timeIntervalSince1970])
                 }
             }
             guard provider.shown() else { return nil }
             var panel = provider.panel()
-            if let message = cache.read(statusFile)["error"] as? String {
+            let status = cache.read(statusFile)
+            if let message = status["error"] as? String {
                 panel.note = message
                 for index in panel.windows.indices { panel.windows[index].stale = true }
+                // A rejected key won't fix itself; a passing outage or an idle CLI's token will.
+                if status["attention"] as? Bool == true { panel.alert = panel.alert ?? message }
+            }
+            if panel.alert == nil, let money = panel.windows.first(where: { $0.label == panel.name && $0.pct == nil }),
+               let level = Shelf.level(panel), -level < lowBalance {
+                panel.alert = "Balance low: " + (money.right ?? "")
             }
             return panel
         }

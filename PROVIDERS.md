@@ -6,7 +6,17 @@ Quota adapters persist `used_percentage`, `window_minutes` where applicable, `re
 
 ## OpenRouter
 
-Create `~/.usage-hud/providers.json` with your own Keychain selectors:
+**Nothing to set up:** OpenRouter has no sign-in file, but its keys (`sk-or-v1-` and 64 hex characters) are unmistakable. When `providers.json` is absent, the app looks for them in `OPENROUTER_API_KEY`, your shell profiles (`.zshrc`, `.zprofile`, `.zshenv`, `.bashrc`, `.bash_profile`, `.profile`, `.env`, fish `config.fish`) common AI tool configs (opencode, aider, crush, Continue, Zed) and `.sh` scripts within three levels of your home folder (at most 500; hidden folders, `Library`, and the Desktop, Documents and Downloads folders macOS guards with a permission prompt are skipped). A key assigned to a named variable takes its name from it (`ALICE_OPENROUTER_KEY` shows as "alice"); otherwise it is named after its file (`boot-alice.sh` shows as "boot-alice"). Keys are sent only to openrouter.ai and are never written to disk. To choose keys yourself, create `providers.json` as below; it replaces the search.
+
+**Team or many keys:** create a management key at openrouter.ai (Settings › Management keys) and add it once:
+
+```bash
+security add-generic-password -U -s "Usage HUD OpenRouter Team" -a openrouter.ai -w
+```
+
+Every enabled key on the account then appears in the hover panel, closest to its cap first, under a summary such as "23 keys · $41.20 today · 3 near cap". Teammates reaching their caps never make the battery pulse; a rejected management key or a low account balance does.
+
+**Your own keys:** Create `~/.usage-hud/providers.json` with your own Keychain selectors:
 
 ```json
 [
@@ -20,9 +30,9 @@ Create `~/.usage-hud/providers.json` with your own Keychain selectors:
 ]
 ```
 
-Ordered sources provide fallbacks. Keep slot IDs stable. A source change or new local day resets the daily baseline. Today's spend is measured since the day's first manual check, not a billing-day guarantee. Failed sources preserve prior readings as stale. Credentials never belong in config, cache or logs.
+Ordered sources provide fallbacks. Keep slot IDs stable. Failed sources preserve prior readings as stale. Credentials never belong in config, cache or logs. A key within 10% of its cap makes the battery pulse.
 
-OpenRouter uses `/api/v1/key` for cumulative key usage and `/api/v1/credits` for the account's USD balance. It refreshes only on request. A money balance has no percentage denominator.
+OpenRouter reads `/api/v1/key` (today's spend, cap, remaining and reset period), `/api/v1/keys` with a management key, and `/api/v1/credits` for the account's USD balance. Days and caps follow OpenRouter's UTC calendar. It refreshes in the background once a key is configured. A money balance has no percentage denominator.
 
 ## GLM, Gemini and Grok
 

@@ -5,7 +5,15 @@ import CoreFoundation
 typealias JSON = [String: Any]
 struct HUDProblem: Error, LocalizedError {
     let message: String
-    init(_ message: String) { self.message = message }
+    /// Only the user can fix it (a rejected key, a revoked sign-in); the battery asks for attention.
+    /// Tokens that merely expired while their CLI sat idle renew themselves and stay quiet.
+    let attention: Bool
+    /// macOS showed a Keychain password prompt. Background refreshes then leave that provider alone until the user
+    /// refreshes it from its menu, so the prompt never comes back on its own.
+    let prompted: Bool
+    init(_ message: String, attention: Bool = false, prompted: Bool = false) {
+        self.message = message; self.attention = attention || prompted; self.prompted = prompted
+    }
     var errorDescription: String? { message }
 }
 func number(_ value: Any?) -> Double? {
@@ -16,6 +24,11 @@ func number(_ value: Any?) -> Double? {
 }
 func dict(_ value: Any?) -> JSON { value as? JSON ?? [:] }
 func usd(_ value: Double) -> String { String(format: "$%.2f", value) }
+/// "3h 12m" or "2d 5h"; never negative.
+func countdown(_ seconds: Double) -> String {
+    let minutes = max(0, Int(seconds / 60))
+    return minutes >= 1440 ? "\(minutes / 1440)d \(minutes % 1440 / 60)h" : "\(minutes / 60)h \(minutes % 60)m"
+}
 func resetTime(_ value: Any?) -> Double? {
     if let n = number(value) { return n }
     guard let text = value as? String else { return nil }
@@ -42,8 +55,16 @@ public struct Panel: Codable {
     public let name: String
     public var windows: [Window]
     public var note: String
-    public init(id: String, name: String, windows: [Window] = [], note: String = "") {
-        self.id = id; self.name = name; self.windows = windows; self.note = note
+    /// Something the user should look at (a cap reached, money running out, a rejected key). The battery pulses until hovered.
+    public var alert: String?
+    /// Per-key detail for the hover panel: `pct` is the share of a cap used, `right` the readable amount.
+    public var cells: [Window]
+    /// A one-line overview above the cells, such as "23 keys · $41.20 today · 3 near cap".
+    public var cellsTitle: String?
+    public init(id: String, name: String, windows: [Window] = [], note: String = "", alert: String? = nil,
+                cells: [Window] = [], cellsTitle: String? = nil) {
+        self.id = id; self.name = name; self.windows = windows; self.note = note; self.alert = alert
+        self.cells = cells; self.cellsTitle = cellsTitle
     }
     public var displayedQuota: Window? {
         if let five = windows.first(where: { $0.label == "5h" && $0.pct != nil && $0.stale != true && $0.expired != true }) { return five }

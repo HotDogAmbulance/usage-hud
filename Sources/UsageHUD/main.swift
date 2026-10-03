@@ -10,6 +10,38 @@ final class HoverTracker: NSResponder {
     override func mouseExited(with event: NSEvent) { changed(false) }
 }
 
+/// The hover panel for providers with per-key detail: a few header lines, then each key's cap as a row of cells.
+final class CellsView: NSView {
+    let lines: [String], rows: [Window], tint: NSColor
+    init(lines: [String], rows: [Window], tint: NSColor) {
+        self.lines = lines; self.rows = rows; self.tint = tint
+        super.init(frame: NSRect(x: 0, y: 0, width: 380, height: CGFloat(lines.count * 18 + rows.count * 20 + 16)))
+    }
+    required init?(coder: NSCoder) { nil }
+    override var isFlipped: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        let clip = NSMutableParagraphStyle(); clip.lineBreakMode = .byTruncatingTail
+        let head: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor, .paragraphStyle: clip]
+        let body: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: clip]
+        var y: CGFloat = 8
+        for line in lines { (line as NSString).draw(in: NSRect(x: 12, y: y, width: 356, height: 16), withAttributes: head); y += 18 }
+        for row in rows {
+            (row.label as NSString).draw(in: NSRect(x: 12, y: y + 2, width: 96, height: 16), withAttributes: body)
+            if let used = row.pct {
+                // Ten cells of what is left; the last one turns red.
+                let left = Int(((100 - used) / 10).rounded(.up))
+                for index in 0..<10 {
+                    (index >= left ? NSColor.tertiaryLabelColor.withAlphaComponent(0.35) : left <= 1 ? NSColor.systemRed : tint).setFill()
+                    NSBezierPath(roundedRect: NSRect(x: 112 + CGFloat(index) * 10, y: y + 4, width: 8, height: 10), xRadius: 2, yRadius: 2).fill()
+                }
+            }
+            ((row.right ?? "").replacingOccurrences(of: " · resets in ", with: " · ") as NSString)
+                .draw(in: NSRect(x: 218, y: y + 2, width: 150, height: 16), withAttributes: body)
+            y += 20
+        }
+    }
+}
+
 final class HUD: NSObject, NSApplicationDelegate {
     var items: [String: NSStatusItem] = [:]
     var panels: [String: Panel] = [:]
@@ -22,6 +54,10 @@ final class HUD: NSObject, NSApplicationDelegate {
                       lastUsed: UserDefaults.standard.dictionary(forKey: "shelfLastUsed") as? [String: Double] ?? [:])
     /// Change with `defaults write local.usage-hud visibleBatteries 4`.
     var visibleLimit: Int { UserDefaults.standard.integer(forKey: "visibleBatteries") > 0 ? UserDefaults.standard.integer(forKey: "visibleBatteries") : 3 }
+    /// Alerts the user has already seen by hovering, by provider; those batteries stop pulsing until the alert changes.
+    var acknowledged: [String: String] = [:]
+    var pulse: Timer?
+    let popover = NSPopover()
     /// A newer release, offered at the foot of every battery menu.
     var update: (tag: String, page: URL)?
     var busy = false
@@ -40,6 +76,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.load("automatic") }
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.load("automatic") }
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.load(nil) }
+        let lowBalance = UserDefaults.standard.double(forKey: "lowBalance")
+        if lowBalance > 0 { engine.lowBalance = lowBalance }
         checkForUpdate()
         Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
@@ -133,10 +171,29 @@ final class HUD: NSObject, NSApplicationDelegate {
     func drawIcon(_ id: String) {
         guard let panel = panels[id], let button = items[id]?.button else { return }
         if hovered == id, let weekly = hoverPanel(panel) { button.image = icon(weekly, weeklyShade: true) }
-        else { button.image = icon(panel) }
+        else { button.image = icon(panel, glow: pulsing(id) ? glow() : 0) }
+    }
+    func pulsing(_ id: String) -> Bool {
+        guard let alert = panels[id]?.alert else { return false }
+        return acknowledged[id] != alert
+    }
+    /// A slow, soft breath: about three seconds a cycle, never fully red.
+    func glow(at time: TimeInterval = Date().timeIntervalSinceReferenceDate) -> CGFloat {
+        CGFloat(0.55 * (1 - cos(2 * Double.pi * time / 3.2)) / 2)
+    }
+    /// Runs the pulse only while some battery is asking for attention.
+    func updatePulse() {
+        let ids = panels.keys.filter(pulsing)
+        if ids.isEmpty { pulse?.invalidate(); pulse = nil; return }
+        guard pulse == nil else { return }
+        pulse = Timer.scheduledTimer(withTimeInterval: 1.0 / 12, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            for id in self.panels.keys where self.pulsing(id) { self.drawIcon(id) }
+        }
     }
     /// `weeklyShade` draws the main fill in the same lighter tone the 7d layer uses behind 5h.
-    func icon(_ panel: Panel, weeklyShade: Bool = false) -> NSImage {
+    /// `glow` washes the body in soft red, for a battery asking for attention.
+    func icon(_ panel: Panel, weeklyShade: Bool = false, glow: CGFloat = 0) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
         let moneyWindow = quota == nil ? panel.windows.first(where: {$0.label == panel.name}) : nil
@@ -178,6 +235,7 @@ final class HUD: NSObject, NSApplicationDelegate {
                   light: true, alpha: weekly?.stale == true || weekly?.expired == true ? 0.50 : 1, dark: dark)
         }
         paint(NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight), body: bodyRect, id: panel.id, light: weeklyShade, alpha: cached ? 0.45 : 1, dark: dark)
+        if glow > 0 { NSColor(srgbRed: 1.0, green: 0.33, blue: 0.30, alpha: glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
         if let mask = SystemBattery.cap {
@@ -211,7 +269,14 @@ final class HUD: NSObject, NSApplicationDelegate {
             let tracker = HoverTracker(), id = panel.id
             tracker.changed = { [weak self] inside in
                 guard let self = self else { return }
-                if inside { self.hovered = id } else if self.hovered == id { self.hovered = nil }
+                if inside {
+                    self.hovered = id; self.acknowledged[id] = self.panels[id]?.alert
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.showCells(id) }
+                } else {
+                    if self.hovered == id { self.hovered = nil }
+                    if self.popover.isShown { self.popover.close() }
+                }
+                self.updatePulse()
                 self.drawIcon(id)
             }
             button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
@@ -225,10 +290,14 @@ final class HUD: NSObject, NSApplicationDelegate {
         let reading = displayed.map { $0.label + (cached ? " · cached" : " · remaining") } ?? "balance in USD"
         // Money rows (credits, extra usage) ride along in the hover text, so balances need no click.
         let money = panel.windows.filter { $0.pct == nil && $0.right != nil && $0.label != panel.name }.map { "\n" + $0.label + ": " + ($0.right ?? "") }
-        item.button?.toolTip = panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
-        item.button?.setAccessibilityLabel(panel.name + " usage")
+        if panel.alert == nil { acknowledged[panel.id] = nil }
+        // Providers with per-key cells get the hover panel instead of a tooltip.
+        item.button?.toolTip = !panel.cells.isEmpty ? nil : (panel.alert.map { "⚠︎ " + $0 + "\n" } ?? "") + panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
+        item.button?.setAccessibilityLabel(panel.name + " usage" + (panel.alert.map { ", " + $0 } ?? ""))
+        updatePulse()
         let menu = NSMenu()
         menu.addItem(withTitle: panel.name + " · Usage HUD", action: nil, keyEquivalent: "")
+        if let alert = panel.alert { menu.addItem(withTitle: "⚠︎ " + alert, action: nil, keyEquivalent: "") }
         if displayed?.label == "7d" { menu.addItem(withTitle: "Showing 7d" + (cached ? " · cached" : ""), action: nil, keyEquivalent: "") }
         if !panel.note.isEmpty { menu.addItem(withTitle: panel.note, action: nil, keyEquivalent: "") }
         for window in panel.windows {
@@ -242,6 +311,11 @@ final class HUD: NSObject, NSApplicationDelegate {
             } else { text += window.right ?? "Unavailable" }
             if window.stale == true { text += " · cached" }
             menu.addItem(withTitle: text, action: nil, keyEquivalent: "")
+        }
+        if panel.cellsTitle != nil {
+            let all = NSMenu()
+            for cell in panel.cells { all.addItem(withTitle: cell.label + " · " + (cell.right ?? ""), action: nil, keyEquivalent: "") }
+            menu.addItem(withTitle: "All keys (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
         }
         menu.addItem(NSMenuItem.separator())
         let refresh = menu.addItem(withTitle: "Refresh " + panel.name, action: #selector(refreshProvider(_:)), keyEquivalent: "r")
@@ -258,7 +332,7 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     /// Keeps the most recently used batteries in the menu bar, so a crowded bar or the notch never hides them silently.
     func arrange(_ ids: [String]) {
-        let hidden = shelf.arrange(ids, limit: visibleLimit).hidden
+        let hidden = shelf.arrange(ids, limit: visibleLimit, urgent: Set(ids.filter { panels[$0]?.alert != nil })).hidden
         for id in ids { items[id]?.isVisible = !hidden.contains(id) }
         guard !hidden.isEmpty else { overflow?.isVisible = false; return }
         let item = overflow ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -291,6 +365,18 @@ final class HUD: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
         item.menu = menu
+    }
+    /// Opens the per-key panel under a battery that is still hovered.
+    func showCells(_ id: String) {
+        guard hovered == id, let panel = panels[id], !panel.cells.isEmpty, let button = items[id]?.button, button.window != nil else { return }
+        let lines = [panel.alert.map { "⚠︎ " + $0 }, panel.windows.first { $0.label == panel.name }.map { panel.name + " · " + ($0.right ?? "") },
+                     panel.cellsTitle].compactMap { $0 }
+        let controller = NSViewController()
+        controller.view = CellsView(lines: lines, rows: Array(panel.cells.prefix(6)), tint: tint(id))
+        popover.contentViewController = controller
+        popover.contentSize = controller.view.frame.size
+        popover.animates = false
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
     @objc func refreshProvider(_ sender: NSMenuItem) { load(sender.representedObject as? String) }
     @objc func quit() { NSApp.terminate(nil) }
@@ -351,6 +437,25 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.overflow?.menu?.items.first?.submenu?.items.contains { $0.title.hasPrefix("Refresh GLM") } == true)
     delegate.arrange(["codex", "claude"])
     precondition(delegate.overflow?.isVisible == false)
+    // An alert pulses until hovered, and the hover text says what is wrong.
+    let capped = Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$0.40 left")], alert: "Balance low: $0.40 left")
+    delegate.render(capped)
+    precondition(delegate.pulsing("openrouter") && delegate.pulse != nil)
+    precondition(delegate.items["openrouter"]?.button?.toolTip?.hasPrefix("⚠︎ Balance low") == true)
+    precondition(delegate.glow(at: 0) == 0 && delegate.glow(at: 1.6) > 0.5)
+    precondition(delegate.icon(capped, glow: 0.5).size == delegate.icon(capped).size)
+    delegate.trackers["openrouter"]?.changed(true)
+    precondition(!delegate.pulsing("openrouter") && delegate.pulse == nil)
+    delegate.trackers["openrouter"]?.changed(false)
+    delegate.render(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$9.00 left")]))
+    precondition(delegate.acknowledged["openrouter"] == nil)
+    // Per-key cells replace the tooltip with a hover panel sized to its rows.
+    let team = Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$43.00 left"), Window(label: "Team", right: "2 keys")],
+                     cells: [Window(label: "k7", pct: 96, right: "$4.80 of $5.00 today"), Window(label: "k8", right: "$1.00 today")], cellsTitle: "2 keys")
+    delegate.render(team)
+    precondition(delegate.items["openrouter"]?.button?.toolTip == nil)
+    precondition(delegate.items["openrouter"]?.menu?.items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
+    precondition(CellsView(lines: ["a", "b"], rows: team.cells, tint: .white).frame.height == 92)
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))

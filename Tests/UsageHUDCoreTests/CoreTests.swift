@@ -4,7 +4,13 @@ import Foundation
 final class FakeCredentials: CredentialReading {
     var calls = 0
     var text = "fixture"
-    func password(service: String, account: String?) throws -> String { calls += 1; return text }
+    /// Services with nothing stored; no team key unless a test asks for one.
+    var missing: Set<String> = [OpenRouterProvider.teamService]
+    func password(service: String, account: String?) throws -> String {
+        calls += 1
+        if missing.contains(service) { throw HUDProblem("not found") }
+        return text
+    }
 }
 final class FakeHTTP: HTTPReading {
     var calls = 0
@@ -29,6 +35,22 @@ struct FakeProvider: UsageProvider {
     let fail: Bool
     func refresh() throws { if fail { throw HUDProblem("offline") } }
     func panel() -> Panel { Panel(id: id, name: name, windows: [Window(label: "5h", pct: 20)]) }
+}
+struct AlertProvider: UsageProvider {
+    let id: String
+    var name: String { id }
+    let automatic = true
+    let problem: String?
+    var attention = false
+    let right: String
+    func refresh() throws { if let problem = problem { throw HUDProblem(problem, attention: attention) } }
+    func panel() -> Panel { Panel(id: id, name: name, windows: [Window(label: id, right: right)]) }
+}
+final class PromptingProvider: UsageProvider {
+    let id = "p", name = "P", automatic = true
+    var calls = 0
+    func refresh() throws { calls += 1; throw HUDProblem("Keychain asked", prompted: true) }
+    func panel() -> Panel { Panel(id: id, name: name, windows: [Window(label: "5h", pct: 1)]) }
 }
 final class CoreTests {
     var root: URL!, cache: Cache!, credentials: FakeCredentials!, http: FakeHTTP!
@@ -334,7 +356,7 @@ final class CoreTests {
     }
     func testUnusedPlansStayOutOfMenuBar() {
         let panels = Engine(root: root, credentials: credentials, http: http).panels()
-        expectEqual(panels.map(\.id), ["codex", "claude", "openrouter"])
+        expectEqual(panels.map(\.id), ["codex", "claude"])
     }
 
     func testBalanceParsers() throws {
@@ -396,5 +418,97 @@ final class CoreTests {
         expectFalse(Updates.isNewer("v2.1", than: "2.1")); expectFalse(Updates.isNewer("v2.0.9", than: "2.1"))
         expectEqual(Updates.newer(["tag_name": "v2.2", "html_url": "https://github.com/o/r/releases/tag/v2.2"], than: "2.1")?.tag, "v2.2")
         expectNil(Updates.newer(["tag_name": "v2.1", "html_url": "https://github.com/o/r"], than: "2.1"))
+    }
+    /// An idle CLI's expired token and a passing outage stay calm; a rejected key and a low balance ask for attention.
+    func testAlertsForRejectedKeysAndLowBalanceOnly() {
+        let engine = Engine(root: root, credentials: credentials, http: http, providers: [
+            AlertProvider(id: "a", problem: "a API key rejected", attention: true, right: "$9.00 left"),
+            AlertProvider(id: "b", problem: nil, right: "$0.50 left"),
+            AlertProvider(id: "c", problem: "c sign-in expired; run c once", right: "$9.00 left")])
+        let panels = engine.panels(refresh: "automatic")
+        expectEqual(panels[0].alert, "a API key rejected")
+        expectEqual(panels[1].alert, "Balance low: $0.50 left")
+        expectNil(panels[2].alert)
+        engine.lowBalance = 0.25
+        expectNil(engine.panels(refresh: nil)[1].alert)
+    }
+    func testRouterKeyCapUsesOpenRouterNumbersAndAlerts() throws {
+        let config = [["id": "one", "label": "One", "sources": [["provider": "openrouter", "service": "fixture", "account": "one"]]]]
+        try JSONSerialization.data(withJSONObject: config).write(to: root.appendingPathComponent("providers.json"))
+        http.handler = { url in
+            url.path.hasSuffix("credits") ? ["data": ["total_credits": 50, "total_usage": 7]]
+                : ["data": ["usage": 120, "usage_daily": 4.6, "limit": 5, "limit_remaining": 0.4, "limit_reset": "daily"]]
+        }
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http)
+        try provider.refresh()
+        let panel = provider.panel()
+        expectEqual(panel.windows.first?.right, "$43.00 left")
+        expectTrue(panel.windows[1].right?.hasPrefix("$4.60 of $5.00 today · resets in ") == true)
+        expectEqual(panel.alert, "One: $0.40 left of its cap")
+    }
+    func testRouterCapsResetOnUTCBoundaries() {
+        let saturday = Date(timeIntervalSince1970: 1791039600) // 2026-10-03 15:00 UTC
+        expectEqual(OpenRouterProvider.nextReset("daily", after: saturday)?.timeIntervalSince1970, 1791072000)
+        expectEqual(OpenRouterProvider.nextReset("weekly", after: saturday)?.timeIntervalSince1970, 1791158400)
+        expectEqual(OpenRouterProvider.nextReset("monthly", after: saturday)?.timeIntervalSince1970, 1793491200)
+        expectNil(OpenRouterProvider.nextReset(nil, after: saturday))
+        expectEqual(Shelf().arrange(["codex", "claude", "openrouter", "kimi"], limit: 3, urgent: ["kimi"]).hidden, ["openrouter"])
+    }
+    func testRouterTeamListsEveryKeyWithoutPulsing() throws {
+        credentials.missing = []
+        let first: [JSON] = (0..<100).map { ["name": "k\($0)", "usage_daily": 0.5, "limit": 5, "limit_reset": "daily",
+                                              "limit_remaining": $0 == 7 ? 0.2 : 4.5, "disabled": $0 == 99] }
+        http.handler = { url in
+            if url.path.hasSuffix("credits") { return ["data": ["total_credits": 50, "total_usage": 7]] }
+            return ["data": url.query == "offset=0" ? first : [["name": "", "label": "sk-or-v1-abc", "usage_daily": 1]]]
+        }
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
+        expectTrue(provider.automatic)
+        try provider.refresh()
+        let panel = provider.panel()
+        expectEqual(panel.windows.first?.right, "$43.00 left")
+        expectEqual(panel.cellsTitle, "100 keys · $50.50 today · 1 near cap")
+        expectEqual(panel.cells.first?.label, "k7"); expectEqual(panel.cells.last?.label, "sk-or-v1-abc")
+        expectNil(panel.alert); expectNil(panel.displayedQuota)
+        http.handler = { _ in throw HTTPFailure(status: 401) }
+        do { try provider.refresh(); fail("Expected rejection") } catch { expectTrue((error as? HUDProblem)?.attention == true) }
+        expectEqual(provider.panel().cells.count, 100)
+    }
+    func testKeysAlreadyOnTheMacNeedNoSetup() throws {
+        let alice = "sk-or-v1-" + String(repeating: "a1", count: 32), bob = "sk-or-v1-" + String(repeating: "b2", count: 32)
+        let carol = "sk-or-v1-" + String(repeating: "c3", count: 32)
+        let opencode = root.appendingPathComponent(".local/share/opencode")
+        try FileManager.default.createDirectory(at: opencode, withIntermediateDirectories: true)
+        try "{\"openrouter\":{\"type\":\"api\",\"key\":\"\(alice)\"}}".write(to: opencode.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+        try "export OPENROUTER_API_KEY=sk-or-v1-short\nexport OPENROUTER_API_KEY=\(bob)\nexport ALICE_OPENROUTER_KEY='\(alice)'".write(to: root.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        try "OPENROUTER_API_KEY=\(carol) agent run\n# \(bob)".write(to: root.appendingPathComponent("boot-carol.sh"), atomically: true, encoding: .utf8)
+        // Organised folders are searched; guarded and too-deep ones are not.
+        for (folder, key) in [("team/research", "d4"), ("Documents", "e5"), ("a/b/c/d", "f6")] {
+            let url = root.appendingPathComponent(folder)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            try "export DANA_KEY=sk-or-v1-\(String(repeating: key, count: 32))".write(to: url.appendingPathComponent("run.sh"), atomically: true, encoding: .utf8)
+        }
+        let found = KeyFinder.find(in: KeyFinder.places(home: root), environment: [:])
+        expectEqual(found.map { $0.label }, ["zshrc", "alice", "boot-carol", "dana"])
+        expectEqual(found.map { $0.key }, [bob, alice, carol, "sk-or-v1-" + String(repeating: "d4", count: 32)])
+        expectEqual(KeyFinder.label(opencode.appendingPathComponent("auth.json")), "opencode")
+        expectEqual(KeyFinder.find(in: [], environment: ["OPENROUTER_API_KEY": alice + "\n" + bob]).map { $0.label }, ["environment", "environment 2"])
+        http.handler = { url in url.path.hasSuffix("credits") ? ["data": ["total_credits": 9, "total_usage": 1]] : ["data": ["usage": 3, "usage_daily": 0.25]] }
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
+        expectTrue(provider.automatic)
+        try provider.refresh()
+        expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "zshrc", "alice", "boot-carol", "dana"])
+        expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("openrouter.json")), encoding: .utf8)!.contains("sk-or-v1-"))
+    }
+    /// A Keychain password prompt may follow a click on Refresh, never a background timer.
+    func testKeychainPromptNeverReturnsOnItsOwn() throws {
+        let provider = PromptingProvider()
+        let engine = Engine(root: root, credentials: credentials, http: http, providers: [provider])
+        expectEqual(engine.panels(refresh: "automatic")[0].alert, "Keychain asked")
+        _ = engine.panels(refresh: "automatic"); expectEqual(provider.calls, 1)
+        _ = engine.panels(refresh: "p"); expectEqual(provider.calls, 2)
+        credentials.missing = ["absent"]
+        let absent = try credentials.stored(service: "absent", account: nil), present = try credentials.stored(service: "present", account: nil)
+        expectNil(absent); expectEqual(present, "fixture")
     }
 }
