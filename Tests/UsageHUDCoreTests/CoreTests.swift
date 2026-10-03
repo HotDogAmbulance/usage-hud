@@ -475,17 +475,17 @@ final class CoreTests {
         try FileManager.default.createDirectory(at: opencode, withIntermediateDirectories: true)
         try "{\"openrouter\":{\"type\":\"api\",\"key\":\"\(alice)\"}}".write(to: opencode.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
         try "export OPENROUTER_API_KEY=sk-or-v1-short\nexport OPENROUTER_API_KEY=\(bob)\nexport ALICE_OPENROUTER_KEY='\(alice)'".write(to: root.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
-        try "KEY=\(carol) agent run".write(to: root.appendingPathComponent("boot-carol.sh"), atomically: true, encoding: .utf8)
+        try "OPENROUTER_API_KEY=\(carol) agent run\n# \(bob)".write(to: root.appendingPathComponent("boot-carol.sh"), atomically: true, encoding: .utf8)
         let found = KeyFinder.find(in: KeyFinder.places(home: root), environment: [:])
-        expectEqual(found.map { $0.label }, ["zshrc", "alice"])
-        expectEqual(found.map { $0.key }, [bob, alice])
+        expectEqual(found.map { $0.label }, ["zshrc", "alice", "boot-carol"])
+        expectEqual(found.map { $0.key }, [bob, alice, carol])
         expectEqual(KeyFinder.label(opencode.appendingPathComponent("auth.json")), "opencode")
         expectEqual(KeyFinder.find(in: [], environment: ["OPENROUTER_API_KEY": alice + "\n" + bob]).map { $0.label }, ["environment", "environment 2"])
         http.handler = { url in url.path.hasSuffix("credits") ? ["data": ["total_credits": 9, "total_usage": 1]] : ["data": ["usage": 3, "usage_daily": 0.25]] }
         let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
         expectTrue(provider.automatic)
         try provider.refresh()
-        expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "zshrc", "alice"])
+        expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "zshrc", "alice", "boot-carol"])
         expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("openrouter.json")), encoding: .utf8)!.contains("sk-or-v1-"))
     }
 }

@@ -24,7 +24,7 @@ On a light menu bar the batteries switch to dark outlines, and pale colours deep
 
 A battery that needs you breathes a soft red: a key rejected or signed out, an OpenRouter key near its cap, or a balance under $1 (change it with `defaults write local.usage-hud lowBalance 5`). Hover over it to read why; it stays calm until something new happens. OpenRouter keys show their own daily, weekly or monthly cap and when it resets, counted in UTC like OpenRouter itself, with the key closest to its cap first.
 
-OpenRouter needs no setup: keys you already keep in your shell profile or AI tool configs are found and named after their variable (`ALICE_OPENROUTER_KEY` becomes "alice") or their file. OpenRouter teams can add one management key instead of every person's: hovering the battery then opens a small panel with the account balance, a summary like "23 keys · $41.20 today · 3 near cap", and the keys closest to their caps as rows of cells. The full list sits under **All keys** in the menu. See [PROVIDERS.md](PROVIDERS.md).
+OpenRouter needs no setup: keys you already keep in your shell profile, AI tool configs or `.sh` scripts are found and named after their variable (`ALICE_OPENROUTER_KEY` becomes "alice") or their file (`boot-alice.sh` becomes "boot-alice"). OpenRouter teams can add one management key instead of every person's: hovering the battery then opens a small panel with the account balance, a summary like "23 keys · $41.20 today · 3 near cap", and the keys closest to their caps as rows of cells. The full list sits under **All keys** in the menu. See [PROVIDERS.md](PROVIDERS.md).
 
 When a newer release is published on GitHub, every battery menu offers **Update available**. Usage endpoints change without notice, so this is how fixes reach you.
 

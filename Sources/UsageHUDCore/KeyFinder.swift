@@ -11,13 +11,17 @@ enum KeyFinder {
         let words = variable.lowercased().split(separator: "_").filter { !["openrouter", "or", "api", "key", "token"].contains($0) }
         return words.isEmpty ? nil : words.joined(separator: " ")
     }
-    /// The standard places only: shell profiles and AI tool configs. Personal scripts are left alone.
+    /// Shell profiles, AI tool configs, and personal `.sh` scripts, which people tend to name after a person or a job.
     static func places(home: URL) -> [URL] {
-        [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".env", ".config/fish/config.fish",
+        let scripts = ["", "bin", "scripts", ".local/bin"].flatMap { folder in
+            ((try? FileManager.default.contentsOfDirectory(at: home.appendingPathComponent(folder), includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.pathExtension == "sh" }.sorted { $0.path < $1.path }
+        }
+        return [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".env", ".config/fish/config.fish",
                      ".local/share/opencode/auth.json", ".aider.conf.yml", ".config/crush/crush.json", ".continue/config.yaml",
-                     ".continue/config.json", ".config/zed/settings.json"].map { home.appendingPathComponent($0) }
+                     ".continue/config.json", ".config/zed/settings.json"].map { home.appendingPathComponent($0) } + scripts
     }
-    /// ".zshrc" is "zshrc"; a tool's config is named after its folder, so opencode's auth.json is "opencode".
+    /// "boot-alice.sh" is "boot-alice", ".zshrc" is "zshrc"; a tool's config is named after its folder, so opencode's auth.json is "opencode".
     static func label(_ file: URL) -> String {
         let stem = file.deletingPathExtension().lastPathComponent
         let name = ["auth", "config", "settings"].contains(stem) ? file.deletingLastPathComponent().lastPathComponent : stem
