@@ -22,7 +22,7 @@ final class BalanceProvider: UsageProvider {
             do {
                 data = try http.get(URL(string: "https://" + host + path)!, token: key, headers: [:], limit: 1024 * 1024)
             } catch let error as HTTPFailure {
-                lastProblem = HUDProblem(error.status == 401 || error.status == 403 ? "\(name) API key rejected" : "\(name) balance HTTP \(error.status)")
+                lastProblem = error.status == 401 || error.status == 403 ? HUDProblem("\(name) API key rejected", attention: true) : HUDProblem("\(name) balance HTTP \(error.status)")
                 continue
             }
             let (amount, symbol) = try parse(data, host)

@@ -38,17 +38,18 @@ public final class Engine {
                     try cache.write(statusFile, ["error": NSNull(), "checked_at": Date().timeIntervalSince1970])
                 } catch {
                     let message = (error as? HUDProblem)?.message ?? (error as? HTTPFailure).map { "Usage HTTP \($0.status)" } ?? "Usage unavailable"
-                    try? cache.write(statusFile, ["error": message, "checked_at": Date().timeIntervalSince1970])
+                    try? cache.write(statusFile, ["error": message, "attention": (error as? HUDProblem)?.attention == true,
+                                                  "checked_at": Date().timeIntervalSince1970])
                 }
             }
             guard provider.shown() else { return nil }
             var panel = provider.panel()
-            if let message = cache.read(statusFile)["error"] as? String {
+            let status = cache.read(statusFile)
+            if let message = status["error"] as? String {
                 panel.note = message
                 for index in panel.windows.indices { panel.windows[index].stale = true }
-                // A rejected key or expired sign-in won't fix itself; a passing outage will.
-                let lower = message.lowercased()
-                if ["rejected", "expired", "sign in", "sign-in", "login"].contains(where: { lower.contains($0) }) { panel.alert = panel.alert ?? message }
+                // A rejected key won't fix itself; a passing outage or an idle CLI's token will.
+                if status["attention"] as? Bool == true { panel.alert = panel.alert ?? message }
             }
             if panel.alert == nil, let money = panel.windows.first(where: { $0.label == panel.name && $0.pct == nil }),
                let level = Shelf.level(panel), -level < lowBalance {

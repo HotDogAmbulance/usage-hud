@@ -39,7 +39,7 @@ final class GLMProvider: UsageProvider {
                 data = try http.get(URL(string: "https://\(host)/api/monitor/usage/quota/limit")!, token: key,
                                     headers: ["Authorization": key, "Accept-Language": "en-US,en"], limit: 1024 * 1024)
             } catch let error as HTTPFailure {
-                lastProblem = HUDProblem(error.status == 401 || error.status == 403 ? "GLM API key rejected" : "GLM usage HTTP \(error.status)")
+                lastProblem = error.status == 401 || error.status == 403 ? HUDProblem("GLM API key rejected", attention: true) : HUDProblem("GLM usage HTTP \(error.status)")
                 continue
             }
             try cache.quota("glm.json", windows: Self.windows(data), extra: ["host": host, "plan": dict(data["data"])["level"] ?? NSNull()])

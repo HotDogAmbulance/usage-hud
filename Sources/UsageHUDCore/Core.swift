@@ -5,7 +5,10 @@ import CoreFoundation
 typealias JSON = [String: Any]
 struct HUDProblem: Error, LocalizedError {
     let message: String
-    init(_ message: String) { self.message = message }
+    /// Only the user can fix it (a rejected key, a revoked sign-in); the battery asks for attention.
+    /// Tokens that merely expired while their CLI sat idle renew themselves and stay quiet.
+    let attention: Bool
+    init(_ message: String, attention: Bool = false) { self.message = message; self.attention = attention }
     var errorDescription: String? { message }
 }
 func number(_ value: Any?) -> Double? {

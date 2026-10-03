@@ -32,7 +32,7 @@ final class ClaudeProvider: UsageProvider {
             data = try http.get(URL(string: "https://api.anthropic.com/api/oauth/usage")!, token: token,
                                 headers: ["anthropic-beta": "oauth-2025-04-20", "anthropic-version": "2023-06-01"], limit: 1024 * 1024)
         } catch let error as HTTPFailure {
-            if error.status == 401 || error.status == 403 { throw HUDProblem("Claude needs sign-in: claude auth login") }
+            if error.status == 401 || error.status == 403 { throw HUDProblem("Claude needs sign-in: claude auth login", attention: true) }
             if error.status == 429 { throw HUDProblem("Claude usage endpoint throttled; retry later") }
             throw HUDProblem("Claude usage HTTP \(error.status)")
         }

@@ -35,8 +35,9 @@ struct AlertProvider: UsageProvider {
     var name: String { id }
     let automatic = true
     let problem: String?
+    var attention = false
     let right: String
-    func refresh() throws { if let problem = problem { throw HUDProblem(problem) } }
+    func refresh() throws { if let problem = problem { throw HUDProblem(problem, attention: attention) } }
     func panel() -> Panel { Panel(id: id, name: name, windows: [Window(label: id, right: right)]) }
 }
 final class CoreTests {
@@ -406,11 +407,12 @@ final class CoreTests {
         expectEqual(Updates.newer(["tag_name": "v2.2", "html_url": "https://github.com/o/r/releases/tag/v2.2"], than: "2.1")?.tag, "v2.2")
         expectNil(Updates.newer(["tag_name": "v2.1", "html_url": "https://github.com/o/r"], than: "2.1"))
     }
+    /// An idle CLI's expired token and a passing outage stay calm; a rejected key and a low balance ask for attention.
     func testAlertsForRejectedKeysAndLowBalanceOnly() {
         let engine = Engine(root: root, credentials: credentials, http: http, providers: [
-            AlertProvider(id: "a", problem: "a API key rejected", right: "$9.00 left"),
+            AlertProvider(id: "a", problem: "a API key rejected", attention: true, right: "$9.00 left"),
             AlertProvider(id: "b", problem: nil, right: "$0.50 left"),
-            AlertProvider(id: "c", problem: "c balance HTTP 503", right: "$9.00 left")])
+            AlertProvider(id: "c", problem: "c sign-in expired; run c once", right: "$9.00 left")])
         let panels = engine.panels(refresh: "automatic")
         expectEqual(panels[0].alert, "a API key rejected")
         expectEqual(panels[1].alert, "Balance low: $0.50 left")
