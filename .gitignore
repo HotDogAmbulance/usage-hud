@@ -8,3 +8,6 @@ __pycache__/
 *.lock
 battery-preview.png
 usage-hud-menubar*
+
+.build/
+.swiftpm/

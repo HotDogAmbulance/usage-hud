@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0 — 2026-10-03
+
+- Move all provider reads, quota normalization, CLI hooks, cache and credit accounting to Swift.
+- Remove Python source, collector processes and interpreter configuration from the app and repository.
+- Introduce a small Swift package and a shared provider protocol; no third-party dependencies.
+- Lock atomic cache merges across app and CLI; preserve existing configuration and cached readings.
+- Retain native battery styling, weekly fallback, manual credit refresh and normal app reopening.
+- Add native checks for transport deadlines, failure isolation, credentials, cache migration and Decimal accounting.
+
+
 ## 2026-10-03
 
 - Replace the floating Tk note with native Swift menu-bar batteries.

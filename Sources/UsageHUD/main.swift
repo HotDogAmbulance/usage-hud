@@ -1,29 +1,20 @@
 import Cocoa
 import Darwin
 
-struct Window: Decodable {
-    let label: String
-    let pct: Double?
-    let right: String?
-    let resets_at: Double?
-    let expired: Bool?
-    let stale: Bool?
-}
-struct Panel: Decodable {
-    let id: String
-    let name: String
-    let windows: [Window]
-    let note: String
-}
+import UsageHUDCore
+
 final class HUD: NSObject, NSApplicationDelegate {
     var items: [String: NSStatusItem] = [:]
     var busy = false
     var lockDescriptor: Int32 = -1
-    let home = URL(fileURLWithPath: (Bundle.main.object(forInfoDictionaryKey: "UsageHUDDataDirectory") as? String) ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".usage-hud").path)
-    let python = (Bundle.main.object(forInfoDictionaryKey: "UsageHUDPython") as? String) ?? "/usr/bin/python3"
+    let engine = Engine()
+    var home: URL { engine.root }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        do {
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        } catch { NSApp.terminate(nil); return }
         lockDescriptor = Darwin.open(home.appendingPathComponent("menubar.lock").path, O_CREAT | O_RDWR, 0o600)
         if lockDescriptor < 0 || flock(lockDescriptor, LOCK_EX | LOCK_NB) != 0 { NSApp.terminate(nil); return }
         load(nil)
@@ -40,22 +31,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         guard !busy else { return }
         busy = true
         DispatchQueue.global(qos: .utility).async {
-            let process = Process(), output = Pipe()
-            process.executableURL = URL(fileURLWithPath: self.python)
-            process.arguments = [self.home.appendingPathComponent("collector.py").path] + (refresh.map{["--refresh", $0]} ?? [])
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-            var env = ProcessInfo.processInfo.environment
-            env["USAGE_HUD_HOME"] = self.home.path
-            env["PATH"] = FileManager.default.homeDirectoryForCurrentUser.path + "/.local/bin:/opt/homebrew/bin:/usr/bin:/bin"
-            process.environment = env
-            var panels: [Panel] = []
-            do {
-                try process.run()
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                panels = try JSONDecoder().decode([Panel].self, from: data)
-            } catch {}
+            let panels = self.engine.panels(refresh: refresh)
             DispatchQueue.main.async {
                 self.busy = false
                 for panel in panels { self.render(panel) }
@@ -70,17 +46,15 @@ final class HUD: NSObject, NSApplicationDelegate {
         }
     }
     func displayedQuota(_ panel: Panel) -> Window? {
-        let fiveHour = panel.windows.first(where: {$0.label == "5h" && $0.pct != nil})
-        if let fiveHour = fiveHour, fiveHour.stale != true && fiveHour.expired != true { return fiveHour }
-        if let week = panel.windows.first(where: {$0.label == "7d" && $0.pct != nil}) { return week }
-        return panel.windows.first(where: {$0.pct != nil && $0.stale != true && $0.expired != true})
+        panel.displayedQuota
     }
     func icon(_ panel: Panel) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
-        let cached = quota?.stale == true || quota?.expired == true
+        let moneyWindow = quota == nil ? panel.windows.first(where: {$0.label == panel.name}) : nil
+        let cached = quota?.stale == true || quota?.expired == true || moneyWindow?.stale == true
         let remaining = valid ? min(100, max(0, 100 - (quota?.pct ?? 0))) : 0
-        let money = quota == nil ? panel.windows.first(where: {$0.label == panel.name && $0.stale != true})?.right?.split(separator: " ").first.map(String.init) : nil
+        let money = moneyWindow?.right?.split(separator: " ").first.map(String.init)
         let text = valid ? String(Int(remaining.rounded())) : money.map{$0.replacingOccurrences(of: "$", with: "")} ?? "?"
         // Full-height layers share the native battery silhouette: grey, 7d, then 5h.
         let weekly = panel.windows.first(where: {$0.label == "7d" && $0.label != quota?.label && $0.pct != nil})
@@ -155,6 +129,12 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     @objc func refreshProvider(_ sender: NSMenuItem) { load(sender.representedObject as? String) }
     @objc func quit() { NSApp.terminate(nil) }
+}
+do {
+    if try Engine().handleCLI(Array(CommandLine.arguments.dropFirst())) { exit(0) }
+} catch {
+    fputs("Usage HUD: " + error.localizedDescription + "\n", stderr)
+    exit(1)
 }
 let app = NSApplication.shared
 let delegate = HUD()
