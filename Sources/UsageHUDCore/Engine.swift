@@ -25,7 +25,7 @@ public final class Engine {
                                       ClaudeProvider(cache: cache, credentials: credentials, http: http),
                                       OpenRouterProvider(cache: cache, credentials: credentials, http: http),
                                       GLMProvider(cache: cache, credentials: credentials, http: http),
-                                      GeminiProvider(cache: cache, http: http),
+                                      AntigravityProvider(cache: cache),
                                       GrokProvider(cache: cache),
                                       BalanceProvider.vercel(cache: cache, credentials: credentials, http: http),
                                       BalanceProvider.deepSeek(cache: cache, credentials: credentials, http: http),
@@ -153,7 +153,7 @@ public final class Engine {
             return true
         }
         if arguments == ["--help"] {
-            print("usagehud [--json | --refresh automatic|codex|claude|openrouter|glm|gemini|grok|vercel|deepseek|kimi|openai-credits | --claude-statusline | --probe-if-stale]")
+            print("usagehud [--json | --refresh automatic|codex|claude|openrouter|glm|antigravity|grok|vercel|deepseek|kimi|openai-credits | --claude-statusline | --probe-if-stale]")
             return true
         }
         let refresh: String?

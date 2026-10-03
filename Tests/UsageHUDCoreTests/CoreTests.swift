@@ -315,35 +315,33 @@ final class CoreTests {
         expectTrue(provider.shown()); expectEqual(http.sentHeaders["Authorization"], "zai-key")
         expectEqual(cache.read("glm.json")["host"] as? String, "open.bigmodel.cn")
     }
-    func testGeminiFamiliesKeepTightestPool() throws {
-        let windows = try GeminiProvider.windows(["buckets": [
-            ["modelId": "gemini-2.5-pro", "remainingFraction": 0.75, "resetTime": "2026-10-04T00:00:00Z"],
-            ["modelId": "gemini-3-pro-preview", "remainingFraction": 0.40, "resetTime": "2026-10-03T20:00:00Z"],
-            ["modelId": "gemini-2.5-flash", "remainingFraction": 0.9],
-            ["modelId": "gemini-2.5-flash-lite", "remainingFraction": 1]]])
-        expectEqual(Set(windows.keys), ["pro", "flash", "flash_lite"])
-        expectEqual(number(dict(windows["pro"])["used_percentage"]) ?? 0, 60, accuracy: 0.001)
-        expectEqual(number(dict(windows["pro"])["resets_at"]), resetTime("2026-10-03T20:00:00Z"))
+    func testAntigravityModelQuotaAndPrivateCache() throws {
+        let response: JSON = ["userStatus": ["email": "private@example.com", "token": "private-token",
+            "cascadeModelConfigData": ["clientModelConfigs": [
+                ["label": "Gemini Pro", "quotaInfo": ["remainingFraction": 0.75, "resetTime": "2099-10-04T00:00:00Z"]],
+                ["label": "Claude", "quotaInfo": ["remainingFraction": 0.25]],
+                ["label": "Unavailable"]]]]]
+        let provider = AntigravityProvider(cache: cache, read: { response })
+        expectFalse(provider.shown()); try provider.refresh(); expectTrue(provider.shown())
+        expectEqual(provider.panel().windows.first?.label, "Claude")
+        expectEqual(provider.panel().windows.first?.pct, 75)
+        expectEqual(provider.panel().windows.count, 2)
+        expectNotNil(provider.panel().windows.last?.resets_at)
+        let raw = String(decoding: try Data(contentsOf: root.appendingPathComponent("antigravity.json")), as: UTF8.self)
+        expectFalse(raw.contains("private@example.com")); expectFalse(raw.contains("private-token"))
     }
-    func testExpiredGeminiNeverCallsNetwork() throws {
-        let file = root.appendingPathComponent("oauth_creds.json")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try Data("{\"access_token\":\"fixture\",\"expiry_date\":1}".utf8).write(to: file)
-        expectError(try GeminiProvider(cache: cache, http: http, credentialFile: file).refresh())
-        expectEqual(http.calls, 0)
+    func testAntigravityUnavailableKeepsLastReading() throws {
+        try cache.quota("antigravity.json", windows: ["Gemini": ["used_percentage": 30]])
+        let provider = AntigravityProvider(cache: cache, read: { throw HUDProblem("Open Antigravity") })
+        expectError(try provider.refresh()); expectEqual(provider.panel().windows.first?.pct, 30)
     }
-    func testGeminiPostsProjectFromTier() throws {
-        let file = root.appendingPathComponent("oauth_creds.json")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try Data("{\"access_token\":\"fixture\"}".utf8).write(to: file)
-        http.handler = { url in url.absoluteString.hasSuffix("loadCodeAssist") ?
-            ["cloudaicompanionProject": "proj-1", "currentTier": ["name": "Gemini Code Assist"]] :
-            ["buckets": [["modelId": "gemini-2.5-pro", "remainingFraction": 0.5]]] }
-        let provider = GeminiProvider(cache: cache, http: http, credentialFile: file)
-        try provider.refresh()
-        expectEqual(http.bodies.last?["project"] as? String, "proj-1")
-        expectEqual(provider.panel().note, "Plan: Gemini Code Assist")
-        expectEqual(provider.panel().windows.first?.pct, 50)
+    func testAntigravityRejectsInvalidQuotaAndParsesFlags() throws {
+        expectError(try AntigravityProvider.windows([:]))
+        expectError(try AntigravityProvider.windows(["userStatus": ["cascadeModelConfigData": ["clientModelConfigs": [
+            ["label": "Model", "quotaInfo": ["remainingFraction": 2]]]]]]))
+        expectEqual(AntigravityLocal.flag("--csrf_token", in: "binary --csrf_token=fixture --other x"), "fixture")
+        expectEqual(AntigravityLocal.flag("--csrf_token", in: "binary --csrf_token fixture --other x"), "fixture")
+        expectNil(AntigravityLocal.flag("--csrf_token", in: "binary --csrf_token_extra wrong"))
     }
     func testGrokMonthlyBillingInCents() throws {
         let billing: JSON = ["monthlyLimit": ["val": 5000], "usage": ["totalUsed": ["val": 1250]],
@@ -435,6 +433,7 @@ final class CoreTests {
         expectNil(engine.panels(refresh: nil)[1].alert)
     }
     func testRouterKeyCapUsesOpenRouterNumbersAndAlerts() throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let config = [["id": "one", "label": "One", "sources": [["provider": "openrouter", "service": "fixture", "account": "one"]]]]
         try JSONSerialization.data(withJSONObject: config).write(to: root.appendingPathComponent("providers.json"))
         http.handler = { url in

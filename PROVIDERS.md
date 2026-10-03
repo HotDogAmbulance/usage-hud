@@ -34,14 +34,14 @@ Ordered sources provide fallbacks. Keep slot IDs stable. Failed sources preserve
 
 OpenRouter reads `/api/v1/key` (today's spend, cap, remaining and reset period), `/api/v1/keys` with a management key, and `/api/v1/credits` for the account's USD balance. Days and caps follow OpenRouter's UTC calendar. It refreshes in the background once a key is configured. A money balance has no percentage denominator.
 
-## GLM, Gemini and Grok
+## GLM, Antigravity and Grok
 
 These three stay out of the menu bar until their first successful read, so people who don't use them never see an empty battery. They refresh in the background with Codex and Claude.
 
 | Provider | What it reads | Setup |
 | --- | --- | --- |
 | GLM Coding Plan | 5h and weekly credit windows from `/api/monitor/usage/quota/limit` | Nothing, if Claude Code already points at Z.ai or Zhipu; otherwise store the key in the Keychain (below) |
-| Gemini | Daily per-model pools (Pro, Flash, Flash Lite) from the Gemini CLI quota endpoint | Install [Gemini CLI](https://github.com/google-gemini/gemini-cli) and sign in with Google |
+| Antigravity | Remaining quota and reset time for each available model | Sign in to the Antigravity macOS app and keep it running |
 | Grok | Monthly spend against the plan limit, via `grok agent stdio` | Install Grok CLI and run `grok login` |
 
 **GLM.** The HUD reads the key Z.ai's setup puts in `~/.claude/settings.json` (`ANTHROPIC_BASE_URL` on `z.ai` or `bigmodel.cn`, with `ANTHROPIC_AUTH_TOKEN`) and sends it only to that provider's own quota host. To use a different key, store it with `api.z.ai` as the account for Z.ai, or `open.bigmodel.cn` for Zhipu; a stored key wins:
@@ -52,11 +52,13 @@ security add-generic-password -s "Usage HUD GLM" -a api.z.ai -w
 
 macOS asks for the key without echoing it. Z.ai reports credit windows (`CREDIT_LIMIT`, unit 3 = hours, unit 6 = weeks) and older plans report `TOKENS_LIMIT` for the 5h window; the monthly MCP allowance (`TIME_LIMIT`) is not shown.
 
-**Gemini.** The app reads `~/.gemini/oauth_creds.json` and never renews or rewrites it. Google access tokens are short-lived, so when the token has expired the battery keeps its last reading as cached until you next use `gemini`. API-key and Vertex sign-ins are not supported.
+**Antigravity.** The HUD reads the running macOS app’s local `GetUserStatus` service. Antigravity owns Google authentication and token renewal; the HUD never reads or changes its Google token, Keychain entry or credential file. It discovers the app’s language-server process and loopback listener on every refresh, keeps the local CSRF token only in memory, forbids redirects and stores only model percentages and reset times. The battery leads with the model closest to exhausting its quota; hover shows the individual models. A missing model quota is not treated as 100% remaining.
+
+This is an internal integration verified with Antigravity 2.19.1, not a public Google quota API. It requires the app to remain running and may need updating when its local protocol changes. If unavailable, the HUD preserves the last reading with its error/stale state. Google credentials are never copied into the HUD. Gemini CLI integration has been removed. Gemini API / AI Studio usage is a separate planned integration and is not enabled by this adapter. Purchased credit balances are not inferred from legacy plan fields.
 
 **Grok.** Set `USAGE_HUD_GROK_CLI` to an absolute path if `grok` is not in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.npm-global/bin`, `~/.bun/bin`, `~/.volta/bin`, an nvm Node version or the app's PATH. Codex is found the same way.
 
-The Gemini quota endpoint, the Z.ai monitor endpoint and Grok's billing RPC are not documented public APIs. Field handling is defensive, and these adapters were written from fixtures rather than live accounts.
+The Z.ai monitor endpoint and Grok’s billing RPC are not documented public APIs; their parsers use fixtures. Antigravity model quota has also been checked against a live local session.
 
 ## Vercel AI Gateway, DeepSeek and Kimi balances
 

@@ -158,7 +158,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         case "codex": return NSColor(srgbRed: 0.40, green: 0.82, blue: 0.74, alpha: 1)
         case "claude": return NSColor(srgbRed: 0.85, green: 0.58, blue: 0.45, alpha: 1)
         case "glm": return NSColor(srgbRed: 0.42, green: 0.36, blue: 0.98, alpha: 1)
-        case "gemini": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
+        case "antigravity": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
         case "grok": return NSColor(srgbRed: 0.52, green: 0.55, blue: 0.62, alpha: 1)
         case "vercel": return NSColor(srgbRed: 0.58, green: 0.56, blue: 0.54, alpha: 1)
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
@@ -171,7 +171,7 @@ final class HUD: NSObject, NSApplicationDelegate {
     var darkMenuBar: Bool {
         (items.values.first?.button?.effectiveAppearance ?? NSApp.effectiveAppearance).bestMatch(from: [.darkAqua, .aqua]) != .aqua
     }
-    /// Fills `rect` with the provider's tint. Gemini uses its four-colour mark, spread across the whole body.
+    /// Fills `rect` with the provider's tint. Antigravity uses its four-colour mark, spread across the whole body.
     /// On a light menu bar, pale tints are deepened and the weekly shade is softened less, so white and silver stay visible.
     /// `muted` is the 7d layer behind 5h: on a dark bar it sinks toward grey instead of toward white, so it reads as the
     /// same colour further away rather than as a white battery.
@@ -185,7 +185,7 @@ final class HUD: NSObject, NSApplicationDelegate {
             if muted && dark { return color.blended(withFraction: 0.5, of: NSColor(srgbRed: 0.45, green: 0.45, blue: 0.45, alpha: 1))!.withAlphaComponent(alpha) }
             return (light || muted ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
         }
-        guard id == "gemini" else { shade(tint(id)).setFill(); rect.fill(); return }
+        guard id == "antigravity" else { shade(tint(id)).setFill(); rect.fill(); return }
         let marks: [(CGFloat, CGFloat, CGFloat)] = [(0.19, 0.53, 1.00), (0.19, 0.53, 1.00), (0.98, 0.27, 0.26), (0.98, 0.74, 0.07), (0.03, 0.73, 0.38)]
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: rect).addClip()
@@ -360,7 +360,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         if panel.cellsTitle != nil {
             let all = NSMenu()
             for cell in panel.cells { all.addItem(withTitle: cell.label + " · " + (cell.right ?? ""), action: nil, keyEquivalent: "") }
-            menu.addItem(withTitle: "All keys (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
+            let title = panel.id == "antigravity" ? "All models" : "All keys"
+            menu.addItem(withTitle: title + " (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
         }
         menu.addItem(NSMenuItem.separator())
         let refresh = menu.addItem(withTitle: "Refresh " + panel.name, action: #selector(refreshProvider(_:)), keyEquivalent: "r")
@@ -508,7 +509,7 @@ if CommandLine.arguments.contains("--self-test") {
     let long = Window(label: "Guy1", pct: 0, right: "$0.00 of $5.00 today · resets in 7h 16m")
     precondition(CellsView(lines: ["OpenRouter"], rows: [long]).frame.width > CellsView(lines: ["OpenRouter"], rows: [Window(label: "a", pct: 0, right: "$1")]).frame.width)
     // No tint may pass for the system battery's white.
-    for id in ["codex", "claude", "glm", "gemini", "grok", "vercel", "deepseek", "kimi", "openrouter", "other"] {
+    for id in ["codex", "claude", "glm", "antigravity", "grok", "vercel", "deepseek", "kimi", "openrouter", "other"] {
         let rgb = delegate.tint(id).usingColorSpace(.sRGB)!
         let linear = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
         let chroma = max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) - min(rgb.redComponent, rgb.greenComponent, rgb.blueComponent)

@@ -73,68 +73,6 @@ final class GLMProvider: UsageProvider {
     }
 }
 
-/// Gemini CLI signed in with a Google account. Reads the CLI's own OAuth file and never renews or rewrites it.
-final class GeminiProvider: UsageProvider {
-    let id = "gemini", name = "Gemini", automatic = true
-    static let base = "https://cloudcode-pa.googleapis.com/v1internal"
-    let cache: Cache, http: HTTPReading
-    let credentialFile: URL
-    init(cache: Cache, http: HTTPReading, credentialFile: URL? = nil) {
-        self.cache = cache; self.http = http
-        self.credentialFile = credentialFile ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini/oauth_creds.json")
-    }
-    func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("gemini.json").path) }
-    static func accessToken(_ data: Data, now: Double = Date().timeIntervalSince1970) throws -> String {
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? JSON else { throw HUDProblem("Gemini credential unreadable") }
-        guard let token = object["access_token"] as? String, !token.isEmpty else { throw HUDProblem("Gemini token missing; run gemini and sign in with Google") }
-        if let expiry = number(object["expiry_date"]), expiry / 1000 < now { throw HUDProblem("Gemini sign-in expired; run gemini once to renew it") }
-        return token
-    }
-    static func family(_ model: String) -> String {
-        let lower = model.lowercased()
-        if lower.contains("flash") && lower.contains("lite") { return "flash_lite" }
-        if lower.contains("pro") { return "pro" }
-        if lower.contains("flash") { return "flash" }
-        return lower
-    }
-    /// Models in one family share a pool, so each family keeps its lowest remaining fraction and earliest reset.
-    static func windows(_ response: JSON) throws -> JSON {
-        var windows: JSON = [:]
-        for bucket in response["buckets"] as? [JSON] ?? [] {
-            guard let model = bucket["modelId"] as? String, let remaining = number(bucket["remainingFraction"]) else { continue }
-            let key = family(model), old = dict(windows[key])
-            let used = (1 - max(0, min(1, remaining))) * 100
-            let reset = resetTime(bucket["resetTime"]), oldReset = number(old["resets_at"])
-            windows[key] = ["used_percentage": max(used, number(old["used_percentage"]) ?? 0),
-                            "resets_at": [reset, oldReset].compactMap { $0 }.min() as Any? ?? NSNull()]
-        }
-        guard !windows.isEmpty else { throw HUDProblem("Gemini returned no quota buckets") }
-        return windows
-    }
-    func refresh() throws {
-        guard let data = try? Data(contentsOf: credentialFile) else { throw HUDProblem("Install Gemini CLI and sign in with Google") }
-        let token = try Self.accessToken(data)
-        do {
-            let tier = try http.post(URL(string: Self.base + ":loadCodeAssist")!, token: token, headers: [:], body: ["metadata":
-                ["ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]], limit: 1024 * 1024)
-            let project = tier["cloudaicompanionProject"] as? String ?? dict(tier["cloudaicompanionProject"])["id"] as? String
-            let quota = try http.post(URL(string: Self.base + ":retrieveUserQuota")!, token: token, headers: [:],
-                                      body: project.map { ["project": $0] } ?? [:], limit: 1024 * 1024)
-            let plan = dict(tier["paidTier"])["name"] ?? dict(tier["currentTier"])["name"] ?? NSNull()
-            try cache.quota("gemini.json", windows: Self.windows(quota), extra: ["plan": plan])
-        } catch let error as HTTPFailure {
-            if error.status == 401 || error.status == 403 { throw HUDProblem("Gemini sign-in expired; run gemini once to renew it") }
-            throw HUDProblem("Gemini usage HTTP \(error.status)")
-        }
-    }
-    func panel() -> Panel {
-        let blob = cache.read("gemini.json")
-        // The most used family leads, so the battery shows the tightest pool.
-        let rows = quotaWindows(blob).sorted { ($0.pct ?? 0) > ($1.pct ?? 0) }
-        return Panel(id: id, name: name, windows: rows, note: (blob["plan"] as? String).map { "Plan: " + $0 } ?? (rows.isEmpty ? "Refresh Gemini to read quota" : ""))
-    }
-}
-
 /// Grok CLI. Reads monthly billing through the CLI's own `agent stdio` JSON-RPC, using its existing login.
 final class GrokProvider: UsageProvider {
     let id = "grok", name = "Grok", automatic = true
