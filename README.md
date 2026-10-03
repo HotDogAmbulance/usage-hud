@@ -10,7 +10,7 @@ Built for macOS, entirely in Swift. Small enough to stay out of the way.
 
 Using Codex Pro or Claude Pro/Max? [Here’s how your plan is displayed and how to set it up](PAID_PLANS.md). The same app adapts to your account’s reported windows.
 
-Each provider has its own color: teal for Codex, terracotta for Claude, pale violet for OpenRouter, blue for GLM, gold for Gemini, silver for Grok, lime for Vercel, indigo for DeepSeek and pink for Kimi.
+Each provider has its own color: teal for Codex, terracotta for Claude, pale violet for OpenRouter, white for GLM (Z.ai's mark), Google's four colours for Gemini, silver for Grok, warm grey for Vercel, DeepSeek's whale blue and Kimi's azure.
 
 For Codex and Claude, the number is the **percentage remaining** in your 5-hour window. The stronger color follows that reading. Behind it, a lighter shade shows what remains for the week. Grey is the unused part of the battery. The digits are cut out of the fill, so your menu-bar background shows through, just like the reference Mac battery. When the week has less left than the 5-hour window, the 5-hour fill covers it: hover over a battery to see the weekly reading on its own, in that same lighter shade. It returns to the 5-hour view when the pointer moves away.
 

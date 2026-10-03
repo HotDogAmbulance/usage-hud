@@ -52,14 +52,25 @@ final class HUD: NSObject, NSApplicationDelegate {
         switch id {
         case "codex": return NSColor(srgbRed: 0.40, green: 0.82, blue: 0.74, alpha: 1)
         case "claude": return NSColor(srgbRed: 0.85, green: 0.58, blue: 0.45, alpha: 1)
-        case "glm": return NSColor(srgbRed: 0.42, green: 0.60, blue: 0.98, alpha: 1)
-        case "gemini": return NSColor(srgbRed: 0.95, green: 0.76, blue: 0.32, alpha: 1)
+        // Brand colours where the brand has one; black-and-white marks get light neutrals so they show on the menu bar.
+        case "glm": return NSColor(srgbRed: 0.96, green: 0.96, blue: 0.97, alpha: 1)
+        case "gemini": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
         case "grok": return NSColor(srgbRed: 0.80, green: 0.80, blue: 0.84, alpha: 1)
-        case "vercel": return NSColor(srgbRed: 0.72, green: 0.88, blue: 0.35, alpha: 1)
-        case "deepseek": return NSColor(srgbRed: 0.47, green: 0.44, blue: 0.96, alpha: 1)
-        case "kimi": return NSColor(srgbRed: 0.96, green: 0.48, blue: 0.58, alpha: 1)
+        case "vercel": return NSColor(srgbRed: 0.66, green: 0.64, blue: 0.62, alpha: 1)
+        case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
+        case "kimi": return NSColor(srgbRed: 0.09, green: 0.51, blue: 1.00, alpha: 1)
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
         }
+    }
+    /// Fills `rect` with the provider's tint. Gemini uses its four-colour mark, spread across the whole body.
+    func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, alpha: CGFloat) {
+        let shade = { (color: NSColor) in (light ? color.blended(withFraction: 0.65, of: .white)! : color).withAlphaComponent(alpha) }
+        guard id == "gemini" else { shade(tint(id)).setFill(); rect.fill(); return }
+        let marks: [(CGFloat, CGFloat, CGFloat)] = [(0.19, 0.53, 1.00), (0.19, 0.53, 1.00), (0.98, 0.27, 0.26), (0.98, 0.74, 0.07), (0.03, 0.73, 0.38)]
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: rect).addClip()
+        NSGradient(colors: marks.map { shade(NSColor(srgbRed: $0.0, green: $0.1, blue: $0.2, alpha: 1)) })?.draw(in: body, angle: 0)
+        NSGraphicsContext.restoreGraphicsState()
     }
     func displayedQuota(_ panel: Panel) -> Window? {
         panel.displayedQuota
@@ -94,8 +105,6 @@ final class HUD: NSObject, NSApplicationDelegate {
         let image = NSImage(size: NSSize(width: bodyWidth + 5, height: 22))
         image.lockFocus()
         let body = NSBezierPath(roundedRect: NSRect(x: 1, y: bodyY, width: bodyWidth, height: bodyHeight), xRadius: 3.5, yRadius: 3.5)
-        let base = tint(panel.id)
-        let color = weeklyShade ? base.blended(withFraction: 0.65, of: .white)! : base
         let fillWidth = valid ? bodyWidth * remaining / 100 : 0
         let bodyRect = NSRect(x: 1, y: bodyY, width: bodyWidth, height: bodyHeight)
         NSGraphicsContext.saveGraphicsState()
@@ -104,15 +113,13 @@ final class HUD: NSObject, NSApplicationDelegate {
         } else { body.addClip() }
         NSColor.white.withAlphaComponent(0.36).setFill(); bodyRect.fill()
         if money != nil {
-            base.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(cached ? 0.50 : 1).setFill()
-            bodyRect.fill()
+            paint(bodyRect, body: bodyRect, id: panel.id, light: true, alpha: cached ? 0.50 : 1)
         }
         if weeklyValid {
-            base.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.50 : 1).setFill()
-            NSRect(x: 1, y: bodyY, width: bodyWidth * weeklyRemaining / 100, height: bodyHeight).fill()
+            paint(NSRect(x: 1, y: bodyY, width: bodyWidth * weeklyRemaining / 100, height: bodyHeight), body: bodyRect, id: panel.id,
+                  light: true, alpha: weekly?.stale == true || weekly?.expired == true ? 0.50 : 1)
         }
-        color.withAlphaComponent(cached ? 0.45 : 1).setFill()
-        NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight).fill()
+        paint(NSRect(x: 1, y: bodyY, width: fillWidth, height: bodyHeight), body: bodyRect, id: panel.id, light: weeklyShade, alpha: cached ? 0.45 : 1)
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
         if let mask = SystemBattery.cap {
