@@ -60,35 +60,41 @@ final class HUD: NSObject, NSApplicationDelegate {
         let weekly = panel.windows.first(where: {$0.label == "7d" && $0.label != quota?.label && $0.pct != nil})
         let weeklyValid = weekly != nil
         let weeklyRemaining = weeklyValid ? min(100, max(0, 100 - (weekly?.pct ?? 0))) : 0
-        let image = NSImage(size: NSSize(width: 28, height: 22))
+        let bodyWidth: CGFloat = money != nil ? 32 : 23
+        let image = NSImage(size: NSSize(width: bodyWidth + 5, height: 22))
         image.lockFocus()
-        let body = NSBezierPath(roundedRect: NSRect(x: 1, y: 4, width: 23, height: 13), xRadius: 3.5, yRadius: 3.5)
+        let body = NSBezierPath(roundedRect: NSRect(x: 1, y: 4, width: bodyWidth, height: 13), xRadius: 3.5, yRadius: 3.5)
         let color = tint(panel.id)
-        let fillWidth = valid ? 23 * remaining / 100 : 0
-        NSColor.white.withAlphaComponent(0.30).setFill(); body.fill()
+        let fillWidth = valid ? bodyWidth * remaining / 100 : 0
+        NSColor.white.withAlphaComponent(0.36).setFill(); body.fill()
+        if money != nil {
+            color.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(cached ? 0.50 : 1).setFill()
+            body.fill()
+        }
         NSGraphicsContext.saveGraphicsState()
         body.addClip()
         if weeklyValid {
-            color.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.20 : 0.45).setFill()
-            NSRect(x: 1, y: 4, width: 23 * weeklyRemaining / 100, height: 13).fill()
+            color.blended(withFraction: 0.65, of: .white)!.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.50 : 1).setFill()
+            NSRect(x: 1, y: 4, width: bodyWidth * weeklyRemaining / 100, height: 13).fill()
         }
         color.withAlphaComponent(cached ? 0.45 : 1).setFill()
         NSRect(x: 1, y: 4, width: fillWidth, height: 13).fill()
+        // A pale boundary keeps 7d visible even when the 5h fill covers it.
+        if weeklyValid && weeklyRemaining > 0 && weeklyRemaining < 100 {
+            NSColor.white.withAlphaComponent(weekly?.stale == true || weekly?.expired == true ? 0.45 : 0.85).setFill()
+            NSRect(x: 1 + bodyWidth * weeklyRemaining / 100 - 0.5, y: 4, width: 1, height: 13).fill()
+        }
         NSGraphicsContext.restoreGraphicsState()
         NSColor.white.withAlphaComponent(0.40).setFill()
-        NSBezierPath(roundedRect: NSRect(x: 25, y: 8, width: 2, height: 5), xRadius: 1, yRadius: 1).fill()
-        let font = NSFont.systemFont(ofSize: text.count > 3 ? 7.5 : 9.5, weight: .bold)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: (money != nil ? color : NSColor.labelColor).withAlphaComponent(cached ? 0.55 : 1)]
+        NSBezierPath(roundedRect: NSRect(x: bodyWidth + 2, y: 8, width: 2, height: 5), xRadius: 1, yRadius: 1).fill()
+        let font = NSFont.systemFont(ofSize: money != nil ? 9.5 : 10.5, weight: .semibold)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
         let size = (text as NSString).size(withAttributes: attrs)
-        let origin = NSPoint(x: 12.5-size.width/2, y: 10.5-size.height/2)
+        let origin = NSPoint(x: 1 + bodyWidth/2-size.width/2, y: 10.5-size.height/2)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current?.cgContext.setBlendMode(.destinationOut)
         (text as NSString).draw(at: origin, withAttributes: attrs)
-        if valid {
-            NSGraphicsContext.saveGraphicsState()
-            body.addClip()
-            NSBezierPath(rect: NSRect(x: 1, y: 4, width: fillWidth, height: 13)).addClip()
-            (text as NSString).draw(at: origin, withAttributes: [.font: font, .foregroundColor: NSColor.black.withAlphaComponent(cached ? 0.50 : 0.85)])
-            NSGraphicsContext.restoreGraphicsState()
-        }
+        NSGraphicsContext.restoreGraphicsState()
         image.unlockFocus()
         return image
     }
@@ -96,6 +102,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         let item = items[panel.id] ?? NSStatusBar.system.statusItem(withLength: 32)
         items[panel.id] = item
         item.button?.image = icon(panel)
+        item.length = (item.button?.image?.size.width ?? 28) + 4
         let displayed = displayedQuota(panel)
         let cached = displayed?.stale == true || displayed?.expired == true
         let reading = displayed.map { $0.label + (cached ? " · cached" : " · remaining") } ?? "balance in USD"
@@ -148,11 +155,14 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.items["codex"]?.menu?.items.contains{$0.title == "Showing 7d · cached"} == true)
     let image = NSImage(size: NSSize(width: 144, height: 44))
     image.lockFocus()
+    NSColor(srgbRed: 0.32, green: 0.44, blue: 0.59, alpha: 1).setFill()
+    NSRect(x: 0, y: 0, width: 144, height: 44).fill()
     for (index, id) in ["codex", "claude", "openrouter"].enumerated() {
         let panel = Panel(id: id, name: id == "openrouter" ? "OpenRouter" : id.capitalized, windows: [Window(label: id == "openrouter" ? "OpenRouter" : "5h", pct: id == "openrouter" ? nil : 19, right: id == "openrouter" ? "$26.25 left" : nil, resets_at: nil, expired: false, stale: false), Window(label: "7d", pct: id == "openrouter" ? nil : 37, right: nil, resets_at: nil, expired: false, stale: false)], note: "")
         delegate.render(panel)
         precondition(delegate.items[id]?.menu?.items.allSatisfy{!$0.title.contains("note")} == true)
-        delegate.icon(panel).draw(in: NSRect(x: index*48, y: 11, width: 28, height: 22))
+        let battery = delegate.icon(panel)
+        battery.draw(in: NSRect(x: CGFloat(index*48), y: 11, width: battery.size.width, height: 22))
     }
     image.unlockFocus()
     let representation = NSBitmapImageRep(data: image.tiffRepresentation!)!

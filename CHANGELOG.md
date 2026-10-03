@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1 — 2026-10-03
+
+- Use transparent cutout digits and the system semibold font, matching the macOS battery reference.
+- Increase weekly-layer contrast and retain its boundary under overlapping 5-hour fill.
+- Give OpenRouter a pale violet body and more room for the dollar balance.
+
 ## 2.0 — 2026-10-03
 
 - Move all provider reads, quota normalization, CLI hooks, cache and credit accounting to Swift.

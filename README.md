@@ -4,7 +4,7 @@
 
 One battery per provider: teal Codex, terracotta Claude, violet OpenRouter. Inside the same battery body, solid brand color shows remaining 5-hour quota, lighter color behind it shows remaining 7-day quota, and neutral grey fills the empty space. There are no separate bars or floating notes.
 
-If 5-hour data is missing or has reset, the most recent weekly reading replaces it. Cached weekly data is dimmed and identified in the menu. Click for all windows, reset countdowns and refresh. OpenRouter is a dollar balance, not a quota percentage: its number is violet on a neutral grey battery. OpenAI API credits remain a separate manual estimate in the Codex menu.
+Numbers use the macOS system font and transparent cutouts. The pale weekly layer has a subtle boundary so it remains visible when the 5-hour fill overlaps it. If 5-hour data is missing or has reset, the most recent weekly reading replaces it. Cached weekly data is dimmed and identified in the menu. Click for all windows, reset countdowns and refresh. OpenRouter is a dollar balance, not a quota percentage: its slightly wider battery uses a pale violet body and cutout digits. OpenAI API credits remain a separate manual estimate in the Codex menu.
 
 ## Install
 

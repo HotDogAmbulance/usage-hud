@@ -102,7 +102,7 @@ public final class Engine {
         }
         if arguments.count == 4 && arguments[0] == "--write-bundle-info" {
             let info: JSON = ["CFBundleName": arguments[2], "CFBundleDisplayName": arguments[2],
-                "CFBundleIdentifier": "local.usage-hud", "CFBundleVersion": "3", "CFBundleShortVersionString": "2.0",
+                "CFBundleIdentifier": "local.usage-hud", "CFBundleVersion": "4", "CFBundleShortVersionString": "2.0.1",
                 "CFBundlePackageType": "APPL", "CFBundleExecutable": "usagehud", "CFBundleIconFile": "AppIcon",
                 "LSUIElement": true, "LSMinimumSystemVersion": "12.0", "NSHighResolutionCapable": true,
                 "UsageHUDDataDirectory": arguments[3]]
