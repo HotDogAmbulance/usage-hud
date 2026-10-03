@@ -95,12 +95,18 @@ final class HUD: NSObject, NSApplicationDelegate {
         let cached = quota?.stale == true || quota?.expired == true || moneyWindow?.stale == true
         let remaining = valid ? min(100, max(0, 100 - (quota?.pct ?? 0))) : 0
         let money = moneyWindow?.right?.split(separator: " ").first.map(String.init)
-        let text = valid ? String(Int(remaining.rounded())) : money.map{$0.replacingOccurrences(of: "$", with: "")} ?? "?"
+        var text = valid ? String(Int(remaining.rounded())) : money.map{$0.replacingOccurrences(of: "$", with: "")} ?? "?"
+        if !valid, text.hasSuffix(".00") { text.removeLast(3) }
         // Full-height layers share the native battery silhouette: grey, 7d, then 5h.
         let weekly = panel.windows.first(where: {$0.label == "7d" && $0.label != quota?.label && $0.pct != nil})
         let weeklyValid = weekly != nil
         let weeklyRemaining = weeklyValid ? min(100, max(0, 100 - (weekly?.pct ?? 0))) : 0
-        let bodyWidth: CGFloat = money != nil ? 32 : 23
+        // Native battery digits are taller and lighter than a semibold status label.
+        let baseSize: CGFloat = money != nil ? 10 : 9.5
+        let baseFont = NSFont.monospacedDigitSystemFont(ofSize: baseSize, weight: .medium)
+        let measuredWidth = (text as NSString).size(withAttributes: [.font: baseFont]).width
+        // A balance stretches the body to fit its digits: whole amounts keep the standard size, cents widen it.
+        let bodyWidth: CGFloat = money != nil ? max(23, (measuredWidth + 6).rounded(.up)) : 23
         let bodyHeight: CGFloat = money != nil ? 13 : 12
         let bodyY = 10.5 - bodyHeight / 2
         let image = NSImage(size: NSSize(width: bodyWidth + 5, height: 22))
@@ -134,10 +140,6 @@ final class HUD: NSObject, NSApplicationDelegate {
             cap.close(); NSColor.white.withAlphaComponent(0.50).setFill(); cap.fill()
         }
         NSGraphicsContext.restoreGraphicsState()
-        // Native battery digits are taller and lighter than a semibold status label.
-        let baseSize: CGFloat = money != nil ? 10 : 9.5
-        let baseFont = NSFont.monospacedDigitSystemFont(ofSize: baseSize, weight: .medium)
-        let measuredWidth = (text as NSString).size(withAttributes: [.font: baseFont]).width
         let fontSize = min(baseSize, baseSize * (bodyWidth - 2) / max(1, measuredWidth))
         let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .medium)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
@@ -243,11 +245,18 @@ if CommandLine.arguments.contains("--self-test") {
         delegate.render(panel)
         precondition(delegate.items[id]?.menu?.items.allSatisfy{!$0.title.contains("note")} == true)
         let battery = delegate.icon(panel)
-        precondition(battery.size == NSSize(width: id == "openrouter" ? 37 : 28, height: 22))
-        precondition(delegate.items[id]?.length == (id == "openrouter" ? 41 : 32))
+        precondition(battery.size.height == 22 && (id == "openrouter" ? battery.size.width > 28 : battery.size.width == 28))
+        precondition(delegate.items[id]?.length == battery.size.width + 4)
         battery.draw(in: NSRect(x: CGFloat(index*48), y: 11, width: battery.size.width, height: 22))
     }
     image.unlockFocus()
+    // Balances stretch with their digits; a whole amount keeps the standard battery size.
+    func balance(_ right: String) -> NSImage {
+        delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))
+    }
+    precondition(balance("$26.00 left").size.width == 28)
+    precondition(balance("$26.25 left").size.width > balance("$26.00 left").size.width)
+    precondition(balance("$1026.25 left").size.width > balance("$26.25 left").size.width)
     let representation = NSBitmapImageRep(data: image.tiffRepresentation!)!
     try! representation.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("battery-preview.png"))
     print("Battery drawing and note-free menus passed")

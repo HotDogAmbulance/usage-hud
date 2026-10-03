@@ -16,7 +16,7 @@ For Codex and Claude, the number is the **percentage remaining** in your 5-hour 
 
 If the 5-hour reading is unavailable or its window has reset, the battery falls back to the latest 7-day reading. Older readings look dimmer, and the menu tells you when you’re seeing cached information. Click any battery to see the individual windows, reset times, and refresh controls.
 
-OpenRouter shows **dollars left**. Its pale green body gives the balance a readable home; the fill doesn’t represent a percentage. Any OpenAI API credit estimate lives separately in the Codex menu.
+OpenRouter shows **dollars left**. Its pale green body gives the balance a readable home; the fill doesn’t represent a percentage. Whole amounts keep the standard battery size; cents stretch the body to fit. Any OpenAI API credit estimate lives separately in the Codex menu.
 
 ## Make it at home on your Mac
 
