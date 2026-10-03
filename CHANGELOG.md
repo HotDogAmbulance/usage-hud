@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Hovering over a Codex or Claude battery shows its 7d window on its own; moving away returns to 5h.
+
 ## 2.0.1 — 2026-10-03
 
 - Use transparent cutout digits and the system semibold font, matching the macOS battery reference.

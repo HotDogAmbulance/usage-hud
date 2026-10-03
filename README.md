@@ -12,7 +12,7 @@ Using Codex Pro or Claude Pro/Max? [Here’s how your plan is displayed and how 
 
 Each provider has its own color: teal for Codex, terracotta for Claude, and pale violet for OpenRouter.
 
-For Codex and Claude, the number is the **percentage remaining** in your 5-hour window. The stronger color follows that reading. Behind it, a lighter shade shows what remains for the week; a thin pale marker keeps the weekly boundary visible when the two fills overlap. Grey is the unused part of the battery. The digits are cut out of the fill, so your menu-bar background shows through, just like the reference Mac battery.
+For Codex and Claude, the number is the **percentage remaining** in your 5-hour window. The stronger color follows that reading. Behind it, a lighter shade shows what remains for the week; a thin pale marker keeps the weekly boundary visible when the two fills overlap. Grey is the unused part of the battery. The digits are cut out of the fill, so your menu-bar background shows through, just like the reference Mac battery. Hover over a battery to see the weekly reading on its own; it returns to the 5-hour view when the pointer moves away.
 
 If the 5-hour reading is unavailable or its window has reset, the battery falls back to the latest 7-day reading. Older readings look dimmer, and the menu tells you when you’re seeing cached information. Click any battery to see the individual windows, reset times, and refresh controls.
 
