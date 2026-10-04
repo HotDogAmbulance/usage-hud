@@ -694,4 +694,12 @@ final class CoreTests {
         try ClaudeProvider(cache: cache, credentials: credentials, http: http).refresh()
         expectEqual(http.calls, 1)
     }
+    /// A provider in use refreshes between background passes, but a paused one stays paused.
+    func testProvidersInUseRefreshBetweenPasses() {
+        let prompting = PromptingProvider()
+        let engine = Engine(root: root, credentials: credentials, http: http, providers: [FakeProvider(id: "bad", fail: true), prompting])
+        expectEqual(engine.panels(also: ["bad"]).first?.note, "offline")
+        _ = engine.panels(refresh: "p"); _ = engine.panels(also: ["p"])
+        expectEqual(prompting.calls, 1)
+    }
 }
