@@ -25,9 +25,10 @@ final class ClaudeProvider: UsageProvider {
         }
         let oauth = (object["claudeAiOauth"] as? JSON) ?? object
         guard let token = oauth["accessToken"] as? String, !token.isEmpty else { throw HUDProblem("Claude token missing") }
-        // Claude Code renews its token while in use, in the CLI or the Claude app's Code tab; an old one only means it sat
-        // idle. Chat alone doesn't renew it. Nothing needs signing in.
-        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Updates when you next use Claude Code (CLI or the app's Code tab)") }
+        // The CLI renews this Keychain token while it runs; an old one only means it sat idle. Seen on a Mac: hours in the
+        // Claude app's Code tab left it expired until the CLI ran once, so the app may keep its own sign-in. Chat alone doesn't
+        // renew it either. Nothing needs signing in.
+        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Updates when you next run Claude Code in a terminal") }
         return token
     }
     func refresh() throws {

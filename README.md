@@ -54,13 +54,15 @@ The installed app carries its own executable, so you can remove the source check
 
 If you’re coming from the older Python version, the installer keeps your existing configuration and readings.
 
-When Claude Code is on the Mac, the app adds three small hooks (session start, each prompt, each finished turn) and its statusline to `~/.claude/settings.json`, keeping a backup the first time and leaving everything else, including a statusline of your own, as it was. They work in the CLI and in the Claude app’s Code tab, and only tell the running app to read Claude, so they never bring a Keychain prompt. If Claude Code is removed and installed again later, the app adds them back by itself. To take them out, untick **Live from Claude Code** in Claude’s battery menu; deleting the app leaves them silent.
+When Claude Code is on the Mac, the app adds three small hooks (session start, each prompt, each finished turn) and its statusline to `~/.claude/settings.json`, keeping a backup the first time and leaving everything else, including a statusline of your own, as it was. They only tell the running app to read Claude, so they never bring a Keychain prompt. The statusline readings come from the Claude Code CLI; in the Claude app’s Code tab the hooks run, but the app then needs the CLI’s Keychain sign-in, which only the CLI renews. If Claude Code is removed and installed again later, the app adds them back by itself. To take them out, untick **Live from Claude Code** in Claude’s battery menu; deleting the app leaves them silent.
 
 ## A few things to know
 
 Codex and Claude refresh in the background every five minutes. OpenRouter and the other key-based providers refresh in the background too; OpenAI API credit estimates refresh when you ask for them from the menu. The display checks its local cache every 30 seconds, including readings supplied by Claude’s statusline.
 
-Credentials stay in your existing macOS Keychain, CLI sign-in stores or provider configuration. Usage HUD reads them when needed and holds tokens in memory for the corresponding requests; it does not copy them into its usage cache. It doesn’t change your Keychain entries, renew your Claude sign-in, or send app telemetry. If Claude’s authentication expires, sign in again through Claude Code.
+Credentials stay in your existing macOS Keychain, CLI sign-in stores or provider configuration. Usage HUD reads them when needed and holds tokens in memory for the corresponding requests; it does not copy them into its usage cache. It doesn’t change your Keychain entries, renew your Claude sign-in, or send app telemetry. If Claude’s authentication expires, the battery shows its last reading as cached until you next run Claude Code in a terminal; a one-line message in the Claude menu says so. Anyone who uses Claude only in the desktop app, or only in Chat, should expect this.
+
+Usage HUD does not show Claude’s “Limit resets”. Anthropic’s server returns them only to clients it recognises as Claude Code, and Usage HUD does not pretend to be one. If Claude Code ever passes them to its statusline, the row can follow. Codex’s reset credits come in the usage response the app already reads, so that row stays.
 
 The Claude usage endpoint can change, and an API credit estimate may differ from your final bill. The estimate supports a pinned set of tariffs and stops when it encounters an unsupported model or service tier. Your provider’s billing page is the place to check the final amount.
 

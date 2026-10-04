@@ -999,7 +999,7 @@ final class CoreTests {
         try? cache.write("claude.json", ["captured_at": 1])
         let claude = { (refresh: String?) in Engine(root: self.root, credentials: self.credentials, http: self.http).panels(refresh: refresh).first { $0.id == "claude" } }
         let idle = claude("claude")
-        expectTrue(idle?.fix == nil && idle?.alert == nil && idle?.note.contains("Code tab") == true)
+        expectTrue(idle?.fix == nil && idle?.alert == nil && idle?.note.contains("terminal") == true)
         // A rejected token is a real sign-out, and the menu offers the sign-in.
         credentials.text = "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"expiresAt\":99999999999999}}"
         http.error = HTTPFailure(status: 401)
