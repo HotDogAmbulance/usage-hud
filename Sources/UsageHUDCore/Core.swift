@@ -13,8 +13,10 @@ struct HUDProblem: Error, LocalizedError {
     let prompted: Bool
     /// A harmless command that fixes it, offered in the battery's menu (for example `claude auth login`).
     let fix: String?
-    init(_ message: String, attention: Bool = false, prompted: Bool = false, fix: String? = nil) {
-        self.message = message; self.attention = attention || prompted; self.prompted = prompted; self.fix = fix
+    /// What feeds the battery is no longer on this Mac (app removed, CLI uninstalled, key deleted), so the battery leaves too.
+    let gone: Bool
+    init(_ message: String, attention: Bool = false, prompted: Bool = false, fix: String? = nil, gone: Bool = false) {
+        self.message = message; self.attention = attention || prompted; self.prompted = prompted; self.fix = fix; self.gone = gone
     }
     var errorDescription: String? { message }
 }

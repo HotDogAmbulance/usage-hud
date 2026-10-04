@@ -143,7 +143,7 @@ final class KeychainReader: CredentialReading {
         let (text, seconds) = run(arguments)
         guard text.isEmpty else { return text }
         if seconds > 2 { throw HUDProblem("Keychain asked for your password; choose Refresh here, then Always Allow", prompted: true) }
-        throw HUDProblem("Keychain credential unavailable")
+        throw HUDProblem("Keychain credential unavailable", gone: true)
     }
     func password(service: String, account: String?) throws -> String {
         let arguments = ["find-generic-password", "-s", service] + (account.map { ["-a", $0] } ?? [])

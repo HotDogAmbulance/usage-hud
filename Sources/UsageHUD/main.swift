@@ -402,7 +402,8 @@ final class HUD: NSObject, NSApplicationDelegate {
     /// Keeps the most recently used batteries in the menu bar, so a crowded bar or the notch never hides them silently.
     func arrange(_ ids: [String]) {
         let hidden = shelf.arrange(ids, limit: visibleLimit, urgent: Set(ids.filter { panels[$0]?.alert != nil })).hidden
-        for id in ids { items[id]?.isVisible = !hidden.contains(id) }
+        // A provider that left (its app or key removed) takes its battery with it.
+        for (id, item) in items { item.isVisible = ids.contains(id) && !hidden.contains(id) }
         guard !hidden.isEmpty else { overflow?.isVisible = false; return }
         let item = overflow ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if overflow == nil, let button = item.button {

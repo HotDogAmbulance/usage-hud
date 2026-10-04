@@ -30,7 +30,7 @@ final class BalanceProvider: UsageProvider {
     }
     func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent(id + ".json").path) }
     func refresh() throws {
-        var lastProblem = HUDProblem("No \(name) API key found on this Mac; see PROVIDERS.md")
+        var lastProblem = HUDProblem("No \(name) API key found on this Mac; see PROVIDERS.md", gone: true)
         for host in hosts {
             let stored = try credentials.stored(service: service, account: host)
             guard let key = stored ?? discovered()[host] else { continue }

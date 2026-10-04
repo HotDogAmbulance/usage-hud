@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Batteries leave with their source: uninstalling Antigravity, Codex or Grok, signing out of Claude Code, or deleting a provider's key removes its battery, and one without a good read for a week hides too. Closing an app or an outage only dims it. The background keeps checking, so each returns by itself with its next good read.
 - A provider used in the last ten minutes refreshes every minute instead of every five, so Codex and Antigravity batteries follow a chat while it runs. A provider paused after a Keychain prompt stays paused.
 - Keychain prompts can't come back every few minutes, even for someone who clicks Allow instead of Always Allow: secrets stay in memory and are fetched again only when the Keychain item itself changes (its attributes are read without asking). While Claude Code's statusline reports, Claude's battery doesn't touch the Keychain at all; extra-usage credits still update hourly.
 - Battery digits use SF Pro with tabular figures at Medium weight, 1.5pt taller, matching macOS 27's own battery; the font preview compares nearby sizes and weights, and the self-test prints where it saved it.
