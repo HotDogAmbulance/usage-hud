@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Review fixes: the test list compiles again; xAI teams billed afterwards no longer error on the missing prepaid ledger; Fireworks accounts may contain `_`; a LiteLLM gateway that is down is left alone for an hour instead of costing 30 s at every refresh; plain `http` is accepted only for localhost and local-network proxies; Kimi's TOML may use single quotes; `--help` lists every provider; battery digits drop any currency symbol, not just `$`.
-- OpenRouter's battery is lime (#C8FE01), turns amber under $15 and pulses red under $10, and its body is as full as the tightest capped key.
+- The Antigravity battery follows the pool you used last, and a spent pool simply reads 0, with no pulse. Kimi and Kimi Code share a sky blue, Fireworks is orchid and LiteLLM rose, so no two providers share a hue except the ones that are one company (Grok and xAI, Kimi and Kimi Code). `--self-test` writes `palette-dark.png` and `palette-light.png` to `~/.usage-hud` with every battery.
+- OpenRouter's battery is lime (#C8FE01), turns yellow under $15 and breathes a faint red under $10, and its body is as full as the tightest capped key.
 
 - Grok works again: current Grok CLI versions refuse the billing RPC the HUD used, so it now reads credit usage from the CLI's own billing endpoint with the sign-in `grok login` saved, and shows the plan ("SuperGrok Heavy"). An old sign-in waits quietly for the CLI to renew it.
 - New batteries, hidden until their first good read and not yet checked against real accounts: **Kimi Code** (5h, weekly and monthly windows), **xAI** API teams (prepaid balance, or spend against the spending limit, with a management key), **Fireworks** (spend against the monthly limit) and **LiteLLM** proxies (a virtual key's spend against its budget). Each finds its key the way the others do: Claude Code's settings, the provider's own CLI config, or the usual variables.

@@ -586,6 +586,24 @@ final class CoreTests {
         panel = try levels(9)
         expectEqual(panel.alert, "Balance low"); expectEqual(panel.caution, "Balance under $15")
     }
+    /// The battery follows the Antigravity pool you used last, not just the tightest one, and a spent pool just reads 0.
+    func testAntigravityBatteryFollowsTheLastUsedPool() throws {
+        var left = ["Gemini 3.1 Pro (High)": 0.84, "Claude Sonnet 4.6": 0.97]
+        func response() -> JSON {
+            ["userStatus": ["cascadeModelConfigData": ["clientModelConfigs": left.map { label, share -> JSON in
+                ["label": label, "quotaInfo": ["remainingFraction": share, "resetTime": "2099-10-10T00:00:00Z"]] }]]]
+        }
+        let provider = AntigravityProvider(cache: cache, read: { response() })
+        try provider.refresh()
+        expectEqual(provider.panel().displayedQuota?.label, "Gemini 3.1 Pro (High)")
+        left["Claude Sonnet 4.6"] = 0.90; try provider.refresh()
+        expectEqual(provider.panel().displayedQuota?.label, "Claude Sonnet 4.6")
+        left["Claude Sonnet 4.6"] = 0; try provider.refresh()
+        let panel = provider.panel()
+        expectEqual(panel.displayedQuota?.pct ?? 0, 100, accuracy: 0.01); expectNil(panel.alert)
+        left["Gemini 3.1 Pro (High)"] = 0.80; try provider.refresh()
+        expectEqual(provider.panel().displayedQuota?.label, "Gemini 3.1 Pro (High)")
+    }
     func testUnusedPlansStayOutOfMenuBar() {
         let engine = Engine(root: root, credentials: credentials, http: http)
         expectEqual(engine.panels().map(\.id), [])

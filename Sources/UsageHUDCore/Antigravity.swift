@@ -24,9 +24,14 @@ final class AntigravityProvider: UsageProvider {
         return result
     }
     func refresh() throws {
-        let response = try read()
-        try cache.write("antigravity.json", ["captured_at": Date().timeIntervalSince1970,
-                                            "rate_limits": Self.windows(response)])
+        let response = try read(), windows = try Self.windows(response)
+        let previous = cache.read("antigravity.json"), before = dict(previous["rate_limits"]), now = Date().timeIntervalSince1970
+        // A model whose used share rose since the last reading is the one being worked in; remember when.
+        var active = dict(previous["active"])
+        for (label, window) in windows {
+            if let used = number(dict(window)["used_percentage"]), let was = number(dict(before[label])["used_percentage"]), used > was + 0.001 { active[label] = now }
+        }
+        try cache.write("antigravity.json", ["captured_at": now, "rate_limits": windows, "active": active])
     }
     /// "Claude Opus 4.6 (Thinking)" belongs to Claude, "GPT-OSS 120B" to GPT.
     static func family(_ model: String) -> String {
@@ -52,10 +57,13 @@ final class AntigravityProvider: UsageProvider {
             if pools[key] == nil { order.append(key) }
             pools[key, default: []].append(model)
         }
+        // The battery follows the pool used most recently; with no history yet, the one with the least left.
+        let active = dict(cache.read("antigravity.json")["active"])
+        var lead: (label: String, at: Double)?
         var rows = order.compactMap { pools[$0] }.map { members -> Window in
-            let first = members[0]
-            return Window(label: members.count == 1 ? first.label : families(members), pct: first.pct,
-                          right: text(first), resets_at: first.resets_at, expired: first.expired, stale: first.stale)
+            let first = members[0], label = members.count == 1 ? first.label : families(members)
+            if let at = members.compactMap({ number(active[$0.label]) }).max(), at > (lead?.at ?? 0) { lead = (label, at) }
+            return Window(label: label, pct: first.pct, right: text(first), resets_at: first.resets_at, expired: first.expired, stale: first.stale)
         }.enumerated().sorted { ($0.element.pct ?? 0, -$0.offset) > ($1.element.pct ?? 0, -$1.offset) }.map { $0.element }
         // Untouched models fold into one full row, still named by their families so none goes missing.
         let untouched = rows.filter { ($0.pct ?? 0) < 0.5 }
@@ -65,7 +73,7 @@ final class AntigravityProvider: UsageProvider {
         }
         // Readings come from the running app; once it closes they dim, and the note says why.
         return Panel(id: id, name: name, windows: rows, note: models.contains { $0.stale == true } ? "Updates while Antigravity is open" : "",
-                     cells: rows, cellsTitle: "\(models.count) models", lead: rows.first?.label)
+                     cells: rows, cellsTitle: "\(models.count) models", lead: lead?.label ?? rows.first?.label)
     }
 }
 
