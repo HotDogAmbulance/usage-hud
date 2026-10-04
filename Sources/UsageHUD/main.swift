@@ -235,7 +235,12 @@ final class HUD: NSObject, NSApplicationDelegate {
     /// `weeklyShade` draws the main fill in the same lighter tone the 7d layer uses behind 5h.
     /// `glow` washes the body in soft red, for a battery asking for attention.
     /// The digits' font, by size. `--self-test` also renders the candidates side by side in font-preview.png.
-    static var digitFont: (CGFloat) -> NSFont = { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .bold) }
+    /// macOS 27's battery uses narrow SF digits, taller and lighter than plain bold; macOS 12 has no narrow cut.
+    static var digitFont: (CGFloat) -> NSFont = { condensed($0 + 1, .bold) }
+    static func condensed(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
+        if #available(macOS 13, *) { return NSFont.systemFont(ofSize: size, weight: weight, width: .condensed) }
+        return NSFont.monospacedDigitSystemFont(ofSize: size - 1, weight: .bold)
+    }
     func icon(_ panel: Panel, weeklyShade: Bool = false, glow: CGFloat = 0) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
@@ -373,7 +378,9 @@ final class HUD: NSObject, NSApplicationDelegate {
             menu.addItem(withTitle: title + " (\(rows.count))", action: nil, keyEquivalent: "").submenu = all
         }
         menu.addItem(NSMenuItem.separator())
-        if let fix = panel.fix {
+        if signingIn == panel.id {
+            menu.addItem(withTitle: "Approve the sign-in in your browser…", action: nil, keyEquivalent: "")
+        } else if let fix = panel.fix {
             let item = menu.addItem(withTitle: "Sign in to " + panel.name + " again…", action: #selector(runFix(_:)), keyEquivalent: "")
             item.representedObject = [panel.id, fix]; item.target = self
         }
@@ -439,18 +446,29 @@ final class HUD: NSObject, NSApplicationDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
     @objc func refreshProvider(_ sender: NSMenuItem) { load(sender.representedObject as? String) }
-    /// Opens Terminal on the provider's own sign-in command through a .command file, so no Automation permission is needed
-    /// and nothing is typed: the CLI opens the browser, and once it is done the battery refreshes by itself.
-    /// Only commands written into the providers ever get here.
-    static let fixes: Set<String> = ["claude auth login", "codex login", "grok login"]
+    /// The provider whose sign-in is waiting in the browser.
+    var signingIn: String?
+    /// Signs in without a window: the CLI opens the browser, and the battery refreshes once the user approves there.
+    /// A CLI that turns out to need a terminal gets one, through a .command file so no Automation permission is needed.
+    @objc func runFix(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [String], pair.count == 2, SignIn.commands.contains(pair[1]) else { return }
+        let (id, fix) = (pair[0], pair[1])
+        let started = SignIn.start(fix) { ok, quick in
+            DispatchQueue.main.async {
+                self.signingIn = nil
+                if ok { self.load(id) } else if quick { self.openTerminal(fix, id: id) }
+                if let panel = self.panels[id] { self.render(panel) }
+            }
+        }
+        if started { signingIn = id; if let panel = panels[id] { render(panel) } } else { openTerminal(fix, id: id) }
+    }
     static func fixScript(_ fix: String, id: String, executable: String?) -> String {
         let refresh = executable.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "' --refresh " + id + " >/dev/null 2>&1" } ?? "true"
         return "#!/bin/zsh -l\necho 'Signing in: \(fix)'\n\(fix) && \(refresh) && echo && echo 'Signed in and updated. You can close this window.'\n"
     }
-    @objc func runFix(_ sender: NSMenuItem) {
-        guard let pair = sender.representedObject as? [String], pair.count == 2, HUD.fixes.contains(pair[1]) else { return }
+    func openTerminal(_ fix: String, id: String) {
         let script = home.appendingPathComponent("fix.command")
-        let text = HUD.fixScript(pair[1], id: pair[0], executable: Bundle.main.executablePath)
+        let text = HUD.fixScript(fix, id: id, executable: Bundle.main.executablePath)
         guard (try? text.write(to: script, atomically: true, encoding: .utf8)) != nil else { return }
         chmod(script.path, 0o700)
         NSWorkspace.shared.open(script)
@@ -539,7 +557,10 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.items["claude"]?.menu?.items.contains { $0.title == "Sign in to Claude again…" && $0.action != nil } == true)
     precondition(delegate.items["claude"]?.button?.toolTip?.contains("Click to sign in again") == true)
     precondition(HUD.fixScript("claude auth login", id: "claude", executable: "/A b's/usagehud").contains("claude auth login && '/A b'\\''s/usagehud' --refresh claude"))
-    precondition(HUD.fixes.contains("claude auth login") && !HUD.fixes.contains("rm -rf ~"))
+    precondition(SignIn.commands.contains("claude auth login") && !SignIn.commands.contains("rm -rf ~"))
+    delegate.signingIn = "claude"; delegate.render(signedOut)
+    precondition(delegate.items["claude"]?.menu?.items.contains { $0.title == "Approve the sign-in in your browser…" } == true)
+    delegate.signingIn = nil
     precondition(delegate.items["openrouter"]?.menu?.items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
     precondition(CellsView(lines: ["a", "b"], rows: team.cells).frame.height == 92)
     // The panel widens to show a whole reset time instead of cutting it off.
@@ -563,17 +584,12 @@ if CommandLine.arguments.contains("--self-test") {
     let representation = NSBitmapImageRep(data: image.tiffRepresentation!)!
     try! representation.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("battery-preview.png"))
     // Candidate digit fonts, numbered, to compare against the system battery beside them in the menu bar.
-    func proportional(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont { NSFont.systemFont(ofSize: size, weight: weight) }
-    func rounded(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
-        NSFont(descriptor: NSFont.systemFont(ofSize: size, weight: weight).fontDescriptor.withDesign(.rounded) ?? NSFont.systemFont(ofSize: size).fontDescriptor, size: size) ?? .systemFont(ofSize: size)
-    }
+    // Around the near match (old 7, condensed heavy): lighter strokes and taller digits, like macOS 27's own.
     let candidates: [(String, (CGFloat) -> NSFont)] = [
-        ("1 bold, fixed digits (now)", { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .bold) }),
-        ("2 semibold, fixed digits", { NSFont.monospacedDigitSystemFont(ofSize: $0, weight: .semibold) }),
-        ("3 bold", { proportional($0, .bold) }), ("4 semibold", { proportional($0, .semibold) }),
-        ("5 medium", { proportional($0, .medium) }), ("6 heavy", { proportional($0, .heavy) }),
-        ("7 bold, 0.5pt larger", { proportional($0 + 0.5, .bold) }), ("8 semibold, 0.5pt larger", { proportional($0 + 0.5, .semibold) }),
-        ("9 rounded bold", { rounded($0, .bold) }), ("10 rounded semibold", { rounded($0, .semibold) })]
+        ("1 condensed heavy (old 7)", { HUD.condensed($0, .heavy) }), ("2 condensed bold", { HUD.condensed($0, .bold) }),
+        ("3 cond. bold +0.5pt", { HUD.condensed($0 + 0.5, .bold) }), ("4 cond. bold +1pt (now)", { HUD.condensed($0 + 1, .bold) }),
+        ("5 cond. semibold +0.5pt", { HUD.condensed($0 + 0.5, .semibold) }), ("6 cond. semibold +1pt", { HUD.condensed($0 + 1, .semibold) }),
+        ("7 cond. semibold +1.5pt", { HUD.condensed($0 + 1.5, .semibold) }), ("8 cond. medium +1.5pt", { HUD.condensed($0 + 1.5, .medium) })]
     let samples = [Panel(id: "codex", name: "Codex", windows: [Window(label: "5h", pct: 30)]),
                    Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 0)]),
                    Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$26.25 left")])]
@@ -589,8 +605,8 @@ if CommandLine.arguments.contains("--self-test") {
     }
     sheet.unlockFocus()
     try! NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("font-preview.png"))
-    HUD.digitFont = candidates[0].1
-    print("Battery drawing and note-free menus passed")
+    HUD.digitFont = candidates[3].1
+    print("Battery drawing and note-free menus passed; fonts: " + delegate.home.appendingPathComponent("font-preview.png").path)
     exit(0)
 }
 app.delegate = delegate

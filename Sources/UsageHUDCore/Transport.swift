@@ -23,6 +23,26 @@ enum CLI {
         return environment
     }
 }
+/// Runs a provider's own sign-in command out of sight: the CLI opens the browser and returns once the user approves there.
+/// `done` gets whether it worked and whether it ended within seconds, which means it wanted a terminal after all.
+/// A sign-in left unfinished is stopped after ten minutes. Only these commands ever run.
+public enum SignIn {
+    public static let commands: Set<String> = ["claude auth login", "codex login", "grok login"]
+    public static func start(_ command: String, done: @escaping (_ ok: Bool, _ quick: Bool) -> Void) -> Bool {
+        let words = command.split(separator: " ").map(String.init), env = ProcessInfo.processInfo.environment
+        let configured = ["codex": env["USAGE_HUD_CODEX_CLI"] ?? Bundle.main.object(forInfoDictionaryKey: "UsageHUDCodexCLI") as? String,
+                          "grok": env["USAGE_HUD_GROK_CLI"]][words[0]] ?? nil
+        guard commands.contains(command), let binary = CLI.find(words[0], configured: configured) else { return false }
+        let process = Process(), started = Date()
+        process.executableURL = binary; process.arguments = Array(words.dropFirst())
+        process.environment = CLI.environment(for: binary)
+        process.standardInput = FileHandle.nullDevice; process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { done($0.terminationStatus == 0, Date().timeIntervalSince(started) < 15) }
+        guard (try? process.run()) != nil else { return false }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 600) { if process.isRunning { process.terminate() } }
+        return true
+    }
+}
 final class RPCProcess {
     let process = Process(), input = Pipe(), output = Pipe()
     let deadline: Date
@@ -102,23 +122,36 @@ extension CredentialReading {
         catch { return nil }
     }
 }
-struct KeychainReader: CredentialReading {
-    func password(service: String, account: String?) throws -> String {
-        var args = ["find-generic-password", "-s", service]
-        if let account = account { args += ["-a", account] }
-        args.append("-w")
+/// Reads through `security`. macOS shows an item's attributes to anyone without asking, but asks before handing over its
+/// secret unless the user chose Always Allow. So each secret stays in memory beside the item's attributes and is fetched
+/// again only when the item itself changed: someone who clicked Allow is asked once per change, not every refresh.
+final class KeychainReader: CredentialReading {
+    /// Runs `security` with these arguments, returning its output and how long it took.
+    let run: ([String]) -> (text: String, seconds: Double)
+    var memo: [String: (stamp: String, secret: String)] = [:]
+    init(run: @escaping ([String]) -> (text: String, seconds: Double) = KeychainReader.security) { self.run = run }
+    static func security(_ arguments: [String]) -> (text: String, seconds: Double) {
         let started = Date()
-        let pipe = try RPCProcess(binary: URL(fileURLWithPath: "/usr/bin/security"), arguments: args, timeout: 20)
+        guard let pipe = try? RPCProcess(binary: URL(fileURLWithPath: "/usr/bin/security"), arguments: arguments, timeout: 20) else { return ("", 0) }
         defer { pipe.stop() }
         let text = (try? pipe.allOutput()).flatMap { String(data: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        // A slow success is not treated as a prompt: Keychain reads can simply be slow, and pausing a working provider
-        // on a guess stopped Claude updating.
+        return (text, Date().timeIntervalSince(started))
+    }
+    /// An answer, or why there is none: a missing item answers at once, while a slow empty answer means macOS asked
+    /// (for the secret, or to unlock the keychain) and the user said no.
+    func ask(_ arguments: [String]) throws -> String {
+        let (text, seconds) = run(arguments)
         guard text.isEmpty else { return text }
-        // An allowed read or a missing item answers at once; a slow failure means macOS asked for the password.
-        if Date().timeIntervalSince(started) > 2 {
-            throw HUDProblem("Keychain asked for your password; choose Refresh here, then Always Allow", prompted: true)
-        }
+        if seconds > 2 { throw HUDProblem("Keychain asked for your password; choose Refresh here, then Always Allow", prompted: true) }
         throw HUDProblem("Keychain credential unavailable")
+    }
+    func password(service: String, account: String?) throws -> String {
+        let arguments = ["find-generic-password", "-s", service] + (account.map { ["-a", $0] } ?? [])
+        let stamp = try ask(arguments), key = arguments.joined(separator: "\u{0}")
+        if let known = memo[key], known.stamp == stamp { return known.secret }
+        let secret = try ask(arguments + ["-w"])
+        memo[key] = (stamp, secret)
+        return secret
     }
 }
 protocol HTTPReading {
