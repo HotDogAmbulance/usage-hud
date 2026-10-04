@@ -37,40 +37,35 @@ final class AntigravityProvider: UsageProvider {
     /// the families in it ("Gemini", "Claude & GPT"); a model with a quota of its own keeps its name. Plans that give
     /// every model its own quota just yield more rows, and once there are many, untouched ones fold into one.
     func panel() -> Panel {
-        let models = quotaWindows(cache.read("antigravity.json")), now = Date().timeIntervalSince1970
-        // The cell's battery already shows the share left, so the text only says when it refills.
-        func text(_ row: Window, share: Bool = false) -> String {
-            var bits = share ? ["\(Int((100 - (row.pct ?? 0)).rounded()))% left"] : []
-            if let reset = row.resets_at, reset > now { bits.append("↻ " + countdown(reset - now)) }
-            if row.stale == true || row.expired == true { bits.append("cached") }
-            return bits.joined(separator: " · ")
+        let models = quotaWindows(cache.read("antigravity.json")).sorted { $0.label < $1.label }, now = Date().timeIntervalSince1970
+        // The cell's battery already shows the share left, and the note says when readings are old, so the text
+        // only says when it refills.
+        func text(_ row: Window) -> String { row.resets_at.map { $0 > now ? "↻ " + countdown($0 - now) : "" } ?? "" }
+        func families(_ members: [Window]) -> String {
+            var names: [String] = []
+            for model in members where !names.contains(Self.family(model.label)) { names.append(Self.family(model.label)) }
+            return names.joined(separator: " & ")
         }
         var pools: [String: [Window]] = [:], order: [String] = []
-        for model in models.sorted(by: { $0.label < $1.label }) {
+        for model in models {
             let key = "\(Int((model.pct ?? 0).rounded()))|\(Int((model.resets_at ?? 0) / 600))"
             if pools[key] == nil { order.append(key) }
             pools[key, default: []].append(model)
         }
         var rows = order.compactMap { pools[$0] }.map { members -> Window in
-            var families: [String] = []
-            for model in members where !families.contains(Self.family(model.label)) { families.append(Self.family(model.label)) }
             let first = members[0]
-            return Window(label: members.count == 1 ? first.label : families.joined(separator: " & "), pct: first.pct,
+            return Window(label: members.count == 1 ? first.label : families(members), pct: first.pct,
                           right: text(first), resets_at: first.resets_at, expired: first.expired, stale: first.stale)
         }.enumerated().sorted { ($0.element.pct ?? 0, -$0.offset) > ($1.element.pct ?? 0, -$1.offset) }.map { $0.element }
+        // Untouched models fold into one full row, still named by their families so none goes missing.
         let untouched = rows.filter { ($0.pct ?? 0) < 0.5 }
         if rows.count > 4 && untouched.count > 1 {
-            let count = models.filter { ($0.pct ?? 0) < 0.5 }.count
-            rows = rows.filter { ($0.pct ?? 0) >= 0.5 } + [Window(label: "Other models (\(count))", pct: 0, right: "",
+            rows = rows.filter { ($0.pct ?? 0) >= 0.5 } + [Window(label: families(models.filter { ($0.pct ?? 0) < 0.5 }), pct: 0, right: "",
                                                                   stale: untouched.contains { $0.stale == true })]
-        }
-        let details = models.sorted { ($0.pct ?? 0, $1.label) > ($1.pct ?? 0, $0.label) }.map {
-            Window(label: $0.label, pct: $0.pct, right: text($0, share: true), resets_at: $0.resets_at, expired: $0.expired, stale: $0.stale)
         }
         // Readings come from the running app; once it closes they dim, and the note says why.
         return Panel(id: id, name: name, windows: rows, note: models.contains { $0.stale == true } ? "Updates while Antigravity is open" : "",
-                     cells: rows, cellsTitle: "\(models.count) models",
-                     details: details, lead: rows.first?.label)
+                     cells: rows, cellsTitle: "\(models.count) models", lead: rows.first?.label)
     }
 }
 

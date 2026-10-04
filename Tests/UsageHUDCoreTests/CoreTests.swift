@@ -520,7 +520,7 @@ final class CoreTests {
         try provider.refresh()
         let panel = provider.panel()
         expectEqual(panel.windows.first?.right, "$43 left")
-        expectTrue(panel.windows[1].right?.hasPrefix("$4.60 / $5 today · ↻ ") == true)
+        expectTrue(panel.windows[1].right?.hasPrefix("$4.60 / $5 · ↻ ") == true)
         expectEqual(panel.alert, "One: near its cap")
     }
     func testRouterCapsResetOnUTCBoundaries() {
@@ -660,12 +660,22 @@ final class CoreTests {
         let panel = provider.panel()
         expectEqual(panel.cells.map { $0.label }, ["Claude & GPT", "Gemini"])
         expectTrue(panel.cells.first?.right?.hasPrefix("↻ ") == true)
-        expectTrue(panel.cells.first?.right?.hasSuffix("· 3 models") == true)
-        expectEqual(panel.details.count, 5); expectEqual(panel.displayedQuota?.label, "Claude & GPT")
+        expectEqual(panel.displayedQuota?.label, "Claude & GPT")
         // Closed app: no pulse, last reading kept and still shown.
         let closed = Engine(root: root, credentials: credentials, http: http, providers: [AntigravityProvider(cache: cache, read: { throw HUDProblem("Open Antigravity to update its quota") })])
         let shown = closed.panels(refresh: "automatic")[0]
         expectNil(shown.alert); expectEqual(shown.displayedQuota?.pct ?? 0, 3, accuracy: 0.01)
+    }
+    /// When every model has its own quota, untouched ones fold into one full row that still names their families.
+    func testAntigravityFoldsUntouchedModelsByFamily() throws {
+        func model(_ label: String, _ left: Double, _ day: Int) -> JSON { ["label": label, "quotaInfo": ["remainingFraction": left, "resetTime": "2099-10-\(day)T00:00:00Z"]] }
+        let response: JSON = ["userStatus": ["cascadeModelConfigData": ["clientModelConfigs": [
+            model("Claude Opus", 0.5, 10), model("Claude Sonnet", 0.8, 11), model("Gemini Pro", 0.9, 12),
+            model("Gemini Flash", 1, 13), model("GPT-OSS", 1, 14)]]]]
+        let provider = AntigravityProvider(cache: cache, read: { response })
+        try provider.refresh()
+        expectEqual(provider.panel().cells.map { $0.label }, ["Claude Opus", "Claude Sonnet", "Gemini Pro", "GPT & Gemini"])
+        expectEqual(provider.panel().cells.last?.pct, 0)
     }
     /// A problem with a known harmless fix carries it to the menu.
     func testSignInProblemsOfferTheirFix() {

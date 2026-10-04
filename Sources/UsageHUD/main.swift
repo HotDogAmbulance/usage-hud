@@ -397,12 +397,11 @@ final class HUD: NSObject, NSApplicationDelegate {
         for line in HUD.menuLines(panel, showingWeek: displayed?.label == "7d", cached: cached) {
             menu.addItem(withTitle: line.string, action: nil, keyEquivalent: "").attributedTitle = line
         }
-        if panel.cellsTitle != nil {
+        // A submenu only when the hover holds keys the menu doesn't already list (a team's keys).
+        if panel.cells.contains(where: { cell in !panel.windows.contains { $0.label == cell.label } }) {
             let all = NSMenu()
-            let rows = panel.details.isEmpty ? panel.cells : panel.details
-            for cell in rows { all.addItem(withTitle: cell.label + " · " + (cell.right ?? ""), action: nil, keyEquivalent: "") }
-            let title = panel.id == "antigravity" ? "All models" : "All keys"
-            menu.addItem(withTitle: title + " (\(rows.count))", action: nil, keyEquivalent: "").submenu = all
+            for cell in panel.cells { all.addItem(withTitle: cell.label + " · " + (cell.right ?? ""), action: nil, keyEquivalent: "") }
+            menu.addItem(withTitle: "All keys (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
         }
         menu.addItem(NSMenuItem.separator())
         if signingIn == panel.id {
@@ -434,6 +433,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         let plain = NSFont.menuFont(ofSize: 0), strong = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .semibold)
         let grey: [NSAttributedString.Key: Any] = [.font: plain, .foregroundColor: NSColor.secondaryLabelColor]
         let rows = panel.windows.filter { $0.label != panel.name }
+        // When every reading is old (the app behind it closed), "cached" is said once, after the name.
+        let old = !rows.isEmpty && rows.allSatisfy { $0.stale == true }
         let tabs = NSMutableParagraphStyle()
         tabs.tabStops = [NSTextTab(textAlignment: .left, location: (rows.map { ($0.label as NSString).size(withAttributes: grey).width }.max() ?? 0) + 16)]
         func line(_ parts: [(String, Bool)]) -> NSAttributedString {
@@ -447,7 +448,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         let plan = panel.note.hasPrefix("Plan: ") ? String(panel.note.dropFirst(6)).capitalized : nil
         let balance = panel.windows.first { $0.label == panel.name }
         var lines = [line([(panel.name, true), (plan.map { " · " + $0 } ?? "", false), (balance?.right.map { "  " + $0 } ?? "", true),
-                           (balance?.stale == true ? " · cached" : "", false)])]
+                           (balance?.stale == true || old ? " · cached" : "", false)])]
         if let alert = panel.alert { lines.append(line([("⚠︎ " + alert, false)])) }
         if showingWeek { lines.append(line([("Showing 7d" + (cached ? " · cached" : ""), false)])) }
         if !panel.note.isEmpty && plan == nil && panel.note != panel.alert { lines.append(line([(panel.note, false)])) }
@@ -459,7 +460,7 @@ final class HUD: NSObject, NSApplicationDelegate {
                 if row.expired == true { parts.append("waiting for its reset") }
                 else if let reset = row.resets_at, reset > now { parts.append("↻ " + countdown(reset - now)) }
             }
-            if row.stale == true { parts.append("cached") }
+            if row.stale == true && !old { parts.append("cached") }
             lines.append(line([(row.label + "\t", false), (parts[0], true), (unit + parts.dropFirst().map { " · " + $0 }.joined(), false)]))
         }
         return lines

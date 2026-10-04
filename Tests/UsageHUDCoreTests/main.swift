@@ -78,6 +78,7 @@ let cases: [(String, () throws -> Void)] = [
     ("testManagementKeyOnTheMacListsTheTeam", test.testManagementKeyOnTheMacListsTheTeam),
     ("testRevokedFoundKeyStaysQuiet", test.testRevokedFoundKeyStaysQuiet),
     ("testAntigravityPoolsModelsThatShareAQuota", test.testAntigravityPoolsModelsThatShareAQuota),
+    ("testAntigravityFoldsUntouchedModelsByFamily", test.testAntigravityFoldsUntouchedModelsByFamily),
     ("testSignInProblemsOfferTheirFix", test.testSignInProblemsOfferTheirFix),
     ("testShelfLearnsEachPersonsMainTools", test.testShelfLearnsEachPersonsMainTools),
     ("testBalanceKeysAlreadyOnTheMac", test.testBalanceKeysAlreadyOnTheMac),

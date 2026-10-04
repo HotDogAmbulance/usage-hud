@@ -80,16 +80,14 @@ public struct Panel: Codable {
     public var cells: [Window]
     /// A one-line overview above the cells, such as "23 keys · $41.20 today · 3 near cap".
     public var cellsTitle: String?
-    /// The full list behind the cells, when the cells summarise it (Antigravity's models behind their quota pools).
-    public var details: [Window]
     /// The window the battery shows, when the provider knows better than the 5h/7d rule; shown dimmed once cached.
     public var lead: String?
     /// A command that fixes the current problem, from the provider; the menu can run it in Terminal.
     public var fix: String?
     public init(id: String, name: String, windows: [Window] = [], note: String = "", alert: String? = nil,
-                cells: [Window] = [], cellsTitle: String? = nil, details: [Window] = [], lead: String? = nil) {
+                cells: [Window] = [], cellsTitle: String? = nil, lead: String? = nil) {
         self.id = id; self.name = name; self.windows = windows; self.note = note; self.alert = alert
-        self.cells = cells; self.cellsTitle = cellsTitle; self.details = details; self.lead = lead
+        self.cells = cells; self.cellsTitle = cellsTitle; self.lead = lead
     }
     public var displayedQuota: Window? {
         if let lead = lead, let window = windows.first(where: { $0.label == lead && $0.pct != nil }) { return window }

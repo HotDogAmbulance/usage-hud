@@ -274,11 +274,10 @@ final class OpenRouterProvider: UsageProvider {
         let period = row["limit_reset"] as? String
         let remaining = max(0, number(row["limit_remaining"]) ?? limit - usage), left = remaining / limit
         let reset = nextReset(period).map { " · ↻ " + countdown($0.timeIntervalSinceNow) } ?? ""
-        let text = "\(usd(limit - remaining)) / \(usd(limit)) " + (periodName[period ?? ""] ?? "cap") + reset
+        let text = "\(usd(limit - remaining)) / \(usd(limit))" + reset
         return (Window(label: label, pct: (1 - left) * 100, right: text, stale: old), left,
                 left > 0.1 ? nil : remaining <= 0 ? "cap reached" : "near its cap")
     }
-    static let periodName = ["daily": "today", "weekly": "this week", "monthly": "this month"]
     /// When a key's cap resets: OpenRouter counts days, weeks (from Monday) and months in UTC.
     static func nextReset(_ period: String?, after now: Date = Date()) -> Date? {
         var calendar = Calendar(identifier: .gregorian)
