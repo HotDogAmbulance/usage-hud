@@ -58,19 +58,10 @@ final class ClaudeProvider: UsageProvider {
         if now - (number(cache.read("claude.json")["extras_at"]) ?? 0) > 3600 { extra.merge(extras(token)) { _, new in new } }
         try cache.quota("claude.json", windows: windows, extra: extra)
     }
-    /// Free resets and prepaid credits change rarely, so they're read hourly, the way Claude Code reads them; either one
-    /// failing just leaves its row out.
+    /// The prepaid balance changes rarely, so it is read hourly, the way Claude Code reads it; a failure just leaves the row out.
+    /// (Claude's free resets are not read: the server only answers them for Claude Code's own client identity.)
     func extras(_ token: String) -> JSON {
         var extras: JSON = ["extras_at": Date().timeIntervalSince1970]
-        if let usage = try? http.get(URL(string: "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")!, token: token,
-                                     headers: Self.headers, limit: 1024 * 1024), let status = usage["cedar_ember"] as? JSON {
-            let now = Date().timeIntervalSince1970
-            let grants = (status["grants"] as? [JSON] ?? []).filter {
-                $0["paused"] as? Bool != true && (number($0["resets_left"]) ?? 0) >= 1 && (resetTime($0["ends_at"]) ?? .infinity) > now
-            }
-            extras["free_resets"] = ["left": grants.compactMap { number($0["resets_left"]) }.reduce(0, +),
-                                     "until": grants.compactMap { resetTime($0["ends_at"]) }.min() as Any? ?? NSNull()]
-        }
         if let organization = organization(),
            let paid = try? http.get(URL(string: "https://api.anthropic.com/api/oauth/organizations/\(organization)/prepaid/credits")!, token: token,
                                     headers: Self.headers.merging(["x-organization-uuid": organization], uniquingKeysWith: { $1 }), limit: 64 * 1024),
@@ -107,7 +98,6 @@ final class ClaudeProvider: UsageProvider {
             let code = prepaid["currency"] as? String ?? "USD"
             rows.append(Window(label: "Balance", right: money(cents / 100, code == "USD" ? "$" : code + " "), stale: extrasOld))
         }
-        if let resets = freeResetsRow(blob["free_resets"], stale: extrasOld) { rows.append(resets) }
         return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Refresh Claude to read quota" : "")
     }
 }

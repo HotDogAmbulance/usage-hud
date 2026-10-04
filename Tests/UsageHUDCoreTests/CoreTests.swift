@@ -144,8 +144,8 @@ final class CoreTests {
         try ClaudeProvider(cache: cache, credentials: credentials, http: http, home: root).refresh()
         let blob = cache.read("claude.json")
         expectEqual(number(blob["context_pct"]), 42); expectNotNil(blob["usage_credits"])
-        // The quota, plus the hourly free-reset read; without Claude Code's config there is no organization to ask.
-        expectEqual(http.calls, 2)
+        // Just the quota; without Claude Code's config there is no organization to ask for a balance.
+        expectEqual(http.calls, 1)
         expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("claude.json")), encoding: .utf8)!.contains("fixture"))
     }
     func testClaude429DoesNotInventExhaustedQuota() throws {
@@ -257,10 +257,6 @@ final class CoreTests {
         http.handler = { url in
             asked.append(url.absoluteString)
             if url.path.hasSuffix("/prepaid/credits") { return ["amount": 2776, "currency": "USD"] }
-            if url.query?.contains("cedar_ember=1") == true {
-                return ["cedar_ember": ["grants": [["resets_left": 1, "ends_at": "2099-10-22T00:00:00Z"], ["resets_left": 3, "paused": true],
-                                                   ["resets_left": 0, "ends_at": "2099-01-01T00:00:00Z"]]]]
-            }
             return ["five_hour": ["utilization": 4]]
         }
         let claude = ClaudeProvider(cache: cache, credentials: credentials, http: http, home: home)
@@ -269,7 +265,8 @@ final class CoreTests {
         expectEqual(http.sentHeaders["x-organization-uuid"], org)
         let panel = claude.panel()
         expectEqual(panel.windows.first { $0.label == "Balance" }?.right, "$27.76")
-        expectTrue(panel.windows.first { $0.label == "Free resets" }?.right?.hasPrefix("1 · ends in ") == true)
+        expectNil(panel.windows.first { $0.label == "Free resets" })
+        expectFalse(asked.contains { $0.contains("cedar_ember") })
         // Those two are read hourly, not with every quota refresh.
         asked = []; try claude.refresh()
         expectEqual(asked.count, 1)
@@ -513,6 +510,7 @@ final class CoreTests {
         try provider.refresh()
         let panel = provider.panel()
         expectEqual(panel.windows.first?.pct, 25); expectEqual(panel.windows.last?.right, "$12.50 / $50 · this month")
+        expectEqual(panel.cells.first?.label, "This month"); expectEqual(panel.cells.first?.right, "$12.50 / $50")
         expectEqual(try KeyProvider.fireworksSpend(KeyProvider.Call(host: "api.fireworks.ai", key: "k", http: http), account: "accounts/my-team")["limit"] as? Double, 50)
         expectError(try KeyProvider.fireworksSpend(KeyProvider.Call(host: "api.fireworks.ai", key: "k", http: http), account: "../x"))
     }
@@ -954,7 +952,7 @@ final class CoreTests {
         try cache.merge("claude.json", ["oauth_at": 0])
         credentials.text = "{\"accessToken\":\"fixture\"}"; http.response = ["five_hour": ["utilization": 12]]
         try ClaudeProvider(cache: cache, credentials: credentials, http: http, home: root).refresh()
-        expectEqual(http.calls, 2)
+        expectEqual(http.calls, 1)
     }
     /// A provider in use refreshes between background passes, but a paused one stays paused.
     func testProvidersInUseRefreshBetweenPasses() {

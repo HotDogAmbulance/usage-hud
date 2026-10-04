@@ -31,7 +31,7 @@ final class CellsView: NSView {
     }
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
-    static func color(left: Double) -> NSColor { left <= 0.1 ? HUD.red : left <= 0.3 ? HUD.yellow : .systemGreen }
+    static func color(left: Double) -> NSColor { left <= 0.1 ? .systemRed : left <= 0.3 ? .systemYellow : .systemGreen }
     
     override func draw(_ dirtyRect: NSRect) {
         let clip = NSMutableParagraphStyle(); clip.lineBreakMode = .byTruncatingTail
@@ -202,6 +202,11 @@ final class HUD: NSObject, NSApplicationDelegate {
             }
         }
     }
+    /// The 7d layer's colour where a brand has a second one; the others tone their main colour down.
+    static let side: [String: NSColor] = [
+        "glm": NSColor(srgbRed: 0.7843, green: 1.0, blue: 1.0, alpha: 1),
+        "fireworks": NSColor(srgbRed: 0.2039, green: 0.0667, blue: 0.502, alpha: 1),
+        "litellm": NSColor(srgbRed: 0.1216, green: 0.6275, blue: 0.9843, alpha: 1)]
     static let yellow = NSColor(srgbRed: 1.0, green: 0.8471, blue: 0.0, alpha: 1), red = NSColor(srgbRed: 1.0, green: 0.2314, blue: 0.1882, alpha: 1)
     func tint(_ id: String) -> NSColor {
         switch id {
@@ -249,6 +254,7 @@ final class HUD: NSObject, NSApplicationDelegate {
             if dark, let rgb = color.usingColorSpace(.sRGB), max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) < 0.35 {
                 color = color.blended(withFraction: max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) < 0.05 ? 0.55 : 0.40, of: .white)!
             }
+            if muted, let side = Self.side[id] { return side.withAlphaComponent(alpha) }
             if muted && dark { return color.blended(withFraction: 0.5, of: NSColor(srgbRed: 0.45, green: 0.45, blue: 0.45, alpha: 1))!.withAlphaComponent(alpha) }
             return (light || muted ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
         }
@@ -328,7 +334,15 @@ final class HUD: NSObject, NSApplicationDelegate {
         let valid = quota != nil
         // Antigravity's pools are separate quotas: red, like the Mac's battery under 20%, only once every one is nearly spent.
         let pools = panel.windows.compactMap { $0.pct }
-        let critical = panel.id == "antigravity" && !pools.isEmpty && pools.allSatisfy { 100 - $0 <= 20 }
+        var critical = panel.id == "antigravity" && !pools.isEmpty && pools.allSatisfy { 100 - $0 <= 20 }
+        // Everything else keeps its own colour until what is left of the 5h and 7d windows (the freer of the two) is 15%, then 10%.
+        var caution = panel.caution != nil
+        if let shown = quota, panel.id != "antigravity", shown.stale != true, shown.expired != true {
+            let spans = panel.windows.filter { ($0.label == "5h" || $0.label == "7d") && $0.pct != nil && $0.stale != true && $0.expired != true }
+            let free = (spans.isEmpty ? [shown] : spans).map { 100 - ($0.pct ?? 0) }.max() ?? 100
+            if free <= 10 { critical = true } else if free <= 15 { caution = true }
+        }
+        let warning = critical ? "critical" : caution ? "caution" : panel.id
         let moneyWindow = quota == nil ? panel.windows.first(where: {$0.label == panel.name}) : nil
         let cached = quota?.stale == true || quota?.expired == true || moneyWindow?.stale == true
         let remaining = valid ? min(100, max(0, 100 - (quota?.pct ?? 0))) : 0
@@ -370,9 +384,9 @@ final class HUD: NSObject, NSApplicationDelegate {
         let trackStart = fillAlpha < 1 ? 0 : weeklyAlpha < 1 ? fillEnd : weeklyEnd
         ink.withAlphaComponent(dark ? 0.36 : 0.22).setFill(); span(trackStart, bodyWidth).fill()
         if weeklyEnd > fillEnd {
-            paint(span(fillEnd, weeklyEnd), body: bodyRect, id: panel.id, light: false, muted: true, alpha: weeklyAlpha, dark: dark)
+            paint(span(fillEnd, weeklyEnd), body: bodyRect, id: warning, light: false, muted: true, alpha: weeklyAlpha, dark: dark)
         }
-        paint(span(0, fillEnd), body: bodyRect, id: panel.caution != nil ? "caution" : critical ? "critical" : panel.id, light: money != nil && panel.caution == nil, muted: weeklyShade, alpha: fillAlpha, dark: dark)
+        paint(span(0, fillEnd), body: bodyRect, id: warning, light: money != nil && panel.caution == nil, muted: weeklyShade, alpha: fillAlpha, dark: dark)
         if glow > 0 { HUD.red.withAlphaComponent(glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
@@ -691,7 +705,7 @@ if CommandLine.arguments.contains("--self-test") {
         let chroma = max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) - min(rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
         precondition(0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] <= 0.5 || chroma >= 0.3, id + " is too close to white")
     }
-    precondition(CellsView.color(left: 0.05) == HUD.red && CellsView.color(left: 0.2) == HUD.yellow && CellsView.color(left: 0.9) == .systemGreen)
+    precondition(CellsView.color(left: 0.05) == .systemRed && CellsView.color(left: 0.2) == .systemYellow && CellsView.color(left: 0.9) == .systemGreen)
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))
@@ -716,7 +730,7 @@ if CommandLine.arguments.contains("--self-test") {
     func sheet(light: Bool) -> NSImage {
         delegate.forcedDarkBar = !light
         let ids = ["codex", "claude", "glm", "antigravity", "grok", "xai", "vercel", "deepseek", "kimi", "kimi-code", "openrouter", "fireworks", "litellm"]
-        let states = ["or · gauge 40%", "or · under $15", "or · under $10", "ag · one pool 16%", "ag · both under 20%"]
+        let states = ["or · gauge 40%", "or · under $15", "or · under $10", "ag · one pool 16%", "ag · both under 20%", "codex · 14% left", "codex · 9% left"]
         let scale: CGFloat = 3, row: CGFloat = 30 * scale, width: CGFloat = 215 * scale
         let sheet = NSImage(size: NSSize(width: width, height: row * CGFloat(ids.count + states.count)))
         sheet.lockFocus()
@@ -725,8 +739,8 @@ if CommandLine.arguments.contains("--self-test") {
             let y = sheet.size.height - row * CGFloat(index + 1)
             let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11 * scale), .foregroundColor: light ? NSColor.black : NSColor.white]
             (id as NSString).draw(at: NSPoint(x: 6 * scale, y: y + 6 * scale), withAttributes: attributes)
-            let provider = id.hasPrefix("or · ") ? "openrouter" : id.hasPrefix("ag · ") ? "antigravity" : id
-            func quota(_ used: Double) -> Panel { Panel(id: provider, name: id, windows: [Window(label: "5h", pct: used)]) }
+            let provider = id.hasPrefix("or · ") ? "openrouter" : id.hasPrefix("ag · ") ? "antigravity" : id.hasPrefix("codex · ") ? "codex" : id
+            func quota(_ used: Double) -> Panel { Panel(id: provider, name: id, windows: used > 0 ? [Window(label: "5h", pct: used), Window(label: "7d", pct: 20)] : [Window(label: "5h", pct: used)]) }
             var money = Panel(id: provider, name: id, windows: [Window(label: id, right: "$26.25 left")])
             var glow: CGFloat = 0
             if id.hasSuffix("gauge 40%") { money.gauge = 0.4 }
@@ -735,6 +749,10 @@ if CommandLine.arguments.contains("--self-test") {
             if id.hasPrefix("ag · ") {
                 let used = id.hasSuffix("16%") ? [84.0, 7] : [85.0, 92]
                 money = Panel(id: "antigravity", name: id, windows: [Window(label: "Gemini", pct: used[0]), Window(label: "Claude & GPT", pct: used[1])], lead: "Gemini")
+            }
+            if id.hasPrefix("codex · ") {
+                let used = id.contains("14%") ? 86.0 : 91.0
+                money = Panel(id: "codex", name: id, windows: [Window(label: "5h", pct: used), Window(label: "7d", pct: used - 2)])
             }
             let panels = states.contains(id) ? [money, money, money] : [quota(0), quota(65), money]
             for (slot, panel) in panels.enumerated() {

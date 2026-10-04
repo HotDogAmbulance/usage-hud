@@ -89,7 +89,13 @@ final class KeyProvider: UsageProvider {
             else { rows.insert(Window(label: name, right: usd(spent) + " spent" + period, stale: old), at: 0) }
         }
         let plan = (blob["plan"] as? String).map { "Plan: " + $0 }
-        return Panel(id: id, name: name, windows: rows, note: plan ?? (rows.isEmpty ? "Refresh \(name) to read usage" : ""))
+        var panel = Panel(id: id, name: name, windows: rows, note: plan ?? (rows.isEmpty ? "Refresh \(name) to read usage" : ""))
+        // Infrastructure providers with a spending limit also show it as a small battery on hover, like OpenRouter's keys.
+        if ["xai", "fireworks", "litellm"].contains(id), let spent = number(blob["spent"]), let limit = number(blob["limit"]), limit > 0 {
+            let period = (blob["period"] as? String).map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Budget"
+            panel.cells = [Window(label: period, pct: min(100, spent / limit * 100), right: usd(spent) + " / " + usd(limit), stale: old)]
+        }
+        return panel
     }
 
     /// A balance read with one GET and turned into money by `parse`.
