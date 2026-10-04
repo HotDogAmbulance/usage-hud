@@ -31,7 +31,8 @@ final class CellsView: NSView {
     }
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
-    static func color(left: Double) -> NSColor { left <= 0.1 ? .systemRed : left <= 0.3 ? .systemYellow : .systemGreen }
+    static func color(left: Double) -> NSColor { left <= 0.1 ? HUD.red : left <= 0.3 ? HUD.yellow : .systemGreen }
+    
     override func draw(_ dirtyRect: NSRect) {
         let clip = NSMutableParagraphStyle(); clip.lineBreakMode = .byTruncatingTail
         var head = Self.head, body = Self.body; head[.paragraphStyle] = clip; body[.paragraphStyle] = clip
@@ -201,24 +202,28 @@ final class HUD: NSObject, NSApplicationDelegate {
             }
         }
     }
+    static let yellow = NSColor(srgbRed: 1.0, green: 0.8471, blue: 0.0, alpha: 1), red = NSColor(srgbRed: 1.0, green: 0.2314, blue: 0.1882, alpha: 1)
     func tint(_ id: String) -> NSColor {
         switch id {
         // No tint is pale and grey at once, so from across the room no battery reads as the Mac's own white one.
         // Brand colours where the brand has one; black-and-white marks get distinct mid tones.
         case "codex": return NSColor(srgbRed: 0.40, green: 0.82, blue: 0.74, alpha: 1)
         case "claude": return NSColor(srgbRed: 0.85, green: 0.58, blue: 0.45, alpha: 1)
-        case "glm": return NSColor(srgbRed: 0.42, green: 0.36, blue: 0.98, alpha: 1)
+        case "glm": return NSColor(srgbRed: 0.0039, green: 0.5961, blue: 0.6078, alpha: 1)
         case "antigravity": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
-        case "grok", "xai": return NSColor(srgbRed: 0.52, green: 0.55, blue: 0.62, alpha: 1)
+        // Grok is black; xAI the same family in graphite blue, so the two read as one house but not as one battery.
+        case "grok": return NSColor(srgbRed: 0.0, green: 0.0, blue: 0.0, alpha: 1)
+        case "xai": return NSColor(srgbRed: 0.1843, green: 0.2275, blue: 0.3216, alpha: 1)
         case "vercel": return NSColor(srgbRed: 0.58, green: 0.56, blue: 0.54, alpha: 1)
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
-        case "kimi", "kimi-code": return NSColor(srgbRed: 0.10, green: 0.72, blue: 0.96, alpha: 1)
+        case "kimi": return NSColor(srgbRed: 0.0667, green: 0.3804, blue: 0.7451, alpha: 1)
+        case "kimi-code": return NSColor(srgbRed: 0.0784, green: 0.4902, blue: 0.9529, alpha: 1)
         case "openrouter": return NSColor(srgbRed: 200 / 255, green: 254 / 255, blue: 1 / 255, alpha: 1)
-        // A balance getting low: the yellow of the Mac's own battery, which is no provider's colour.
-        case "caution": return .systemYellow
-        case "critical": return .systemRed
-        case "fireworks": return NSColor(srgbRed: 0.78, green: 0.38, blue: 0.95, alpha: 1)
-        case "litellm": return NSColor(srgbRed: 0.95, green: 0.42, blue: 0.64, alpha: 1)
+        // The same yellow and red everywhere: a balance getting low, every Antigravity pool spent, the small bars in the hover panel.
+        case "caution": return HUD.yellow
+        case "critical": return HUD.red
+        case "fireworks": return NSColor(srgbRed: 0.3647, green: 0.1098, blue: 0.902, alpha: 1)
+        case "litellm": return NSColor(srgbRed: 0.9843, green: 0.4157, blue: 0.1647, alpha: 1)
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
         }
     }
@@ -239,6 +244,10 @@ final class HUD: NSObject, NSApplicationDelegate {
             if !dark, let rgb = color.usingColorSpace(.sRGB),
                0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent > 0.6 {
                 color = color.blended(withFraction: 0.45, of: .black)!
+            }
+            // Black and graphite would vanish on a dark bar; lift them just enough to read as a battery.
+            if dark, let rgb = color.usingColorSpace(.sRGB), max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) < 0.35 {
+                color = color.blended(withFraction: max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) < 0.05 ? 0.55 : 0.40, of: .white)!
             }
             if muted && dark { return color.blended(withFraction: 0.5, of: NSColor(srgbRed: 0.45, green: 0.45, blue: 0.45, alpha: 1))!.withAlphaComponent(alpha) }
             return (light || muted ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
@@ -364,7 +373,7 @@ final class HUD: NSObject, NSApplicationDelegate {
             paint(span(fillEnd, weeklyEnd), body: bodyRect, id: panel.id, light: false, muted: true, alpha: weeklyAlpha, dark: dark)
         }
         paint(span(0, fillEnd), body: bodyRect, id: panel.caution != nil ? "caution" : critical ? "critical" : panel.id, light: money != nil && panel.caution == nil, muted: weeklyShade, alpha: fillAlpha, dark: dark)
-        if glow > 0 { NSColor(srgbRed: 1.0, green: 0.33, blue: 0.30, alpha: glow).setFill(); bodyRect.fill() }
+        if glow > 0 { HUD.red.withAlphaComponent(glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
         if let mask = SystemBattery.cap {
@@ -682,7 +691,7 @@ if CommandLine.arguments.contains("--self-test") {
         let chroma = max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) - min(rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
         precondition(0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] <= 0.5 || chroma >= 0.3, id + " is too close to white")
     }
-    precondition(CellsView.color(left: 0.05) == .systemRed && CellsView.color(left: 0.2) == .systemYellow && CellsView.color(left: 0.9) == .systemGreen)
+    precondition(CellsView.color(left: 0.05) == HUD.red && CellsView.color(left: 0.2) == HUD.yellow && CellsView.color(left: 0.9) == .systemGreen)
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))
