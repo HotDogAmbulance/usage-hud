@@ -216,6 +216,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         case "openrouter": return NSColor(srgbRed: 200 / 255, green: 254 / 255, blue: 1 / 255, alpha: 1)
         // A balance getting low: the yellow of the Mac's own battery, which is no provider's colour.
         case "caution": return .systemYellow
+        case "critical": return .systemRed
         case "fireworks": return NSColor(srgbRed: 0.78, green: 0.38, blue: 0.95, alpha: 1)
         case "litellm": return NSColor(srgbRed: 0.95, green: 0.42, blue: 0.64, alpha: 1)
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
@@ -243,7 +244,7 @@ final class HUD: NSObject, NSApplicationDelegate {
             return (light || muted ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
         }
         // The battery warning yellow stays the Mac's own on a light bar too; deepening it would turn it to mud.
-        if id == "caution" { tint(id).withAlphaComponent(alpha).setFill(); rect.fill(); return }
+        if id == "caution" || id == "critical" { tint(id).withAlphaComponent(alpha).setFill(); rect.fill(); return }
         guard id == "antigravity" else { shade(tint(id)).setFill(); rect.fill(); return }
         let marks: [(CGFloat, CGFloat, CGFloat)] = [(0.19, 0.53, 1.00), (0.19, 0.53, 1.00), (0.98, 0.27, 0.26), (0.98, 0.74, 0.07), (0.03, 0.73, 0.38)]
         NSGraphicsContext.saveGraphicsState()
@@ -262,10 +263,32 @@ final class HUD: NSObject, NSApplicationDelegate {
     }
     func drawIcon(_ id: String) {
         guard let panel = panels[id], let button = items[id]?.button else { return }
-        if hovered == id, let weekly = hoverPanel(panel) { button.image = icon(weekly, weeklyShade: true) }
+        if hovered == id, let weekly = hoverPanel(panel) { button.image = icon(weekly, weeklyShade: true); return }
         // OpenRouter's nudge is a faint breath: plenty of people sit just above $10 on purpose.
-        else { button.image = icon(panel, glow: pulsing(id) ? glow() * (id == "openrouter" ? 0.4 : 1) : 0) }
+        let target = icon(panel, glow: pulsing(id) ? glow() * (id == "openrouter" ? 0.4 : 1) : 0)
+        // When the battery moves to another reading (Antigravity's pools take turns), it dissolves into it.
+        let label = displayedQuota(panel)?.label, now = Date().timeIntervalSinceReferenceDate
+        if let before = shownLabel[id], before != label, let old = button.image { fades[id] = (old, now) }
+        shownLabel[id] = label
+        guard let fade = fades[id], now - fade.start < Self.fadeLength else { fades[id] = nil; button.image = target; return }
+        let mix = CGFloat((now - fade.start) / Self.fadeLength)
+        let frame = NSImage(size: target.size)
+        frame.lockFocus()
+        fade.from.draw(in: NSRect(origin: .zero, size: fade.from.size), from: .zero, operation: .sourceOver, fraction: 1 - mix)
+        target.draw(in: NSRect(origin: .zero, size: target.size), from: .zero, operation: .sourceOver, fraction: mix)
+        frame.unlockFocus()
+        button.image = frame
+        if fadeTimer == nil {
+            fadeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] timer in
+                guard let self = self, !self.fades.isEmpty else { timer.invalidate(); self?.fadeTimer = nil; return }
+                for id in Array(self.fades.keys) { self.drawIcon(id) }
+            }
+        }
     }
+    static let fadeLength = 0.4
+    var shownLabel: [String: String?] = [:]
+    var fades: [String: (from: NSImage, start: TimeInterval)] = [:]
+    var fadeTimer: Timer?
     func pulsing(_ id: String) -> Bool {
         guard let alert = panels[id]?.alert else { return false }
         return acknowledged[id] != alert
@@ -294,6 +317,9 @@ final class HUD: NSObject, NSApplicationDelegate {
     func icon(_ panel: Panel, weeklyShade: Bool = false, glow: CGFloat = 0) -> NSImage {
         let quota = displayedQuota(panel)
         let valid = quota != nil
+        // Antigravity's pools are separate quotas: red, like the Mac's battery under 20%, only once every one is nearly spent.
+        let pools = panel.windows.compactMap { $0.pct }
+        let critical = panel.id == "antigravity" && !pools.isEmpty && pools.allSatisfy { 100 - $0 <= 20 }
         let moneyWindow = quota == nil ? panel.windows.first(where: {$0.label == panel.name}) : nil
         let cached = quota?.stale == true || quota?.expired == true || moneyWindow?.stale == true
         let remaining = valid ? min(100, max(0, 100 - (quota?.pct ?? 0))) : 0
@@ -337,7 +363,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         if weeklyEnd > fillEnd {
             paint(span(fillEnd, weeklyEnd), body: bodyRect, id: panel.id, light: false, muted: true, alpha: weeklyAlpha, dark: dark)
         }
-        paint(span(0, fillEnd), body: bodyRect, id: panel.caution != nil ? "caution" : panel.id, light: money != nil && panel.caution == nil, muted: weeklyShade, alpha: fillAlpha, dark: dark)
+        paint(span(0, fillEnd), body: bodyRect, id: panel.caution != nil ? "caution" : critical ? "critical" : panel.id, light: money != nil && panel.caution == nil, muted: weeklyShade, alpha: fillAlpha, dark: dark)
         if glow > 0 { NSColor(srgbRed: 1.0, green: 0.33, blue: 0.30, alpha: glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
@@ -666,12 +692,22 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(balance("$1026.25 left").size.width > balance("$26.25 left").size.width)
     let representation = NSBitmapImageRep(data: image.tiffRepresentation!)!
     try! representation.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("battery-preview.png"))
+    // The battery dissolves when it moves to another pool.
+    let pools = Panel(id: "antigravity", name: "Antigravity", windows: [Window(label: "Gemini", pct: 84), Window(label: "Claude & GPT", pct: 7)], lead: "Gemini")
+    delegate.render(pools)
+    precondition(delegate.fades["antigravity"] == nil)
+    var turned = pools; turned.lead = "Claude & GPT"; delegate.render(turned)
+    precondition(delegate.fades["antigravity"] != nil)
+    delegate.fades = [:]; delegate.fadeTimer?.invalidate(); delegate.fadeTimer = nil
+    // A battery that reads red only when every pool is nearly spent.
+    let spent = Panel(id: "antigravity", name: "Antigravity", windows: [Window(label: "Gemini", pct: 85), Window(label: "Claude & GPT", pct: 92)])
+    precondition(delegate.icon(spent).tiffRepresentation != delegate.icon(pools).tiffRepresentation)
     // A contact sheet of every provider's battery on a dark and a light bar: full, 35% left, and as a balance, then the
     // OpenRouter balance states (gauge at 40%, under $15, under $10 mid-pulse).
     func sheet(light: Bool) -> NSImage {
         delegate.forcedDarkBar = !light
         let ids = ["codex", "claude", "glm", "antigravity", "grok", "xai", "vercel", "deepseek", "kimi", "kimi-code", "openrouter", "fireworks", "litellm"]
-        let states = ["or · gauge 40%", "or · under $15", "or · under $10"]
+        let states = ["or · gauge 40%", "or · under $15", "or · under $10", "ag · one pool 16%", "ag · both under 20%"]
         let scale: CGFloat = 3, row: CGFloat = 30 * scale, width: CGFloat = 215 * scale
         let sheet = NSImage(size: NSSize(width: width, height: row * CGFloat(ids.count + states.count)))
         sheet.lockFocus()
@@ -680,13 +716,17 @@ if CommandLine.arguments.contains("--self-test") {
             let y = sheet.size.height - row * CGFloat(index + 1)
             let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11 * scale), .foregroundColor: light ? NSColor.black : NSColor.white]
             (id as NSString).draw(at: NSPoint(x: 6 * scale, y: y + 6 * scale), withAttributes: attributes)
-            let provider = id.hasPrefix("or · ") ? "openrouter" : id
+            let provider = id.hasPrefix("or · ") ? "openrouter" : id.hasPrefix("ag · ") ? "antigravity" : id
             func quota(_ used: Double) -> Panel { Panel(id: provider, name: id, windows: [Window(label: "5h", pct: used)]) }
             var money = Panel(id: provider, name: id, windows: [Window(label: id, right: "$26.25 left")])
             var glow: CGFloat = 0
             if id.hasSuffix("gauge 40%") { money.gauge = 0.4 }
             if id.hasSuffix("$15") { money.caution = "Balance under $15" }
             if id.hasSuffix("$10") { money.caution = "Balance under $15"; glow = 0.2 }
+            if id.hasPrefix("ag · ") {
+                let used = id.hasSuffix("16%") ? [84.0, 7] : [85.0, 92]
+                money = Panel(id: "antigravity", name: id, windows: [Window(label: "Gemini", pct: used[0]), Window(label: "Claude & GPT", pct: used[1])], lead: "Gemini")
+            }
             let panels = states.contains(id) ? [money, money, money] : [quota(0), quota(65), money]
             for (slot, panel) in panels.enumerated() {
                 let icon = delegate.icon(panel, glow: glow)
