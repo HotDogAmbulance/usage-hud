@@ -8,6 +8,9 @@ public final class Engine {
     let credits: OpenAICredits
     /// A money battery below this amount, in its own currency, asks for attention.
     public var lowBalance = 1.0
+    /// OpenRouter caps free models at 50 requests a day until $10 has been bought, so under $15 its battery turns amber
+    /// and under $10 it asks for attention. The other providers have no balance threshold, only the generic one above.
+    public var balanceLevels: [String: (caution: Double, alert: Double)] = ["openrouter": (15, 10)]
     public static var defaultRoot: URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
         // A copied app still names the folder of whoever built it; another person's Mac uses its own home.
@@ -74,8 +77,12 @@ public final class Engine {
                 if status["attention"] as? Bool == true { panel.alert = panel.alert ?? message }
             }
             // The text stays the same as the balance moves, so one hover silences it until it recovers.
-            if panel.alert == nil, panel.windows.contains(where: { $0.label == panel.name && $0.pct == nil && $0.right?.hasSuffix(" left") == true }),
-               let level = Shelf.level(panel), -level < lowBalance { panel.alert = "Balance low" }
+            if panel.windows.contains(where: { $0.label == panel.name && $0.pct == nil && $0.right?.hasSuffix(" left") == true }),
+               let level = Shelf.level(panel) {
+                let amount = -level, levels = balanceLevels[panel.id]
+                if panel.alert == nil, amount < (levels?.alert ?? lowBalance) { panel.alert = "Balance low" }
+                if let caution = levels?.caution, amount < caution { panel.caution = "Balance under " + usd(caution); if panel.note.isEmpty { panel.note = panel.caution ?? "" } }
+            }
             return panel
         }
     }

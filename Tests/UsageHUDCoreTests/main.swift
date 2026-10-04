@@ -67,6 +67,7 @@ let cases: [(String, () throws -> Void)] = [
     ("testFireworksSpendAgainstTheMonthlyLimit", test.testFireworksSpendAgainstTheMonthlyLimit),
     ("testLiteLLMBudgetAndOtherGateways", test.testLiteLLMBudgetAndOtherGateways),
     ("testReviewFixesForNewReaders", test.testReviewFixesForNewReaders),
+    ("testOpenRouterBalanceLevelsAndGauge", test.testOpenRouterBalanceLevelsAndGauge),
     ("testUnusedPlansStayOutOfMenuBar", test.testUnusedPlansStayOutOfMenuBar),
     ("testBalanceParsers", test.testBalanceParsers),
     ("testKeyProviderFallsBackToSecondHostAndShowsMoney", test.testKeyProviderFallsBackToSecondHostAndShowsMoney),

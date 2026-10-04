@@ -213,7 +213,9 @@ final class HUD: NSObject, NSApplicationDelegate {
         case "vercel": return NSColor(srgbRed: 0.58, green: 0.56, blue: 0.54, alpha: 1)
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
         case "kimi", "kimi-code": return NSColor(srgbRed: 0.09, green: 0.51, blue: 1.00, alpha: 1)
-        case "openrouter": return NSColor(srgbRed: 0.40, green: 0.93, blue: 0.16, alpha: 1)
+        case "openrouter": return NSColor(srgbRed: 200 / 255, green: 254 / 255, blue: 1 / 255, alpha: 1)
+        // A balance getting low; deliberately not any provider's colour.
+        case "caution": return NSColor(srgbRed: 1.0, green: 0.74, blue: 0.04, alpha: 1)
         case "fireworks": return NSColor(srgbRed: 0.62, green: 0.24, blue: 1.00, alpha: 1)
         case "litellm": return NSColor(srgbRed: 0.98, green: 0.66, blue: 0.15, alpha: 1)
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
@@ -320,7 +322,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         // leaving a pale fringe of the track around every full battery.
         let pixel = { (x: CGFloat) -> CGFloat in (x * 2).rounded() / 2 }
         let span = { (from: CGFloat, to: CGFloat) in NSRect(x: 1 + from, y: bodyY, width: max(0, to - from), height: bodyHeight) }
-        let fillEnd = money != nil ? bodyWidth : pixel(fillWidth)
+        let fillEnd = money != nil ? pixel(bodyWidth * CGFloat(panel.gauge ?? 1)) : pixel(fillWidth)
         let weeklyEnd = weeklyValid ? max(fillEnd, pixel(bodyWidth * weeklyRemaining / 100)) : fillEnd
         let weeklyAlpha: CGFloat = weekly?.stale == true || weekly?.expired == true ? 0.50 : 1, fillAlpha: CGFloat = cached ? (money != nil ? 0.50 : 0.45) : 1
         // A translucent layer still needs the track behind it.
@@ -329,7 +331,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         if weeklyEnd > fillEnd {
             paint(span(fillEnd, weeklyEnd), body: bodyRect, id: panel.id, light: false, muted: true, alpha: weeklyAlpha, dark: dark)
         }
-        paint(span(0, fillEnd), body: bodyRect, id: panel.id, light: money != nil, muted: weeklyShade, alpha: fillAlpha, dark: dark)
+        paint(span(0, fillEnd), body: bodyRect, id: panel.caution != nil ? "caution" : panel.id, light: money != nil, muted: weeklyShade, alpha: fillAlpha, dark: dark)
         if glow > 0 { NSColor(srgbRed: 1.0, green: 0.33, blue: 0.30, alpha: glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()

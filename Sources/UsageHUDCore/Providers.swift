@@ -388,7 +388,10 @@ final class OpenRouterProvider: UsageProvider {
         }
         // Only your own keys pulse: a teammate reaching the cap they were given is the cap doing its job.
         let alert = mine.first { $0.warning != nil }.map { $0.cell.label + ": " + ($0.warning ?? "") }
-        return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Add an OpenRouter key; see PROVIDERS.md" : "", alert: alert,
-                     cells: (mine + team).map { $0.cell }, cellsTitle: title)
+        var panel = Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Add an OpenRouter key; see PROVIDERS.md" : "", alert: alert,
+                          cells: (mine + team).map { $0.cell }, cellsTitle: title)
+        // The balance is the number; how full the body is says how close your tightest capped key is to its cap.
+        panel.gauge = mine.filter { $0.cell.pct != nil }.map { $0.left }.min()
+        return panel
     }
 }

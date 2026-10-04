@@ -81,6 +81,10 @@ public struct Panel: Codable {
     public var cellsTitle: String?
     /// The window the battery shows, when the provider knows better than the 5h/7d rule; shown dimmed once cached.
     public var lead: String?
+    /// Something worth knowing but not urgent (a balance getting low): the battery turns amber, without pulsing.
+    public var caution: String?
+    /// For a balance battery: the share (0...1) of the tightest key cap still free, which sets how full the body is.
+    public var gauge: Double?
     /// A command that fixes the current problem, from the provider; the menu can run it in Terminal.
     public var fix: String?
     public init(id: String, name: String, windows: [Window] = [], note: String = "", alert: String? = nil,

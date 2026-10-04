@@ -568,6 +568,24 @@ final class CoreTests {
         expectError(try gateway.refresh()); expectError(try gateway.refresh())
         expectEqual(http.calls, 1)
     }
+    /// OpenRouter: amber under $15, a pulse under $10; the body is as full as the tightest capped key.
+    func testOpenRouterBalanceLevelsAndGauge() throws {
+        func levels(_ total: Double) throws -> Panel {
+            http.handler = { url in
+                url.path.hasSuffix("credits") ? ["data": ["total_credits": total, "total_usage": 0]]
+                    : ["data": ["usage": 1, "usage_daily": 0, "limit": 5, "limit_remaining": 4, "limit_reset": "daily"]]
+            }
+            let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: ["OPENROUTER_API_KEY": "sk-or-v1-" + String(repeating: "e5", count: 32)])
+            try provider.refresh()
+            return Engine(root: root, credentials: credentials, http: http, providers: [provider]).panels()[0]
+        }
+        var panel = try levels(20)
+        expectNil(panel.caution); expectNil(panel.alert); expectEqual(panel.gauge ?? 0, 0.8, accuracy: 0.001)
+        panel = try levels(12)
+        expectEqual(panel.caution, "Balance under $15"); expectNil(panel.alert)
+        panel = try levels(9)
+        expectEqual(panel.alert, "Balance low"); expectEqual(panel.caution, "Balance under $15")
+    }
     func testUnusedPlansStayOutOfMenuBar() {
         let engine = Engine(root: root, credentials: credentials, http: http)
         expectEqual(engine.panels().map(\.id), [])
