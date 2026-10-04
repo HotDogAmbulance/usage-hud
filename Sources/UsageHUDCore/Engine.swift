@@ -26,10 +26,14 @@ public final class Engine {
                                       OpenRouterProvider(cache: cache, credentials: credentials, http: http),
                                       GLMProvider(cache: cache, credentials: credentials, http: http),
                                       AntigravityProvider(cache: cache),
-                                      GrokProvider(cache: cache),
-                                      BalanceProvider.vercel(cache: cache, credentials: credentials, http: http),
-                                      BalanceProvider.deepSeek(cache: cache, credentials: credentials, http: http),
-                                      BalanceProvider.kimi(cache: cache, credentials: credentials, http: http)]
+                                      GrokProvider(cache: cache, http: http),
+                                      KeyProvider.vercel(cache: cache, credentials: credentials, http: http),
+                                      KeyProvider.deepSeek(cache: cache, credentials: credentials, http: http),
+                                      KeyProvider.kimi(cache: cache, credentials: credentials, http: http),
+                                      KeyProvider.kimiCode(cache: cache, credentials: credentials, http: http),
+                                      KeyProvider.xai(cache: cache, credentials: credentials, http: http),
+                                      KeyProvider.fireworks(cache: cache, credentials: credentials, http: http),
+                                      KeyProvider.liteLLM(cache: cache, credentials: credentials, http: http)]
     }
     /// After a Keychain prompt, only the user's own Refresh may ask again, or a day passing (a prompt at login can be a fluke).
     func prompted(_ id: String) -> Bool {
@@ -70,7 +74,7 @@ public final class Engine {
                 if status["attention"] as? Bool == true { panel.alert = panel.alert ?? message }
             }
             // The text stays the same as the balance moves, so one hover silences it until it recovers.
-            if panel.alert == nil, panel.windows.contains(where: { $0.label == panel.name && $0.pct == nil }),
+            if panel.alert == nil, panel.windows.contains(where: { $0.label == panel.name && $0.pct == nil && $0.right?.hasSuffix(" left") == true }),
                let level = Shelf.level(panel), -level < lowBalance { panel.alert = "Balance low" }
             return panel
         }

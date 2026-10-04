@@ -209,11 +209,13 @@ final class HUD: NSObject, NSApplicationDelegate {
         case "claude": return NSColor(srgbRed: 0.85, green: 0.58, blue: 0.45, alpha: 1)
         case "glm": return NSColor(srgbRed: 0.42, green: 0.36, blue: 0.98, alpha: 1)
         case "antigravity": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
-        case "grok": return NSColor(srgbRed: 0.52, green: 0.55, blue: 0.62, alpha: 1)
+        case "grok", "xai": return NSColor(srgbRed: 0.52, green: 0.55, blue: 0.62, alpha: 1)
         case "vercel": return NSColor(srgbRed: 0.58, green: 0.56, blue: 0.54, alpha: 1)
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
-        case "kimi": return NSColor(srgbRed: 0.09, green: 0.51, blue: 1.00, alpha: 1)
+        case "kimi", "kimi-code": return NSColor(srgbRed: 0.09, green: 0.51, blue: 1.00, alpha: 1)
         case "openrouter": return NSColor(srgbRed: 0.40, green: 0.93, blue: 0.16, alpha: 1)
+        case "fireworks": return NSColor(srgbRed: 0.62, green: 0.24, blue: 1.00, alpha: 1)
+        case "litellm": return NSColor(srgbRed: 0.98, green: 0.66, blue: 0.15, alpha: 1)
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
         }
     }
@@ -445,9 +447,11 @@ final class HUD: NSObject, NSApplicationDelegate {
             }
             return text
         }
-        let plan = panel.note.hasPrefix("Plan: ") ? String(panel.note.dropFirst(6)).capitalized : nil
+        // "max" and "PRO" read "Max" and "Pro"; a name already in its own case ("SuperGrok Heavy") stays as it is.
+        let plan = panel.note.hasPrefix("Plan: ") ? String(panel.note.dropFirst(6)) : nil
+        let tidy = plan.map { $0 == $0.lowercased() || $0 == $0.uppercased() ? $0.capitalized : $0 }
         let balance = panel.windows.first { $0.label == panel.name }
-        var lines = [line([(panel.name, true), (plan.map { " · " + $0 } ?? "", false), (balance?.right.map { "  " + $0 } ?? "", true),
+        var lines = [line([(panel.name, true), (tidy.map { " · " + $0 } ?? "", false), (balance?.right.map { "  " + $0 } ?? "", true),
                            (balance?.stale == true || old ? " · cached" : "", false)])]
         if let alert = panel.alert { lines.append(line([("⚠︎ " + alert, false)])) }
         if showingWeek { lines.append(line([("Showing 7d" + (cached ? " · cached" : ""), false)])) }
@@ -638,7 +642,7 @@ if CommandLine.arguments.contains("--self-test") {
     let long = Window(label: "Guy1", pct: 0, right: "$0.00 of $5.00 today · resets in 7h 16m")
     precondition(CellsView(title: "OpenRouter", rows: [long]).frame.width > CellsView(title: "OpenRouter", rows: [Window(label: "a", pct: 0, right: "$1")]).frame.width)
     // No tint may pass for the system battery's white.
-    for id in ["codex", "claude", "glm", "antigravity", "grok", "vercel", "deepseek", "kimi", "openrouter", "other"] {
+    for id in ["codex", "claude", "glm", "antigravity", "grok", "vercel", "deepseek", "kimi", "openrouter", "fireworks", "litellm", "other"] {
         let rgb = delegate.tint(id).usingColorSpace(.sRGB)!
         let linear = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
         let chroma = max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) - min(rgb.redComponent, rgb.greenComponent, rgb.blueComponent)

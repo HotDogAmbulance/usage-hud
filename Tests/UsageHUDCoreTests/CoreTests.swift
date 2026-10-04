@@ -27,6 +27,10 @@ final class FakeHTTP: HTTPReading {
         bodies.append(body)
         return try get(url, token: token, headers: headers, limit: limit)
     }
+    /// Answers with the `header` entry of what `get` would return.
+    func header(_ url: URL, token: String, name: String) throws -> String? {
+        dict(try get(url, token: token, headers: [:], limit: 0)["header"])[name] as? String
+    }
 }
 struct FakeProvider: UsageProvider {
     let id: String
@@ -419,14 +423,128 @@ final class CoreTests {
         expectEqual(AntigravityLocal.flag("--csrf_token", in: "binary --csrf_token fixture --other x"), "fixture")
         expectNil(AntigravityLocal.flag("--csrf_token", in: "binary --csrf_token_extra wrong"))
     }
-    func testGrokMonthlyBillingInCents() throws {
-        let billing: JSON = ["monthlyLimit": ["val": 5000], "usage": ["totalUsed": ["val": 1250]],
-                             "billingCycle": ["billingPeriodEnd": "2026-11-01T00:00:00Z"]]
-        let windows = try GrokProvider.windows(billing)
-        expectEqual(number(dict(windows["month"])["used_percentage"]), 25)
-        try cache.quota("grok.json", windows: windows, extra: ["spent_cents": 1250, "limit_cents": 5000])
-        expectEqual(GrokProvider(cache: cache).panel().windows.last?.right, "$12.50 / $50 · this month")
-        expectError(try GrokProvider.windows(["usage": ["totalUsed": ["val": 1]]]))
+    /// Grok reads its credits with the sign-in Grok CLI saved, and waits quietly once that sign-in is old.
+    func testGrokCreditsFromTheCLISignIn() throws {
+        let folder = root.appendingPathComponent(".grok")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        func signIn(_ expires: String) throws {
+            try JSONSerialization.data(withJSONObject: ["https://accounts.x.ai/sign-in": ["key": "legacy"],
+                "https://auth.x.ai::client": ["key": "grok-token", "expires_at": expires]]).write(to: folder.appendingPathComponent("auth.json"))
+        }
+        let grok = GrokProvider(cache: cache, http: http, home: root, environment: [:])
+        expectError(try grok.refresh()); expectEqual(http.calls, 0)
+        try signIn("2099-01-01T00:00:00.123456Z")
+        http.response = ["config": ["creditUsagePercent": 12.5, "subscriptionTier": "SUPERGROK_HEAVY",
+                                    "currentPeriod": ["type": "USAGE_PERIOD_TYPE_WEEKLY", "end": "2099-09-27T18:42:45.537749+00:00"]]]
+        try grok.refresh()
+        expectEqual(http.sentToken, "grok-token"); expectEqual(http.sentHeaders["x-xai-token-auth"], "xai-grok-cli")
+        let panel = grok.panel()
+        expectEqual(panel.windows.first?.label, "7d"); expectEqual(panel.windows.first?.pct, 12.5)
+        expectNotNil(panel.windows.first?.resets_at); expectEqual(panel.note, "Plan: SuperGrok Heavy")
+        // On-demand spend against its cap when there is no credit percentage.
+        expectEqual(number(dict(try GrokProvider.windows(["config": ["onDemandCap": ["val": 1000], "onDemandUsed": ["val": 250]]])["month"])["used_percentage"]), 25)
+        expectError(try GrokProvider.windows(["subscriptionTier": "SUPERGROK"]))
+        try signIn("2020-01-01T00:00:00Z"); http.calls = 0
+        do { try grok.refresh(); fail("an old sign-in should wait") } catch let problem as HUDProblem { expectFalse(problem.attention || problem.gone) }
+        expectEqual(http.calls, 0)
+    }
+    /// Kimi Code reports counts as strings (a zero may be missing) and, on newer plans, a ratio per pool.
+    func testKimiCodeWindowsAndPlan() throws {
+        let blob = try KeyProvider.kimiCodeUsage([
+            "user": ["membership": ["level": "LEVEL_INTERMEDIATE"]],
+            "usage": ["limit": "2048", "used": "512", "resetTime": "2099-01-09T15:23:13.716839300Z"],
+            "limits": [["window": ["duration": 300, "timeUnit": "TIME_UNIT_MINUTE"], "detail": ["limit": "200", "remaining": "50"]]],
+            "usages": ["limit_5h": ["used_ratio": 0, "reset_time": "2099-01-06T13:33:02Z"], "limit_month_total": ["used_ratio": 0.5]]])
+        let windows = dict(blob["rate_limits"])
+        expectEqual(number(dict(windows["w10080"])["used_percentage"]), 25)
+        expectNotNil(resetTime(dict(windows["w10080"])["resets_at"]))
+        // A placeholder zero ratio doesn't hide real counts.
+        expectEqual(number(dict(windows["w300"])["used_percentage"]), 75)
+        expectEqual(number(dict(windows["month"])["used_percentage"]), 50)
+        expectEqual(blob["plan"] as? String, "Allegretto")
+        expectError(try KeyProvider.kimiCodeUsage(["usage": ["limit": "0"]]))
+    }
+    /// kimi-cli's own config holds the plan's key; a Moonshot key under KIMI_API_KEY is not taken for one.
+    func testKimiCodeFindsKimiCLIKey() throws {
+        let folder = root.appendingPathComponent(".kimi")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "[providers.moonshot]\ntype = \"kimi\"\nbase_url = \"https://api.moonshot.ai/v1\"\napi_key = \"sk-moonshot-0000000000000000\"\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\nbase_url = \"https://api.kimi.com/coding/v1\"\napi_key = \"sk-kimi-1111111111111111\"\n"
+            .write(to: folder.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+        expectEqual(KeyProvider.kimiCLIKeys(home: root, environment: [:]), ["api.kimi.com": "sk-kimi-1111111111111111"])
+        let none = root.appendingPathComponent("none")
+        expectEqual(KeyProvider.kimiCLIKeys(home: none, environment: ["KIMI_API_KEY": "sk-moonshot-0000000000000000"]), [:])
+        credentials.missing = ["Usage HUD Kimi Code"]
+        http.response = ["usage": ["limit": "100", "used": "10"]]
+        let provider = KeyProvider.kimiCode(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
+        try provider.refresh()
+        expectEqual(http.sentToken, "sk-kimi-1111111111111111")
+        expectEqual(provider.panel().windows.first?.label, "7d")
+    }
+    /// An xAI management key names its team; a prepaid team shows money left, a team billed afterwards its spend.
+    func testXAIBillingFromAManagementKey() throws {
+        var paths: [String] = []
+        http.handler = { url in
+            paths.append(url.path)
+            if url.path.hasSuffix("validation") { return ["scope": "SCOPE_TEAM", "scopeId": "team-1", "teamId": "old"] }
+            if url.path.hasSuffix("prepaid/balance") { return ["total": ["val": "-1050"]] }
+            return ["effectiveSpendingLimit": "20000", "coreInvoice": ["amountBeforeVat": "5000"]]
+        }
+        let blob = try KeyProvider.xaiBilling(KeyProvider.Call(host: "management-api.x.ai", key: "k", http: http))
+        expectTrue(paths.contains("/v1/billing/teams/team-1/prepaid/balance"))
+        expectEqual(number(blob["balance"]), 10.5); expectEqual(number(blob["spent"]), 50); expectEqual(number(blob["limit"]), 200)
+        http.handler = { url in
+            if url.path.hasSuffix("validation") { return ["teamId": "team-2"] }
+            return url.path.hasSuffix("prepaid/balance") ? ["total": ["val": "0"]] : ["effectiveSpendingLimit": "20000", "coreInvoice": ["amountBeforeVat": "5000"]]
+        }
+        let postpaid = try KeyProvider.xaiBilling(KeyProvider.Call(host: "management-api.x.ai", key: "k", http: http))
+        expectNil(postpaid["balance"]); expectEqual(number(dict(dict(postpaid["rate_limits"])["month"])["used_percentage"]), 25)
+        http.handler = { _ in ["scope": "SCOPE_ORGANIZATION", "scopeId": "org"] }
+        expectError(try KeyProvider.xaiBilling(KeyProvider.Call(host: "management-api.x.ai", key: "k", http: http)))
+    }
+    /// Fireworks' account comes from the key itself, and its monthly spend limit gives the battery a share.
+    func testFireworksSpendAgainstTheMonthlyLimit() throws {
+        credentials.missing = ["Usage HUD Fireworks"]
+        http.handler = { url in
+            if url.path == "/verifyApiKey" { return ["header": ["x-fireworks-account-id": "my-team"]] }
+            expectEqual(url.path, "/v1/accounts/my-team/quotas/monthly-spend-usd")
+            return ["name": "accounts/my-team/quotas/monthly-spend-usd", "value": "50", "maxValue": "50", "usage": 12.5]
+        }
+        let provider = KeyProvider.fireworks(cache: cache, credentials: credentials, http: http, home: root, environment: ["FIREWORKS_API_KEY": "fw_0123456789abcdef"])
+        try provider.refresh()
+        let panel = provider.panel()
+        expectEqual(panel.windows.first?.pct, 25); expectEqual(panel.windows.last?.right, "$12.50 / $50 · this month")
+        expectEqual(try KeyProvider.fireworksSpend(KeyProvider.Call(host: "api.fireworks.ai", key: "k", http: http), account: "accounts/my-team")["limit"] as? Double, 50)
+        expectError(try KeyProvider.fireworksSpend(KeyProvider.Call(host: "api.fireworks.ai", key: "k", http: http), account: "../x"))
+    }
+    /// A LiteLLM key reads its own budget; a gateway Claude Code uses that isn't LiteLLM is asked once, then left alone.
+    func testLiteLLMBudgetAndOtherGateways() throws {
+        http.handler = { url in
+            expectEqual(url.absoluteString, "http://localhost:4000/key/info")
+            return ["key": "hash", "info": ["spend": 12.5, "max_budget": 50, "budget_reset_at": "2099-11-01T00:00:00Z"]]
+        }
+        let none = root.appendingPathComponent("none")
+        let proxy = KeyProvider.liteLLM(cache: cache, credentials: credentials, http: http, home: none,
+                                        environment: ["LITELLM_PROXY_API_BASE": "http://localhost:4000/v1", "LITELLM_PROXY_API_KEY": "sk-0123456789abcdef"])
+        try proxy.refresh()
+        expectEqual(credentials.calls, 0)
+        let panel = proxy.panel()
+        expectEqual(panel.windows.first?.label, "Budget"); expectEqual(panel.windows.first?.pct, 25)
+        expectEqual(panel.windows.last?.right, "$12.50 / $50")
+        expectEqual(try KeyProvider.liteLLMBudget(KeyProvider.Call(host: "http://localhost:4000", key: "k", http: http))["limit"] as? Double, 50)
+        // A key with no budget shows what it spent, and that is never a low balance.
+        http.handler = { _ in ["info": ["spend": 3, "max_budget": NSNull()]] }
+        let open = try KeyProvider.liteLLMBudget(KeyProvider.Call(host: "http://localhost:4000", key: "k", http: http))
+        expectNil(open["limit"]); try cache.write("litellm.json", open)
+        expectEqual(proxy.panel().windows.map { $0.label + " " + ($0.right ?? "") }, ["LiteLLM $3 spent"])
+        let engine = Engine(root: root, credentials: credentials, http: http, providers: [proxy])
+        expectNil(engine.panels().first?.alert)
+        // Claude Code pointed at its own provider is not a proxy; another gateway is tried once.
+        expectEqual(KeyProvider.liteLLMProxies(home: none, environment: ["ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic", "ANTHROPIC_AUTH_TOKEN": "t"]), [:])
+        let gateway = KeyProvider.liteLLM(cache: cache, credentials: credentials, http: http, home: none,
+                                          environment: ["ANTHROPIC_BASE_URL": "https://gateway.example.com/anthropic", "ANTHROPIC_AUTH_TOKEN": "t"])
+        http.handler = { _ in throw HTTPFailure(status: 404) }; http.calls = 0
+        expectError(try gateway.refresh()); expectError(try gateway.refresh())
+        expectEqual(http.calls, 1)
     }
     func testUnusedPlansStayOutOfMenuBar() {
         let engine = Engine(root: root, credentials: credentials, http: http)
@@ -436,23 +554,23 @@ final class CoreTests {
     }
 
     func testBalanceParsers() throws {
-        let vercel = try BalanceProvider.vercelBalance(["balance": "95.50", "total_used": "4.50"], "ai-gateway.vercel.sh")
+        let vercel = try KeyProvider.vercelBalance(["balance": "95.50", "total_used": "4.50"], "ai-gateway.vercel.sh")
         expectEqual(vercel.0, 95.5); expectEqual(vercel.1, "$")
-        let deepSeek = try BalanceProvider.deepSeekBalance(["is_available": true, "balance_infos": [
+        let deepSeek = try KeyProvider.deepSeekBalance(["is_available": true, "balance_infos": [
             ["currency": "CNY", "total_balance": "110.00"], ["currency": "USD", "total_balance": "12.30"]]], "api.deepseek.com")
         expectEqual(deepSeek.0, 12.3); expectEqual(deepSeek.1, "$")
-        let yuan = try BalanceProvider.deepSeekBalance(["balance_infos": [["currency": "CNY", "total_balance": "110.00"]]], "api.deepseek.com")
+        let yuan = try KeyProvider.deepSeekBalance(["balance_infos": [["currency": "CNY", "total_balance": "110.00"]]], "api.deepseek.com")
         expectEqual(yuan.1, "¥")
-        let kimi = try BalanceProvider.kimiBalance(["code": 0, "data": ["available_balance": 49.58894]], "api.moonshot.cn")
+        let kimi = try KeyProvider.kimiBalance(["code": 0, "data": ["available_balance": 49.58894]], "api.moonshot.cn")
         expectEqual(kimi.0, 49.58894); expectEqual(kimi.1, "¥")
-        expectError(try BalanceProvider.vercelBalance([:], "ai-gateway.vercel.sh"))
+        expectError(try KeyProvider.vercelBalance([:], "ai-gateway.vercel.sh"))
     }
-    func testBalanceProviderFallsBackToSecondHostAndShowsMoney() throws {
+    func testKeyProviderFallsBackToSecondHostAndShowsMoney() throws {
         http.handler = { url in
             if url.host == "api.moonshot.ai" { throw HTTPFailure(status: 401) }
             return ["data": ["available_balance": 3.5]]
         }
-        let provider = BalanceProvider.kimi(cache: cache, credentials: credentials, http: http)
+        let provider = KeyProvider.kimi(cache: cache, credentials: credentials, http: http)
         expectFalse(provider.shown())
         try provider.refresh()
         expectTrue(provider.shown())
@@ -735,10 +853,10 @@ final class CoreTests {
             expectEqual(url.host, "api.deepseek.com")
             return ["balance_infos": [["currency": "USD", "total_balance": "7.00"]]]
         }
-        try BalanceProvider.deepSeek(cache: cache, credentials: credentials, http: http, home: root, environment: [:]).refresh()
+        try KeyProvider.deepSeek(cache: cache, credentials: credentials, http: http, home: root, environment: [:]).refresh()
         expectEqual(http.sentToken, "sk-0123456789abcdef0123")
         let none = root.appendingPathComponent("none")
-        let kimi = BalanceProvider.kimi(cache: cache, credentials: credentials, http: http, home: none,
+        let kimi = KeyProvider.kimi(cache: cache, credentials: credentials, http: http, home: none,
                                         environment: ["ANTHROPIC_BASE_URL": "https://api.moonshot.ai/anthropic", "ANTHROPIC_AUTH_TOKEN": "kimi-cc-key"])
         http.handler = { _ in ["data": ["available_balance": 2.0]] }
         try kimi.refresh()
@@ -746,7 +864,7 @@ final class CoreTests {
         http.error = HTTPFailure(status: 401)
         do { try kimi.refresh(); fail("a rejected key should fail") } catch let problem as HUDProblem { expectFalse(problem.attention) }
         http.error = nil; http.calls = 0
-        expectError(try BalanceProvider.vercel(cache: cache, credentials: credentials, http: http, home: none, environment: [:]).refresh())
+        expectError(try KeyProvider.vercel(cache: cache, credentials: credentials, http: http, home: none, environment: [:]).refresh())
         expectEqual(http.calls, 0)
     }
     /// Someone who clicked Allow rather than Always Allow is asked again only when the item changes.

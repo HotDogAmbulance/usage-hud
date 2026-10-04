@@ -50,7 +50,8 @@ public func countdown(_ seconds: Double) -> String {
 }
 func resetTime(_ value: Any?) -> Double? {
     if let n = number(value) { return n }
-    guard let text = value as? String else { return nil }
+    // Some APIs send nanoseconds ("…13.716839300Z"); the formatter wants at most milliseconds.
+    guard let text = (value as? String)?.replacingOccurrences(of: #"(\.\d{3})\d+"#, with: "$1", options: .regularExpression) else { return nil }
     let format = ISO8601DateFormatter()
     format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return (format.date(from: text) ?? ISO8601DateFormatter().date(from: text))?.timeIntervalSince1970

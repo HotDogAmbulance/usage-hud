@@ -63,42 +63,61 @@ final class GLMProvider: UsageProvider {
     }
 }
 
-/// Grok CLI. Reads monthly billing through the CLI's own `agent stdio` JSON-RPC, using its existing login.
+/// Grok CLI. Reads the plan's credit usage from the CLI's own billing endpoint, with the sign-in `grok login` saved in
+/// `~/.grok/auth.json`. The CLI renews that sign-in whenever it runs; the HUD only reads it and keeps it in memory.
+/// (The CLI's `x.ai/billing` RPC answers "method not found" in current versions, so it isn't used.)
 final class GrokProvider: UsageProvider {
     let id = "grok", name = "Grok", automatic = true
-    let cache: Cache
-    init(cache: Cache) { self.cache = cache }
+    let cache: Cache, http: HTTPReading, home: URL, environment: [String: String]
+    init(cache: Cache, http: HTTPReading, home: URL = FileManager.default.homeDirectoryForCurrentUser,
+         environment: [String: String] = ProcessInfo.processInfo.environment) {
+        self.cache = cache; self.http = http; self.home = home; self.environment = environment
+    }
     func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("grok.json").path) }
-    static func cents(_ value: Any?) -> Double? { number(dict(value)["val"]) }
+    /// The xAI sign-in first, then the older one; `expired` once past its `expires_at` (none means it doesn't say).
+    static func token(_ auth: JSON, now: Double = Date().timeIntervalSince1970) -> (key: String, expired: Bool)? {
+        let names = auth.keys.sorted()
+        for name in names.filter({ $0.hasPrefix("https://auth.x.ai::") }) + names.filter({ $0.contains("/sign-in") }) {
+            let entry = dict(auth[name])
+            guard let key = entry["key"] as? String, !key.isEmpty else { continue }
+            return (key, resetTime(entry["expires_at"]).map { $0 <= now } ?? false)
+        }
+        return nil
+    }
+    /// `creditUsagePercent` over the current period (weekly on current plans), or on-demand spend against its cap.
     static func windows(_ billing: JSON) throws -> JSON {
-        guard let limit = cents(billing["monthlyLimit"]), limit > 0 else { throw HUDProblem("Grok returned no monthly limit") }
-        let used = cents(dict(billing["usage"])["totalUsed"]) ?? 0
-        return ["month": ["used_percentage": used / limit * 100, "resets_at": resetTime(dict(billing["billingCycle"])["billingPeriodEnd"]) as Any? ?? NSNull()]]
+        let config = dict(billing["config"]), period = dict(config["currentPeriod"])
+        let cap = number(dict(config["onDemandCap"])["val"]) ?? 0
+        guard let pct = number(config["creditUsagePercent"]) ?? (cap > 0 ? number(dict(config["onDemandUsed"])["val"]).map { $0 / cap * 100 } : nil) else {
+            throw HUDProblem("Grok returned no credit usage")
+        }
+        let weekly = (period["type"] as? String)?.contains("WEEK") == true
+        return [weekly ? "w10080" : "month": ["used_percentage": pct, "window_minutes": weekly ? 10080 as Any : NSNull() as Any,
+                                              "resets_at": resetTime(period["end"] ?? config["billingPeriodEnd"]) as Any? ?? NSNull()]]
+    }
+    /// "SUPERGROK_HEAVY" reads "SuperGrok Heavy".
+    static func plan(_ billing: JSON) -> String? {
+        guard let tier = (dict(billing["config"])["subscriptionTier"] ?? billing["subscriptionTier"]) as? String, !tier.isEmpty else { return nil }
+        return tier.replacingOccurrences(of: "_", with: " ").lowercased().capitalized.replacingOccurrences(of: "Supergrok", with: "SuperGrok")
     }
     func refresh() throws {
-        guard let binary = CLI.find("grok", configured: ProcessInfo.processInfo.environment["USAGE_HUD_GROK_CLI"]) else {
+        let folder = environment["GROK_HOME"].map { URL(fileURLWithPath: $0) } ?? home.appendingPathComponent(".grok")
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent("auth.json")),
+              let token = Self.token(dict(try? JSONSerialization.jsonObject(with: data))) else {
             throw HUDProblem("Install Grok CLI and sign in with grok login", gone: true)
         }
-        let rpc = try RPCProcess(binary: binary, arguments: ["agent", "stdio"], environment: CLI.environment(for: binary))
-        defer { rpc.stop() }
-        rpc.errorMessage = "Grok billing unavailable; check grok login"
-        let capabilities: JSON = ["fs": ["readTextFile": false, "writeTextFile": false], "terminal": false]
-        let initialize: JSON = ["protocolVersion": "1", "clientCapabilities": capabilities]
-        try rpc.send(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": initialize])
-        _ = try rpc.receive(1)
-        try rpc.send(["jsonrpc": "2.0", "id": 2, "method": "x.ai/billing", "params": JSON()])
-        let billing = try rpc.receive(2)
-        try cache.quota("grok.json", windows: Self.windows(billing), extra: [
-            "spent_cents": Self.cents(dict(billing["usage"])["totalUsed"]) as Any? ?? NSNull(),
-            "limit_cents": Self.cents(billing["monthlyLimit"]) as Any? ?? NSNull()])
+        // An old sign-in only means the CLI sat idle; it renews it the next time it runs.
+        let idle = HUDProblem("Updates when you next use Grok CLI")
+        guard !token.expired else { throw idle }
+        let billing: JSON
+        do {
+            billing = try http.get(URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!, token: token.key,
+                                   headers: ["x-xai-token-auth": "xai-grok-cli"], limit: 1024 * 1024)
+        } catch let error as HTTPFailure where error.status == 401 || error.status == 403 { throw idle }
+        try cache.quota("grok.json", windows: Self.windows(billing), extra: ["plan": Self.plan(billing) as Any? ?? NSNull()])
     }
     func panel() -> Panel {
-        let blob = cache.read("grok.json")
-        var rows = quotaWindows(blob)
-        if let spent = number(blob["spent_cents"]), let limit = number(blob["limit_cents"]) {
-            rows.append(Window(label: "Spent", right: "\(usd(spent / 100)) / \(usd(limit / 100)) · this month",
-                               stale: Date().timeIntervalSince1970 - (number(blob["captured_at"]) ?? 0) > 600))
-        }
-        return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Refresh Grok to read quota" : "")
+        let blob = cache.read("grok.json"), rows = quotaWindows(blob)
+        return Panel(id: id, name: name, windows: rows, note: (blob["plan"] as? String).map { "Plan: " + $0 } ?? (rows.isEmpty ? "Refresh Grok to read quota" : ""))
     }
 }

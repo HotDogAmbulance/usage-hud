@@ -157,6 +157,8 @@ final class KeychainReader: CredentialReading {
 protocol HTTPReading {
     func get(_ url: URL, token: String, headers: [String: String], limit: Int) throws -> JSON
     func post(_ url: URL, token: String, headers: [String: String], body: JSON, limit: Int) throws -> JSON
+    /// One response header, for the APIs that answer there (Fireworks names a key's account that way).
+    func header(_ url: URL, token: String, name: String) throws -> String?
 }
 struct HTTPFailure: Error { let status: Int }
 final class ResponseBox: @unchecked Sendable {
@@ -172,7 +174,16 @@ struct HTTPReader: HTTPReading {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return try send(request, token: token, headers: headers, limit: limit)
     }
-    private func send(_ original: URLRequest, token: String, headers: [String: String], limit: Int) throws -> JSON {
+    func header(_ url: URL, token: String, name: String) throws -> String? {
+        try exchange(URLRequest(url: url, timeoutInterval: 25), token: token, headers: [:], limit: 1024 * 1024).response.value(forHTTPHeaderField: name)
+    }
+    private func send(_ request: URLRequest, token: String, headers: [String: String], limit: Int) throws -> JSON {
+        guard let result = try JSONSerialization.jsonObject(with: exchange(request, token: token, headers: headers, limit: limit).data) as? JSON else {
+            throw HUDProblem("Invalid usage response")
+        }
+        return result
+    }
+    private func exchange(_ original: URLRequest, token: String, headers: [String: String], limit: Int) throws -> (data: Data, response: HTTPURLResponse) {
         var request = original
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -190,8 +201,7 @@ struct HTTPReader: HTTPReading {
         guard semaphore.wait(timeout: .now() + 30) == .success else { task.cancel(); throw HUDProblem("Usage request timed out") }
         guard box.error == nil, let response = box.response as? HTTPURLResponse else { throw HUDProblem("Usage connection failed") }
         guard (200..<300).contains(response.statusCode) else { throw HTTPFailure(status: response.statusCode) }
-        guard let data = box.data, data.count <= limit,
-              let result = try JSONSerialization.jsonObject(with: data) as? JSON else { throw HUDProblem("Invalid usage response") }
-        return result
+        guard let data = box.data, data.count <= limit else { throw HUDProblem("Invalid usage response") }
+        return (data, response)
     }
 }
