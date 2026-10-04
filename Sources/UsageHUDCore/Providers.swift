@@ -108,7 +108,7 @@ final class CodexProvider: UsageProvider {
     }
     func refresh() throws {
         let configured = ProcessInfo.processInfo.environment["USAGE_HUD_CODEX_CLI"] ?? Bundle.main.object(forInfoDictionaryKey: "UsageHUDCodexCLI") as? String
-        guard let binary = CLI.find("codex", configured: configured) else { throw HUDProblem("Install Codex CLI and sign in with codex login") }
+        guard let binary = CLI.find("codex", configured: configured) else { throw HUDProblem("Install Codex CLI and sign in with codex login", gone: true) }
         var env = CLI.environment(for: binary)
         env["CODEX_HOME"] = env["CODEX_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
         let rpc = try RPCProcess(binary: binary, arguments: ["app-server", "--stdio"], environment: env)
@@ -265,7 +265,7 @@ final class OpenRouterProvider: UsageProvider {
     func refresh() throws {
         let slots = try configuredSlots()
         var team = try credentials.stored(service: Self.teamService, account: "openrouter.ai"), listed: [JSON]?
-        guard !slots.isEmpty || team != nil else { throw HUDProblem("Add an OpenRouter key; see PROVIDERS.md") }
+        guard !slots.isEmpty || team != nil else { throw HUDProblem("Add an OpenRouter key; see PROVIDERS.md", gone: true) }
         let previous = cache.read("openrouter.json")
         let oldRows = previous["rows"] as? [JSON] ?? []
         var rows: [JSON] = [], balances = dict(previous["balances"]), failures: [String] = []

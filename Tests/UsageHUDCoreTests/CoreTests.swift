@@ -46,6 +46,12 @@ struct AlertProvider: UsageProvider {
     func refresh() throws { if let problem = problem { throw HUDProblem(problem, attention: attention) } }
     func panel() -> Panel { Panel(id: id, name: name, windows: [Window(label: id, right: right)]) }
 }
+final class SwitchProvider: UsageProvider {
+    let id = "s", name = "S", automatic = true
+    var problem: HUDProblem?
+    func refresh() throws { if let problem = problem { throw problem } }
+    func panel() -> Panel { Panel(id: id, name: name, windows: [Window(label: "5h", pct: 10)]) }
+}
 final class PromptingProvider: UsageProvider {
     let id = "p", name = "P", automatic = true
     var calls = 0
@@ -701,5 +707,23 @@ final class CoreTests {
         expectEqual(engine.panels(also: ["bad"]).first?.note, "offline")
         _ = engine.panels(refresh: "p"); _ = engine.panels(also: ["p"])
         expectEqual(prompting.calls, 1)
+    }
+    /// Removing an app, CLI or key takes its battery away; a closed app or an outage only dims it; all come back by themselves.
+    func testBatteriesLeaveWithTheirSource() throws {
+        let provider = SwitchProvider()
+        let engine = Engine(root: root, credentials: credentials, http: http, providers: [provider])
+        expectEqual(engine.panels(refresh: "automatic").count, 1)
+        provider.problem = HUDProblem("Open Antigravity to update its quota")
+        expectEqual(engine.panels(refresh: "automatic").first?.note, "Open Antigravity to update its quota")
+        provider.problem = HUDProblem("Antigravity isn't installed", gone: true)
+        expectEqual(engine.panels(refresh: "automatic").count, 0)
+        provider.problem = nil
+        expectEqual(engine.panels(refresh: "automatic").count, 1)
+        provider.problem = HUDProblem("offline")
+        expectEqual(engine.panels(refresh: "automatic").count, 1)
+        var status = cache.read("s-status.json")
+        status["ok_at"] = Date().timeIntervalSince1970 - 8 * 86400
+        try cache.write("s-status.json", status)
+        expectEqual(engine.panels().count, 0)
     }
 }

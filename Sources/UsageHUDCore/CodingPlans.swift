@@ -37,7 +37,7 @@ final class GLMProvider: UsageProvider {
         return windows
     }
     func refresh() throws {
-        var lastProblem = HUDProblem("Set up GLM in Claude Code, or add its API key to the Keychain; see PROVIDERS.md")
+        var lastProblem = HUDProblem("Set up GLM in Claude Code, or add its API key to the Keychain; see PROVIDERS.md", gone: true)
         let found = Self.found(home: home, environment: environment)
         for host in Self.hosts {
             guard let key = try credentials.stored(service: Self.service, account: host) ?? found[host] else { continue }
@@ -77,7 +77,7 @@ final class GrokProvider: UsageProvider {
     }
     func refresh() throws {
         guard let binary = CLI.find("grok", configured: ProcessInfo.processInfo.environment["USAGE_HUD_GROK_CLI"]) else {
-            throw HUDProblem("Install Grok CLI and sign in with grok login")
+            throw HUDProblem("Install Grok CLI and sign in with grok login", gone: true)
         }
         let rpc = try RPCProcess(binary: binary, arguments: ["agent", "stdio"], environment: CLI.environment(for: binary))
         defer { rpc.stop() }

@@ -42,24 +42,28 @@ public final class Engine {
         return providers.compactMap { provider -> Panel? in
             let statusFile = provider.id + "-status.json"
             if refresh == provider.id || (refresh == "automatic" || also.contains(provider.id)) && !prompted(provider.id) && provider.automatic {
+                let now = Date().timeIntervalSince1970
                 do {
                     try provider.refresh()
-                    try cache.write(statusFile, ["error": NSNull(), "checked_at": Date().timeIntervalSince1970])
+                    try cache.write(statusFile, ["error": NSNull(), "checked_at": now, "ok_at": now])
                 } catch {
-                    let message = (error as? HUDProblem)?.message ?? (error as? HTTPFailure).map { "Usage HTTP \($0.status)" } ?? "Usage unavailable"
-                    try? cache.write(statusFile, ["error": message, "attention": (error as? HUDProblem)?.attention == true,
-                                                  "prompted": (error as? HUDProblem)?.prompted == true,
-                                                  "fix": (error as? HUDProblem)?.fix as Any? ?? NSNull(),
-                                                  "checked_at": Date().timeIntervalSince1970])
+                    let problem = error as? HUDProblem
+                    let message = problem?.message ?? (error as? HTTPFailure).map { "Usage HTTP \($0.status)" } ?? "Usage unavailable"
+                    try? cache.write(statusFile, ["error": message, "attention": problem?.attention == true, "prompted": problem?.prompted == true,
+                                                  "fix": problem?.fix as Any? ?? NSNull(), "gone": problem?.gone == true, "checked_at": now,
+                                                  "ok_at": cache.read(statusFile)["ok_at"] ?? now])
                 }
             }
             let status = cache.read(statusFile)
             // A provider not yet read stays hidden, unless it needs the user (a prompt or a rejected key) to get there.
             guard provider.shown() || status["attention"] as? Bool == true else { return nil }
-            var panel = provider.panel()
             // Claude Code's statusline and hooks deliver readings too; one newer than the failure means it healed by itself.
-            if let message = status["error"] as? String,
-               number(cache.read(provider.id + ".json")["captured_at"]) ?? 0 <= number(status["checked_at"]) ?? 0 {
+            let failing = status["error"] is String && number(cache.read(provider.id + ".json")["captured_at"]) ?? 0 <= number(status["checked_at"]) ?? 0
+            // A battery whose source left the Mac goes with it, as does one without a good read for a week; the background
+            // keeps trying, so either comes back with its next good read.
+            if failing, status["gone"] as? Bool == true || Date().timeIntervalSince1970 - (number(status["ok_at"]) ?? .infinity) > 604_800 { return nil }
+            var panel = provider.panel()
+            if failing, let message = status["error"] as? String {
                 panel.note = message; panel.fix = status["fix"] as? String
                 for index in panel.windows.indices { panel.windows[index].stale = true }
                 // A rejected key won't fix itself; a passing outage or an idle CLI's token will.

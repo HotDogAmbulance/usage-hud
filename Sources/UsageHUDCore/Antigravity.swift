@@ -95,7 +95,10 @@ enum AntigravityLocal {
         }
         guard candidates.count == 1, let pid = candidates.first else {
             // Closing the app is normal, not a fault: the battery dims with its last reading instead of pulsing.
-            throw HUDProblem("Open Antigravity to update its quota")
+            // Removing it takes the battery away.
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let installed = ["/Applications", home + "/Applications"].contains { FileManager.default.fileExists(atPath: $0 + "/Antigravity.app") }
+            throw HUDProblem(installed ? "Open Antigravity to update its quota" : "Antigravity isn't installed", gone: !installed)
         }
         let arguments = try command("/bin/ps", ["-p", pid, "-o", "args="])
         guard let csrf = flag("--csrf_token", in: arguments), !csrf.isEmpty else {
