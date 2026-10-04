@@ -3,6 +3,7 @@
 These are AppKit renderings from `DesignPreview.swift`, not screenshots of live provider accounts. The long row illustrates 13 adapter palettes; it does not promise that every adapter has passed live-account validation. The smaller bar shows the default three-battery layout and overflow. Numerical examples are simulated.
 
 - `provider-moodboard.png`: buyer-facing first moodboard, built from the application's battery renderer and existing detailed hover view.
+- `quota-cells-preview.png`: the shared hover/overflow detail view, with neutral healthy batteries, warning colors, amounts and resets. Readings are simulated.
 - `logo-hover-demo.png`: revised model-only hover proposal. The existing battery still switches from 5h to 7d. A small vendor glyph appears underneath it without shifting status items. No extra quota table for Codex/Claude. Aggregator/infra and Antigravity retain their detail tables. Not applied to production yet.
 - `tray-logo-samples.png`: actual monochrome template samples, not recolored square app icons. Vendor marks belong to their respective owners; their inclusion in these reference previews does not grant the project's MIT license over them. Raw vendor assets are not bundled or committed.
 
