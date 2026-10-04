@@ -29,7 +29,7 @@ final class GLMProvider: UsageProvider {
             // Observed unit codes: 3 = hours, 6 = weeks. Older TOKENS_LIMIT entries describe the 5h window.
             // Any other unit is a window we don't know yet, never a 5h one in disguise.
             let minutes: Double? = unit == 3 ? count * 60 : unit == 6 ? count * 10080 : type == "TOKENS_LIMIT" && (unit == nil || unit == 5) ? 300 : nil
-            guard let minutes = minutes else { continue }
+            guard let minutes = minutes, minutes.isFinite, minutes > 0, minutes < Double(Int.max) else { continue }
             windows["w\(Int(minutes))"] = ["used_percentage": pct, "window_minutes": minutes,
                                            "resets_at": number(limit["nextResetTime"]).map { $0 / 1000 } as Any? ?? NSNull()]
         }

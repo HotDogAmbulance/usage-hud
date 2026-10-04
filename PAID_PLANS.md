@@ -39,7 +39,7 @@ Your Codex and Claude desktop apps are optional. Quota retrieval uses the indepe
 
 ## Claude credits
 
-Claude’s extra usage spending cap and amount spent are different from its prepaid balance. Live prepaid-balance integration is **not included in this update**; the existing credits adapter is unchanged. Don’t interpret a monthly cap as money left. Manage and check the actual balance in [Claude Settings → Usage](https://claude.ai/settings/usage).
+Claude’s extra usage spending cap and amount spent are different from its prepaid balance. Usage HUD reads the prepaid balance separately when Claude Code’s organization is available; a failed read keeps the previous value cached. Don’t interpret a monthly cap as money left. Manage and check the actual balance in [Claude Settings → Usage](https://claude.ai/settings/usage).
 
 ## What has been checked
 

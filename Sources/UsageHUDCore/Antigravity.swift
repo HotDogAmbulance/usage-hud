@@ -53,7 +53,7 @@ final class AntigravityProvider: UsageProvider {
         }
         var pools: [String: [Window]] = [:], order: [String] = []
         for model in models {
-            let key = "\(Int((model.pct ?? 0).rounded()))|\(Int((model.resets_at ?? 0) / 600))"
+            let key = "\(Int((model.pct ?? 0).rounded()))|\(String(format: "%.0f", ((model.resets_at ?? 0) / 600).rounded(.towardZero)))"
             if pools[key] == nil { order.append(key) }
             pools[key, default: []].append(model)
         }

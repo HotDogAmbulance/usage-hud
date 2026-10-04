@@ -52,7 +52,7 @@ security add-generic-password -s "Usage HUD GLM" -a api.z.ai -w
 
 macOS asks for the key without echoing it. Z.ai reports credit windows (`CREDIT_LIMIT`, unit 3 = hours, unit 6 = weeks) and older plans report `TOKENS_LIMIT` for the 5h window; the monthly MCP allowance (`TIME_LIMIT`) is not shown.
 
-**Antigravity.** The HUD reads the running macOS app’s local `GetUserStatus` service. Antigravity owns Google authentication and token renewal; the HUD never reads or changes its Google token, Keychain entry or credential file. It discovers the app’s language-server process and loopback listener on every refresh, keeps the local CSRF token only in memory, forbids redirects and stores only model percentages and reset times. The battery leads with the model closest to exhausting its quota; hover shows the individual models. A missing model quota is not treated as 100% remaining.
+**Antigravity.** The HUD reads the running macOS app’s local `GetUserStatus` service. Antigravity owns Google authentication and token renewal; the HUD never reads or changes its Google token, Keychain entry or credential file. It discovers the app’s language-server process and loopback listener on every refresh, keeps the local CSRF token only in memory, forbids redirects and stores only model percentages and reset times. The battery leads with the pool used most recently, falling back to the tightest pool; hover shows grouped quota pools. A missing model quota is not treated as 100% remaining.
 
 This is an internal integration verified with Antigravity 2.19.1, not a public Google quota API. It requires the app to remain running and may need updating when its local protocol changes. If unavailable, the HUD preserves the last reading with its error/stale state. Google credentials are never copied into the HUD. Gemini CLI integration has been removed. Gemini API / AI Studio usage is a separate planned integration and is not enabled by this adapter. Purchased credit balances are not inferred from legacy plan fields.
 
@@ -91,7 +91,7 @@ These were built from each provider's documentation and other open-source reader
 | Fireworks | This month's spend against the `monthly-spend-usd` limit (Fireworks has no balance API) | `FIREWORKS_API_KEY`, or the key firectl saved in `~/.fireworks/auth.ini`; the account comes from `FIREWORKS_ACCOUNT_ID`, firectl, or the key itself (`/verifyApiKey`) | `api.fireworks.ai` |
 | LiteLLM | The virtual key's spend against its budget, with its reset, from the proxy's `/key/info` | `LITELLM_PROXY_API_BASE` or `LITELLM_BASE_URL` with `LITELLM_PROXY_API_KEY` or `LITELLM_API_KEY`, or the gateway Claude Code is pointed at | none (the address varies) |
 
-xAI's prepaid ledger posts spend when a billing cycle closes, so mid-cycle it can show more than the Console. LiteLLM's key goes back only to the address it was found with; an address that answers like something other than LiteLLM is left alone until the app restarts.
+xAI's prepaid ledger posts spend when a billing cycle closes, so mid-cycle it can show more than the Console. LiteLLM’s address and key must be in the same environment or file. Its key goes back only to that address, with redirects rejected; an address that answers like something other than LiteLLM is left alone until the app restarts.
 
 To store a key instead (a stored key wins), for example:
 

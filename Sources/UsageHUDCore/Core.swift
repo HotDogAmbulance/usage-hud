@@ -29,21 +29,21 @@ func number(_ value: Any?) -> Double? {
 func dict(_ value: Any?) -> JSON { value as? JSON ?? [:] }
 /// "$20", "$1.25": whole amounts drop their cents, so "$0 / $20" reads at a glance.
 func money(_ value: Double, _ symbol: String = "$") -> String {
-    symbol + ((value * 100).rounded() == (value.rounded() * 100) ? String(Int(value.rounded())) : String(format: "%.2f", value))
+    symbol + ((value * 100).rounded() == (value.rounded() * 100) ? String(format: "%.0f", value) : String(format: "%.2f", value))
 }
 func usd(_ value: Double) -> String { money(value) }
 /// Free quota resets a plan granted (Claude, Codex): how many, and the soonest expiry, as "2 · ends in 5d 7h".
 func freeResetsRow(_ value: Any?, stale: Bool) -> Window? {
     let resets = dict(value)
     guard let left = number(resets["left"]), left >= 1 else { return nil }
-    var text = String(Int(left))
+    var text = String(format: "%.0f", left.rounded(.towardZero))
     // Shown only when there is one; the countdown to its expiry, like the other reset times.
     if let until = number(resets["until"]), until > Date().timeIntervalSince1970 { text += " · ends in " + countdown(until - Date().timeIntervalSince1970) }
     return Window(label: "Free resets", right: text, stale: stale)
 }
 /// "3h 12m" or "2d 5h"; never negative.
 public func countdown(_ seconds: Double) -> String {
-    let minutes = max(0, Int(seconds / 60))
+    let minutes = seconds.isFinite ? Int(max(0, min(Double(Int.max / 2), seconds / 60))) : 0
     return minutes >= 1440 ? "\(minutes / 1440)d \(minutes % 1440 / 60)h" : "\(minutes / 60)h \(minutes % 60)m"
 }
 func resetTime(_ value: Any?) -> Double? {
@@ -161,7 +161,7 @@ func quotaWindows(_ blob: JSON, now: Double = Date().timeIntervalSince1970) -> [
         guard let pct = number(value["used_percentage"]) ?? number(value["used_percent"]) else { continue }
         let minutes = number(value["window_minutes"])
         var label = labels[key] ?? key.replacingOccurrences(of: "_", with: " ")
-        if let minutes = minutes, minutes > 0 {
+        if let minutes = minutes, minutes > 0, minutes < Double(Int.max) {
             label = minutes.truncatingRemainder(dividingBy: 10080) == 0 ? "\(Int(minutes / 1440))d" :
                     minutes.truncatingRemainder(dividingBy: 1440) == 0 ? "\(Int(minutes / 1440))d" :
                     minutes.truncatingRemainder(dividingBy: 60) == 0 ? "\(Int(minutes / 60))h" : "\(Int(minutes))m"

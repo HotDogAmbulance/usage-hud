@@ -38,10 +38,10 @@ public final class Engine {
                                       KeyProvider.fireworks(cache: cache, credentials: credentials, http: http),
                                       KeyProvider.liteLLM(cache: cache, credentials: credentials, http: http)]
     }
-    /// After a Keychain prompt, only the user's own Refresh may ask again, or a day passing (a prompt at login can be a fluke).
+    /// After a Keychain prompt, only the user's own Refresh may ask again.
     func prompted(_ id: String) -> Bool {
         let status = cache.read(id + "-status.json")
-        return status["prompted"] as? Bool == true && Date().timeIntervalSince1970 - (number(status["checked_at"]) ?? 0) < 86400
+        return status["prompted"] as? Bool == true
     }
     /// `also` names providers to refresh the way the background does, so one in use can follow along between passes.
     public func panels(refresh: String? = nil, also: Set<String> = []) -> [Panel] {
@@ -73,11 +73,12 @@ public final class Engine {
             if failing, let message = status["error"] as? String {
                 panel.note = message; panel.fix = status["fix"] as? String
                 for index in panel.windows.indices { panel.windows[index].stale = true }
+                for index in panel.cells.indices { panel.cells[index].stale = true }
                 // A rejected key won't fix itself; a passing outage or an idle CLI's token will.
                 if status["attention"] as? Bool == true { panel.alert = panel.alert ?? message }
             }
             // The text stays the same as the balance moves, so one hover silences it until it recovers.
-            if panel.windows.contains(where: { $0.label == panel.name && $0.pct == nil && $0.right?.hasSuffix(" left") == true }),
+            if panel.windows.contains(where: { $0.label == panel.name && $0.pct == nil && $0.stale != true && $0.right?.hasSuffix(" left") == true }),
                let level = Shelf.level(panel) {
                 let amount = -level, levels = balanceLevels[panel.id]
                 if panel.alert == nil, amount < (levels?.alert ?? lowBalance) { panel.alert = "Balance low" }

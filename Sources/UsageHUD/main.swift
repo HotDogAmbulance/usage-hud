@@ -347,7 +347,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         let cached = quota?.stale == true || quota?.expired == true || moneyWindow?.stale == true
         let remaining = valid ? min(100, max(0, 100 - (quota?.pct ?? 0))) : 0
         let money = moneyWindow?.right?.components(separatedBy: " left").first
-        var text = valid ? String(Int(remaining.rounded())) : money.map { String($0.drop { !$0.isNumber }) } ?? "?"
+        var text = valid ? String(Int(remaining.rounded())) : money.map { String($0.drop { !$0.isNumber && $0 != "-" }) } ?? "?"
         if !valid, text.hasSuffix(".00") { text.removeLast(3) }
         // Full-height layers share the native battery silhouette: grey, 7d, then 5h.
         let weekly = panel.windows.first(where: {$0.label == "7d" && $0.label != quota?.label && $0.pct != nil})
@@ -618,6 +618,8 @@ do {
 let app = NSApplication.shared
 let delegate = HUD()
 if CommandLine.arguments.contains("--self-test") {
+    do { try FileManager.default.createDirectory(at: delegate.home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
+    catch { fputs("Self-test output directory unavailable\n", stderr); exit(1) }
     if let body = SystemBattery.body, let cap = SystemBattery.cap {
         precondition(body.width == 92 && body.height == 48)
         precondition(cap.width == 8 && cap.height == 48)
@@ -710,6 +712,7 @@ if CommandLine.arguments.contains("--self-test") {
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))
     }
+    precondition(balance("$-26.00 left").tiffRepresentation != balance("$26.00 left").tiffRepresentation)
     precondition(balance("$26.00 left").size.width == 28)
     precondition(balance("$26.25 left").size.width > balance("$26.00 left").size.width)
     precondition(balance("$1026.25 left").size.width > balance("$26.25 left").size.width)

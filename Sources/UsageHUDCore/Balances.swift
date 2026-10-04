@@ -178,6 +178,7 @@ final class KeyProvider: UsageProvider {
             let unit = window["timeUnit"] as? String ?? "TIME_UNIT_MINUTE"
             guard let duration = number(window["duration"]), duration > 0 else { continue }
             let minutes = duration * (unit.hasSuffix("HOUR") ? 60 : unit.hasSuffix("DAY") ? 1440 : 1)
+            guard minutes.isFinite, minutes < Double(Int.max) else { continue }
             add("w\(Int(minutes))", minutes, share(detail), reset(detail))
         }
         let pools = dict(response["usages"])
@@ -270,10 +271,14 @@ final class KeyProvider: UsageProvider {
         }
         var proxies: [String: String] = [:]
         let places = KeyFinder.places(home: home)
-        if let base = root(KeyFinder.assigned(["LITELLM_PROXY_API_BASE", "LITELLM_PROXY_BASE_URL", "LITELLM_BASE_URL"], in: places,
-                                              environment: environment, value: #"https?://[^\s"']+"#)),
-           let key = KeyFinder.assigned(["LITELLM_PROXY_API_KEY", "LITELLM_API_KEY"], in: places, environment: environment) {
-            proxies[base] = key
+        // An address and its credential must come from the same source; never pair unrelated profiles.
+        for files in [[]] + places.map({ [$0] }) {
+            let env = files.isEmpty ? environment : [:]
+            if let base = root(KeyFinder.assigned(["LITELLM_PROXY_API_BASE", "LITELLM_PROXY_BASE_URL", "LITELLM_BASE_URL"], in: files,
+                                                  environment: env, value: #"https?://[^\s"']+"#)),
+               let key = KeyFinder.assigned(["LITELLM_PROXY_API_KEY", "LITELLM_API_KEY"], in: files, environment: env), proxies[base] == nil {
+                proxies[base] = key
+            }
         }
         let settings = (try? Data(contentsOf: home.appendingPathComponent(".claude/settings.json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
         for source in [environment, dict(dict(settings)["env"]).compactMapValues { $0 as? String }] {

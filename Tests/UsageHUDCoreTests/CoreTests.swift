@@ -314,6 +314,54 @@ final class CoreTests {
         engine.claudeCodeConnected = false
         expectFalse(Engine(root: root, credentials: credentials, http: http).claudeCodeConnected)
     }
+    func testMalformedSignInAndExtremeProviderNumbers() throws {
+        expectFalse(SignIn.start("") { _, _ in fail("Invalid sign-in ran") })
+        expectFalse(SignIn.start("   ") { _, _ in fail("Invalid sign-in ran") })
+        expectTrue(money(1e30).hasPrefix("$"))
+        expectEqual(countdown(.infinity), "0h 0m")
+        expectTrue(countdown(1e30).hasSuffix("h"))
+        expectNotNil(freeResetsRow(["left": 1e30], stale: false))
+        let rows = quotaWindows(["rate_limits": ["unknown": ["used_percentage": 10, "window_minutes": 1e30]]])
+        expectEqual(rows.first?.label, "unknown")
+        expectError(try KeyProvider.kimiCodeUsage(["limits": [["window": ["duration": 1e30], "detail": ["limit": 10, "used": 1]]]]))
+    }
+    func testHTTPRejectsRedirectAndBoundsStreamingBody() {
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URL(string: "https://example.invalid")!)
+        let box = ResponseBox(limit: 4)
+        let redirect = HTTPURLResponse(url: URL(string: "https://example.invalid")!, statusCode: 302, httpVersion: nil,
+                                       headerFields: ["Location": "http://other.invalid"])!
+        box.urlSession(session, task: task, willPerformHTTPRedirection: redirect,
+                       newRequest: URLRequest(url: URL(string: "http://other.invalid")!)) { expectNil($0) }
+        let response = HTTPURLResponse(url: redirect.url!, statusCode: 200, httpVersion: nil, headerFields: [:])!
+        box.urlSession(session, dataTask: task, didReceive: response) { expectTrue($0 == .allow) }
+        box.urlSession(session, dataTask: task, didReceive: Data("1234".utf8))
+        expectEqual(box.data.count, 4)
+        box.urlSession(session, dataTask: task, didReceive: Data("5".utf8))
+        expectEqual(box.data.count, 4); expectNotNil(box.error)
+        let announced = ResponseBox(limit: 4)
+        let large = HTTPURLResponse(url: redirect.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Length": "5"])!
+        announced.urlSession(session, dataTask: task, didReceive: large) { expectTrue($0 == .cancel) }
+        expectNotNil(announced.error)
+    }
+    func testOutageDoesNotPulseCachedLowBalance() {
+        let engine = Engine(root: root, credentials: credentials, http: http,
+                            providers: [AlertProvider(id: "openrouter", problem: "offline", right: "$0.25 left")])
+        let panel = engine.panels(refresh: "automatic")[0]
+        expectEqual(panel.windows[0].stale, true)
+        expectNil(panel.alert); expectNil(panel.caution)
+    }
+    func testLiteLLMCredentialsStayWithTheirSource() throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("LITELLM_BASE_URL=https://profile.invalid\n".utf8).write(to: root.appendingPathComponent(".zshrc"))
+        let env = ["LITELLM_API_KEY": "synthetic-key-123456"]
+        expectTrue(KeyProvider.liteLLMProxies(home: root, environment: env).isEmpty)
+        try Data("LITELLM_BASE_URL=https://profile.invalid\nLITELLM_API_KEY=profile-key-123456\n".utf8).write(to: root.appendingPathComponent(".zshrc"))
+        let paired = KeyProvider.liteLLMProxies(home: root, environment: env.merging(["LITELLM_BASE_URL": "https://environment.invalid"]) { _, b in b })
+        expectEqual(paired["https://profile.invalid"], "profile-key-123456")
+        expectEqual(paired["https://environment.invalid"], "synthetic-key-123456")
+    }
     func testRPCFramingAndEOF() throws {
         let rpc = try RPCProcess(binary: URL(fileURLWithPath: "/usr/bin/printf"), arguments: ["{\"id\":1,\"result\":{\"ok\":true}}\\n"])
         defer { rpc.stop() }
@@ -756,6 +804,7 @@ final class CoreTests {
         let provider = PromptingProvider()
         let engine = Engine(root: root, credentials: credentials, http: http, providers: [provider])
         expectEqual(engine.panels(refresh: "automatic")[0].alert, "Keychain asked")
+        try cache.merge("p-status.json", ["checked_at": Date().timeIntervalSince1970 - 172800])
         _ = engine.panels(refresh: "automatic"); expectEqual(provider.calls, 1)
         _ = engine.panels(refresh: "p"); expectEqual(provider.calls, 2)
         credentials.missing = ["absent"]
