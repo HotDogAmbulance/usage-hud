@@ -20,14 +20,32 @@ final class CellsView: NSView {
     static let head: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor]
     static let body: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor]
     let nameWidth: CGFloat, titleWidth: CGFloat
-    init(title: String, subtitle: String? = nil, lines: [String] = [], rows: [Window]) {
-        self.title = title; self.subtitle = subtitle ?? ""; self.lines = lines; self.rows = rows
+    let allCached: Bool, more: Int
+    func detail(_ row: Window) -> String { (row.right ?? "") + (row.isCached && !allCached ? " · cached" : "") }
+    init(title: String, subtitle: String? = nil, lines: [String] = [], rows: [Window], more: Int = 0, allReadingsCached: Bool? = nil) {
+        self.title = title; self.lines = lines; self.rows = rows; self.more = more
+        let allOld = allReadingsCached ?? (!rows.isEmpty && rows.allSatisfy(\.isCached))
+        allCached = allOld
+        self.subtitle = (subtitle ?? "") + (allCached ? (subtitle?.isEmpty == false ? " · cached" : "cached") : "")
         func width(_ text: String, _ style: [NSAttributedString.Key: Any]) -> CGFloat { ceil((text as NSString).size(withAttributes: style).width) }
         nameWidth = min(140, rows.map { width($0.label, Self.body) }.max() ?? 0)
         titleWidth = width(title, Self.head)
         let text = max(titleWidth + 8 + width(self.subtitle, Self.body), lines.map { width($0, Self.body) }.max() ?? 0,
-                       nameWidth + 54 + (rows.map { width($0.right ?? "", Self.body) }.max() ?? 0))
-        super.init(frame: NSRect(x: 0, y: 0, width: min(560, max(220, text + 24)), height: CGFloat(18 + lines.count * 18 + rows.count * 20 + 16)))
+                       nameWidth + 54 + (rows.map { width(($0.right ?? "") + ($0.isCached && !allOld ? " · cached" : ""), Self.body) }.max() ?? 0))
+        super.init(frame: NSRect(x: 0, y: 0, width: min(560, max(220, text + 24)), height: CGFloat(18 + lines.count * 18 + rows.count * 20 + (more > 0 ? 18 : 0) + 16)))
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(title + (self.subtitle.isEmpty ? "" : ", " + self.subtitle))
+        let spoken: [String] = lines + rows.map(\.accessibilityReading) + (more > 0 ? ["\(more) more. Click battery for all."] : [])
+        let children = spoken.enumerated().map { index, label in
+            let element = NSAccessibilityElement.element(withRole: .staticText, frame: .zero, label: label, parent: self) as! NSAccessibilityElement
+            let y = index < lines.count ? 26 + index * 18 : 26 + lines.count * 18 + (index - lines.count) * 20
+            element.setAccessibilityFrameInParentSpace(NSRect(x: 12, y: CGFloat(y), width: frame.width - 24, height: index < lines.count ? 18 : 20))
+            return element
+        }
+        setAccessibilityChildren(children)
+        setAccessibilityHelp("Click the menu bar battery for all usage details.")
+        toolTip = rows.map(\.accessibilityReading).joined(separator: "\n")
     }
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
@@ -63,15 +81,16 @@ final class CellsView: NSView {
                     digits.draw(at: NSPoint(x: 16.5 - size.width / 2, y: 6.5 - size.height / 2), withAttributes: style)
                     return true
                 }
-                image.draw(in: shell)
+                image.draw(in: shell, from: .zero, operation: .sourceOver, fraction: row.isCached ? 0.55 : 1, respectFlipped: true, hints: nil)
             }
-            ((row.right ?? "") as NSString).draw(in: NSRect(x: x + 46, y: y + 2, width: bounds.width - x - 58, height: 16), withAttributes: body)
+            (detail(row) as NSString).draw(in: NSRect(x: x + 46, y: y + 2, width: bounds.width - x - 58, height: 16), withAttributes: body)
             y += 20
         }
+        if more > 0 { ("\(more) more · click battery for all" as NSString).draw(in: NSRect(x: 12, y: y + 2, width: width, height: 16), withAttributes: body) }
     }
 }
 
-final class HUD: NSObject, NSApplicationDelegate {
+class HUD: NSObject, NSApplicationDelegate {
     var items: [String: NSStatusItem] = [:]
     var panels: [String: Panel] = [:]
     var trackers: [String: HoverTracker] = [:]
@@ -206,7 +225,7 @@ final class HUD: NSObject, NSApplicationDelegate {
     static let side: [String: NSColor] = [
         "glm": NSColor(srgbRed: 0.7843, green: 1.0, blue: 1.0, alpha: 1),
         "fireworks": NSColor(srgbRed: 0.2039, green: 0.0667, blue: 0.502, alpha: 1),
-        "litellm": NSColor(srgbRed: 0.1216, green: 0.6275, blue: 0.9843, alpha: 1)]
+        "litellm": NSColor(srgbRed: 91.0 / 255, green: 63.0 / 255, blue: 209.0 / 255, alpha: 1)]
     static let yellow = NSColor(srgbRed: 1.0, green: 0.8471, blue: 0.0, alpha: 1), red = NSColor(srgbRed: 1.0, green: 0.2314, blue: 0.1882, alpha: 1)
     func tint(_ id: String) -> NSColor {
         switch id {
@@ -223,12 +242,12 @@ final class HUD: NSObject, NSApplicationDelegate {
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
         case "kimi": return NSColor(srgbRed: 0.0667, green: 0.3804, blue: 0.7451, alpha: 1)
         case "kimi-code": return NSColor(srgbRed: 0.0784, green: 0.4902, blue: 0.9529, alpha: 1)
-        case "openrouter": return NSColor(srgbRed: 200 / 255, green: 254 / 255, blue: 1 / 255, alpha: 1)
+        case "openrouter": return NSColor(srgbRed: 200.0 / 255, green: 254.0 / 255, blue: 1.0 / 255, alpha: 1)
         // The same yellow and red everywhere: a balance getting low, every Antigravity pool spent, the small bars in the hover panel.
         case "caution": return HUD.yellow
         case "critical": return HUD.red
         case "fireworks": return NSColor(srgbRed: 0.3647, green: 0.1098, blue: 0.902, alpha: 1)
-        case "litellm": return NSColor(srgbRed: 0.9843, green: 0.4157, blue: 0.1647, alpha: 1)
+        case "litellm": return NSColor(srgbRed: 1.0 / 255, green: 23.0 / 255, blue: 190.0 / 255, alpha: 1)
         default: return NSColor(srgbRed: 0.65, green: 0.57, blue: 0.92, alpha: 1)
         }
     }
@@ -260,8 +279,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         }
         // The battery warning yellow stays the Mac's own on a light bar too; deepening it would turn it to mud.
         if id == "caution" || id == "critical" { tint(id).withAlphaComponent(alpha).setFill(); rect.fill(); return }
-        guard id == "antigravity" else { shade(tint(id)).setFill(); rect.fill(); return }
-        let marks: [(CGFloat, CGFloat, CGFloat)] = [(0.19, 0.53, 1.00), (0.19, 0.53, 1.00), (0.98, 0.27, 0.26), (0.98, 0.74, 0.07), (0.03, 0.73, 0.38)]
+        guard id == "antigravity" || id == "litellm" else { shade(tint(id)).setFill(); rect.fill(); return }
+        let marks: [(CGFloat, CGFloat, CGFloat)] = id == "litellm" ? [(1.0 / 255, 23.0 / 255, 190.0 / 255), (91.0 / 255, 63.0 / 255, 209.0 / 255)] : [(0.19, 0.53, 1.00), (0.19, 0.53, 1.00), (0.98, 0.27, 0.26), (0.98, 0.74, 0.07), (0.03, 0.73, 0.38)]
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: rect).addClip()
         NSGradient(colors: marks.map { shade(NSColor(srgbRed: $0.0, green: $0.1, blue: $0.2, alpha: 1)) })?.draw(in: body, angle: 0)
@@ -344,7 +363,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         }
         let warning = critical ? "critical" : caution ? "caution" : panel.id
         let moneyWindow = quota == nil ? panel.windows.first(where: {$0.label == panel.name}) : nil
-        let cached = quota?.stale == true || quota?.expired == true || moneyWindow?.stale == true
+        let cached = quota?.isCached == true || moneyWindow?.isCached == true
         let remaining = valid ? min(100, max(0, 100 - (quota?.pct ?? 0))) : 0
         let money = moneyWindow?.right?.components(separatedBy: " left").first
         var text = valid ? String(Int(remaining.rounded())) : money.map { String($0.drop { !$0.isNumber && $0 != "-" }) } ?? "?"
@@ -386,7 +405,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         if weeklyEnd > fillEnd {
             paint(span(fillEnd, weeklyEnd), body: bodyRect, id: warning, light: false, muted: true, alpha: weeklyAlpha, dark: dark)
         }
-        paint(span(0, fillEnd), body: bodyRect, id: warning, light: money != nil && panel.caution == nil, muted: weeklyShade, alpha: fillAlpha, dark: dark)
+        paint(span(0, fillEnd), body: bodyRect, id: warning, light: money != nil && panel.caution == nil && panel.id != "litellm", muted: weeklyShade, alpha: fillAlpha, dark: dark)
         if glow > 0 { HUD.red.withAlphaComponent(glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
@@ -443,14 +462,19 @@ final class HUD: NSObject, NSApplicationDelegate {
         drawIcon(panel.id)
         item.length = (item.button?.image?.size.width ?? 28) + 4
         let displayed = displayedQuota(panel)
-        let cached = displayed?.stale == true || displayed?.expired == true
-        let reading = displayed.map { $0.label + (cached ? " · cached" : " · remaining") } ?? "balance"
+        let mainBalance = panel.windows.first { $0.label == panel.name }
+        let cached = displayed?.isCached == true || mainBalance?.isCached == true
+        let reading = displayed.map { $0.label + (cached ? " · cached" : " · remaining") }
+            ?? ((mainBalance?.right ?? "balance") + (cached ? " · cached" : ""))
         // Money rows (credits, extra usage) ride along in the hover text, so balances need no click.
-        let money = panel.windows.filter { $0.pct == nil && $0.right != nil && $0.label != panel.name }.map { "\n" + $0.label + ": " + ($0.right ?? "") }
+        let money = panel.windows.filter { $0.pct == nil && $0.right != nil && $0.label != panel.name }.map { "\n" + $0.label + ": " + ($0.right ?? "") + ($0.isCached ? " · cached" : "") }
         if panel.alert == nil { acknowledged[panel.id] = nil }
         // Providers with per-key cells get the hover panel instead of a tooltip.
         item.button?.toolTip = !panel.cells.isEmpty ? nil : (panel.alert.map { "⚠︎ " + $0 + "\n" } ?? "") + (panel.fix.map { _ in "Click to sign in again\n" } ?? "") + panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
-        item.button?.setAccessibilityLabel(panel.name + " usage" + (panel.alert.map { ", " + $0 } ?? ""))
+        item.button?.setAccessibilityLabel(panel.name + " usage")
+        item.button?.setAccessibilityValue(panel.windows.map(\.accessibilityReading).joined(separator: "; "))
+        item.button?.setAccessibilityHelp(([panel.alert, panel.note.isEmpty ? nil : panel.note,
+            "Click for usage details and refresh actions"].compactMap { $0 }).joined(separator: ". "))
         updatePulse()
         let menu = NSMenu()
         for line in HUD.menuLines(panel, showingWeek: displayed?.label == "7d", cached: cached) {
@@ -459,8 +483,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         // A submenu only when the hover holds keys the menu doesn't already list (a team's keys).
         if panel.cells.contains(where: { cell in !panel.windows.contains { $0.label == cell.label } }) {
             let all = NSMenu()
-            for cell in panel.cells { all.addItem(withTitle: cell.label + " · " + (cell.right ?? ""), action: nil, keyEquivalent: "") }
-            menu.addItem(withTitle: "All keys (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
+            for cell in panel.cells { all.addItem(withTitle: cell.label + " · " + (cell.right ?? "") + (cell.isCached ? " · cached" : ""), action: nil, keyEquivalent: "") }
+            menu.addItem(withTitle: (panel.id == "openrouter" ? "All keys" : "All budgets") + " (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
         }
         menu.addItem(NSMenuItem.separator())
         if signingIn == panel.id {
@@ -484,6 +508,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         }
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
         item.menu = menu
+        if hovered == panel.id && popover.isShown { showCells(panel.id) }
     }
     /// The menu's reading, kept short: the name in bold (with its plan or balance), then one line per window with its
     /// value in bold and grey detail after it, values lined up on a tab stop. "↻ 4h 11m" is when it refills.
@@ -493,7 +518,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         let grey: [NSAttributedString.Key: Any] = [.font: plain, .foregroundColor: NSColor.secondaryLabelColor]
         let rows = panel.windows.filter { $0.label != panel.name }
         // When every reading is old (the app behind it closed), "cached" is said once, after the name.
-        let old = !rows.isEmpty && rows.allSatisfy { $0.stale == true }
+        let old = !panel.windows.isEmpty && panel.windows.allSatisfy(\.isCached)
         let tabs = NSMutableParagraphStyle()
         tabs.tabStops = [NSTextTab(textAlignment: .left, location: (rows.map { ($0.label as NSString).size(withAttributes: grey).width }.max() ?? 0) + 16)]
         func line(_ parts: [(String, Bool)]) -> NSAttributedString {
@@ -509,9 +534,9 @@ final class HUD: NSObject, NSApplicationDelegate {
         let tidy = plan.map { $0 == $0.lowercased() || $0 == $0.uppercased() ? $0.capitalized : $0 }
         let balance = panel.windows.first { $0.label == panel.name }
         var lines = [line([(panel.name, true), (tidy.map { " · " + $0 } ?? "", false), (balance?.right.map { "  " + $0 } ?? "", true),
-                           (balance?.stale == true || old ? " · cached" : "", false)])]
+                           (balance?.isCached == true || old ? " · cached" : "", false)])]
         if let alert = panel.alert { lines.append(line([("⚠︎ " + alert, false)])) }
-        if showingWeek { lines.append(line([("Showing 7d" + (cached ? " · cached" : ""), false)])) }
+        if showingWeek { lines.append(line([("Showing 7d" + (cached && !old ? " · cached" : ""), false)])) }
         if !panel.note.isEmpty && plan == nil && panel.note != panel.alert { lines.append(line([(panel.note, false)])) }
         for row in rows {
             // "96% left · ↻ 4h 11m" for a quota; "$0 / $20 · this month" for money, the part before the first dot in bold.
@@ -521,7 +546,7 @@ final class HUD: NSObject, NSApplicationDelegate {
                 if row.expired == true { parts.append("waiting for its reset") }
                 else if let reset = row.resets_at, reset > now { parts.append("↻ " + countdown(reset - now)) }
             }
-            if row.stale == true && !old { parts.append("cached") }
+            if row.isCached && !old { parts.append("cached") }
             lines.append(line([(row.label + "\t", false), (parts[0], true), (unit + parts.dropFirst().map { " · " + $0 }.joined(), false)]))
         }
         return lines
@@ -548,14 +573,16 @@ final class HUD: NSObject, NSApplicationDelegate {
                                                   owner: overflowTracker, userInfo: nil))
         }
         item.isVisible = true
-        item.button?.title = "+\(hidden.count)"
+        item.button?.title = ""
+        item.button?.image = SystemBattery.stacked()
         item.button?.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         item.button?.toolTip = "\(hidden.count) more: " + hidden.compactMap { panels[$0]?.name }.joined(separator: ", ")
-        item.button?.setAccessibilityLabel("\(hidden.count) more usage batteries")
+        item.button?.setAccessibilityLabel("Usage HUD, \(hidden.count) more usage batteries")
         let menu = NSMenu()
         for id in hidden {
             guard let panel = panels[id] else { continue }
-            let entry = menu.addItem(withTitle: items[id]?.button?.toolTip?.components(separatedBy: "\n").first ?? panel.name, action: nil, keyEquivalent: "")
+            let balance = panel.windows.first { $0.label == panel.name }?.right
+            let entry = menu.addItem(withTitle: panel.name + (balance.map { "  " + $0 } ?? ""), action: nil, keyEquivalent: "")
             entry.image = icon(panel)
             entry.submenu = items[id]?.menu?.copy() as? NSMenu
         }
@@ -571,7 +598,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         let balance = panel.windows.first { $0.label == panel.name }?.right
         let controller = NSViewController()
         controller.view = CellsView(title: panel.name + (balance.map { "  " + $0 } ?? ""), subtitle: panel.cellsTitle, lines: lines,
-                                    rows: Array(panel.cells.prefix(8)))
+                                    rows: Array(panel.cells.prefix(8)), more: max(0, panel.cells.count - 8), allReadingsCached: panel.cells.allSatisfy(\.isCached))
         popover.contentViewController = controller
         popover.contentSize = controller.view.frame.size
         popover.animates = false
@@ -634,7 +661,8 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.displayedQuota(fallback)?.label == "7d")
     precondition(delegate.displayedQuota(fallback)?.pct == 27)
     delegate.render(fallback)
-    precondition(delegate.items["codex"]?.menu?.items.contains{$0.title == "Showing 7d · cached"} == true)
+    precondition(delegate.items["codex"]?.menu?.items.contains{$0.title == "Showing 7d"} == true)
+    precondition(delegate.items["codex"]?.menu?.items.filter{$0.title.contains("cached")}.count == 1)
     let layered = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 20), Window(label: "7d", pct: 80)])
     precondition(delegate.hoverPanel(layered)?.displayedQuota?.label == "7d")
     precondition(delegate.hoverPanel(layered)?.windows.count == 1)
@@ -663,7 +691,7 @@ if CommandLine.arguments.contains("--self-test") {
     delegate.shelf = Shelf()
     delegate.arrange(["codex", "claude", "openrouter", "glm", "deepseek"])
     precondition(delegate.items["glm"]?.isVisible == false && delegate.items["deepseek"]?.isVisible == false)
-    precondition(delegate.items["codex"]?.isVisible == true && delegate.overflow?.button?.title == "+2")
+    precondition(delegate.items["codex"]?.isVisible == true && delegate.overflow?.button?.image != nil && delegate.overflow?.button?.accessibilityLabel() == "Usage HUD, 2 more usage batteries")
     precondition(delegate.overflow?.menu?.items.first?.submenu?.items.contains { $0.title.hasPrefix("Refresh GLM") } == true)
     delegate.arrange(["codex", "claude"])
     precondition(delegate.overflow?.isVisible == false)
@@ -700,6 +728,13 @@ if CommandLine.arguments.contains("--self-test") {
     // The panel widens to show a whole reset time instead of cutting it off.
     let long = Window(label: "Guy1", pct: 0, right: "$0.00 of $5.00 today · resets in 7h 16m")
     precondition(CellsView(title: "OpenRouter", rows: [long]).frame.width > CellsView(title: "OpenRouter", rows: [Window(label: "a", pct: 0, right: "$1")]).frame.width)
+    let cachedView = CellsView(title: "Antigravity", subtitle: "14 models", rows: team.cells.map { Window(label: $0.label, pct: $0.pct, right: $0.right, stale: true) })
+    precondition(cachedView.subtitle == "14 models · cached")
+    precondition(CellsView(title: "Antigravity", subtitle: "14 models", rows: team.cells).subtitle == "14 models")
+    precondition((delegate.items["claude"]?.button?.accessibilityValue() as? String)?.contains("percent remaining") == true)
+    let mixed = Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$20 left"), Window(label: "Key", pct: 40, stale: true)])
+    let mixedLines = HUD.menuLines(mixed, showingWeek: false, cached: false).map(\.string)
+    precondition(!mixedLines[0].contains("cached") && mixedLines[1].contains("cached"))
     // No tint may pass for the system battery's white.
     for id in ["codex", "claude", "glm", "antigravity", "grok", "vercel", "deepseek", "kimi", "openrouter", "fireworks", "litellm", "other"] {
         let rgb = delegate.tint(id).usingColorSpace(.sRGB)!
@@ -793,8 +828,10 @@ if CommandLine.arguments.contains("--self-test") {
     sheet.unlockFocus()
     try! NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("font-preview.png"))
     HUD.digitFont = candidates[0].1
+    try! DesignPreview.write(hud: delegate, to: delegate.home)
     print("Battery drawing and note-free menus passed; fonts: " + delegate.home.appendingPathComponent("font-preview.png").path)
     exit(0)
 }
-app.delegate = delegate
+let productTest = (CommandLine.arguments.contains("--product-test") || Bundle.main.object(forInfoDictionaryKey: "UsageHUDProductTest") as? Bool == true) ? ProductTest() : nil
+app.delegate = productTest ?? delegate
 app.run()

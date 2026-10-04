@@ -160,7 +160,7 @@ public final class Engine {
     }
     public func handleCLI(_ arguments: [String]) throws -> Bool {
         // macOS may pass its own arguments (-psn_…, -NSDocument…); only ours start with two dashes.
-        guard arguments.first?.hasPrefix("--") == true && arguments != ["--self-test"] else { return false }
+        guard arguments.first?.hasPrefix("--") == true && arguments != ["--self-test"] && arguments != ["--product-test"] else { return false }
         if arguments == ["--claude-statusline"] {
             print(try statusline(FileHandle.standardInput.readDataToEndOfFile())); return true
         }

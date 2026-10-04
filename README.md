@@ -106,3 +106,5 @@ To remove the cached readings and provider configuration as well:
 The uninstaller also takes Usage HUD’s hooks out of Claude Code’s settings. Your provider credentials stay in the Keychain.
 
 Usage HUD is available under the [MIT license](LICENSE). Make it your own.
+
+For development UI testing without accounts, build and run `.build/debug/usagehud --product-test`. This uses the normal drawing and menus with simulated readings; Refresh supplies a fresh fixture. See [PRODUCT_TEST.md](PRODUCT_TEST.md) for verified behavior and remaining live-account checks.

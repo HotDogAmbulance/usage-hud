@@ -89,7 +89,7 @@ These were built from each provider's documentation and other open-source reader
 | Kimi Code (Kimi For Coding) | 5h, weekly and monthly windows, plan name, from `GET https://api.kimi.com/coding/v1/usages` | Claude Code pointed at `api.kimi.com/coding`, kimi-cli's `~/.kimi/config.toml`, `KIMI_CODE_API_KEY`, or a `sk-kimi-` key in `KIMI_API_KEY` | `api.kimi.com` or `api.kimi.ai` |
 | xAI | Prepaid balance (`/v1/billing/teams/{team}/prepaid/balance`), or this month's spend against the spending limit for teams billed afterwards | A **management key** (xAI Console › Settings › Management keys) in `XAI_MANAGEMENT_API_KEY` or `XAI_MANAGEMENT_KEY`; the key names its own team. Ordinary API keys can't read billing | `management-api.x.ai` |
 | Fireworks | This month's spend against the `monthly-spend-usd` limit (Fireworks has no balance API) | `FIREWORKS_API_KEY`, or the key firectl saved in `~/.fireworks/auth.ini`; the account comes from `FIREWORKS_ACCOUNT_ID`, firectl, or the key itself (`/verifyApiKey`) | `api.fireworks.ai` |
-| LiteLLM | The virtual key's spend against its budget, with its reset, from the proxy's `/key/info` | `LITELLM_PROXY_API_BASE` or `LITELLM_BASE_URL` with `LITELLM_PROXY_API_KEY` or `LITELLM_API_KEY`, or the gateway Claude Code is pointed at | none (the address varies) |
+| LiteLLM | The virtual key's spend/budget/reset, plus per-model budgets when `/key/info` reports `model_max_budget_usage` | `LITELLM_PROXY_API_BASE` or `LITELLM_BASE_URL` with `LITELLM_PROXY_API_KEY` or `LITELLM_API_KEY`, or the gateway Claude Code is pointed at | none (the address varies) |
 
 xAI's prepaid ledger posts spend when a billing cycle closes, so mid-cycle it can show more than the Console. LiteLLM’s address and key must be in the same environment or file. Its key goes back only to that address, with redirects rejected; an address that answers like something other than LiteLLM is left alone until the app restarts.
 
@@ -114,3 +114,5 @@ A non-secret USD seed and timestamp come from `codex.json`, or `balance_seed_usd
 ## Boundaries
 
 All credential access is read-only. Swift calls macOS's existing `/usr/bin/security` tool for credential reads, and the independent Codex CLI for its official app-server integration. No app-owned interpreter or script runs. Account credentials and caches are not distributed with the repository.
+
+Quota and budget readings are marked cached after ten minutes or on a failed read; money balances use six hours. A passed reset retains the old reading until a fresh response arrives. LiteLLM null budget is unlimited; zero is a zero-dollar cap. Durations/absolute resets follow the proxy; no calendar reset is guessed from a per-model duration alone. See [PRODUCT_TEST.md](PRODUCT_TEST.md) for the native simulation and live-account coverage limits.

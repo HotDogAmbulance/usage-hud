@@ -63,17 +63,17 @@ final class AntigravityProvider: UsageProvider {
         var rows = order.compactMap { pools[$0] }.map { members -> Window in
             let first = members[0], label = members.count == 1 ? first.label : families(members)
             if let at = members.compactMap({ number(active[$0.label]) }).max(), at > (lead?.at ?? 0) { lead = (label, at) }
-            return Window(label: label, pct: first.pct, right: text(first), resets_at: first.resets_at, expired: first.expired, stale: first.stale)
+            return Window(label: label, pct: first.pct, right: text(first), resets_at: first.resets_at, expired: members.contains { $0.expired == true }, stale: members.contains { $0.stale == true })
         }.enumerated().sorted { ($0.element.pct ?? 0, -$0.offset) > ($1.element.pct ?? 0, -$1.offset) }.map { $0.element }
         // Untouched models fold into one full row, still named by their families so none goes missing.
         let untouched = rows.filter { ($0.pct ?? 0) < 0.5 }
         if rows.count > 4 && untouched.count > 1 {
             rows = rows.filter { ($0.pct ?? 0) >= 0.5 } + [Window(label: families(models.filter { ($0.pct ?? 0) < 0.5 }), pct: 0, right: "",
-                                                                  stale: untouched.contains { $0.stale == true })]
+                                                                  expired: untouched.contains { $0.expired == true }, stale: untouched.contains { $0.stale == true })]
         }
         // Readings come from the running app; once it closes they dim, and the note says why.
         return Panel(id: id, name: name, windows: rows, note: models.contains { $0.stale == true } ? "Updates while Antigravity is open" : "",
-                     cells: rows, cellsTitle: "\(models.count) models", lead: lead?.label ?? rows.first?.label)
+                     cells: rows, cellsTitle: "\(models.count) " + (models.count == 1 ? "model" : "models"), lead: lead?.label ?? rows.first?.label)
     }
 }
 

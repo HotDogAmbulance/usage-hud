@@ -248,25 +248,31 @@ final class OpenRouterProvider: UsageProvider {
         return ["slot_id": slot.id, "label": slot.label, "provider": "openrouter", "source_id": fingerprint, "key_label": result["key_label"] ?? NSNull(),
                 "usage": usage, "limit": result["limit"] ?? NSNull(), "day": day,
                 "usage_daily": result["usage_daily"] ?? NSNull(), "limit_remaining": result["limit_remaining"] ?? NSNull(),
-                "limit_reset": result["limit_reset"] ?? NSNull(),
+                "limit_reset": result["limit_reset"] ?? NSNull(), "captured_at": Date().timeIntervalSince1970,
                 "day_start_usage": same ? number(previous["day_start_usage"]) ?? usage : usage]
     }
     /// One key, personal or a teammate's: `pct` is the share of its cap used, `left` the share remaining (for ordering),
     /// and `warning` is set within 10% of the cap.
-    static func keyCell(_ row: JSON, old: Bool) -> (cell: Window, left: Double, warning: String?) {
+    static func keyCell(_ row: JSON, old: Bool, capturedAt: Double? = nil, now: Date = Date()) -> (cell: Window, left: Double, warning: String?) {
         let label = (row["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? row["label"] as? String ?? "Key"
-        if row["error"] != nil { return (Window(label: label, right: "Unavailable · cached", stale: true), 2, nil) }
+        let problem = row["error"] is String
+        let cached = old || row["stale"] as? Bool == true || problem
+        if problem && number(row["usage"]) == nil { return (Window(label: label, right: "Unavailable", stale: true), 2, nil) }
         let usage = number(row["usage"]) ?? 0
         let today = number(row["usage_daily"]) ?? number(row["day_start_usage"]).map { max(0, usage - $0) }
-        guard let limit = number(row["limit"]), limit > 0 else {
-            return (Window(label: label, right: today.map { usd($0) + " today" } ?? usd(usage) + " total", stale: old), 1, nil)
+        guard let limit = number(row["limit"]), limit >= 0 else {
+            return (Window(label: label, right: today.map { usd($0) + " today" } ?? usd(usage) + " total", stale: cached), 1, nil)
         }
         let period = row["limit_reset"] as? String
-        let remaining = max(0, number(row["limit_remaining"]) ?? limit - usage), left = remaining / limit
-        let reset = nextReset(period).map { " · ↻ " + countdown($0.timeIntervalSinceNow) } ?? ""
+        let remaining = min(limit, max(0, number(row["limit_remaining"]) ?? limit - usage)), left = limit > 0 ? remaining / limit : 0
+        let captured = number(row["captured_at"]) ?? capturedAt ?? now.timeIntervalSince1970
+        let resetAt = nextReset(period, after: Date(timeIntervalSince1970: captured))?.timeIntervalSince1970
+        let expired = resetAt.map { $0 <= now.timeIntervalSince1970 } ?? false
+        let stale = cached || now.timeIntervalSince1970 - captured > 600
+        let reset = expired ? " · waiting for its reset" : resetAt.map { " · ↻ " + countdown($0 - now.timeIntervalSince1970) } ?? ""
         let text = "\(usd(limit - remaining)) / \(usd(limit))" + reset
-        return (Window(label: label, pct: (1 - left) * 100, right: text, stale: old), left,
-                left > 0.1 ? nil : remaining <= 0 ? "cap reached" : "near its cap")
+        return (Window(label: label, pct: (1 - left) * 100, right: text, resets_at: resetAt, expired: expired, stale: stale), left,
+                stale || expired || left > 0.1 ? nil : remaining <= 0 ? "cap reached" : "near its cap")
     }
     /// When a key's cap resets: OpenRouter counts days, weeks (from Monday) and months in UTC.
     static func nextReset(_ period: String?, after now: Date = Date()) -> Date? {
@@ -334,7 +340,7 @@ final class OpenRouterProvider: UsageProvider {
         var teamRows = previous["team"] as? [JSON], teamProblem: HUDProblem?
         if let team = team {
             do {
-                teamRows = try listed ?? teamKeys(team)
+                teamRows = try (listed ?? teamKeys(team)).map { $0.merging(["captured_at": now]) { _, new in new } }
                 if let payload = try? http.get(URL(string: "https://openrouter.ai/api/v1/credits")!, token: team, headers: [:], limit: 1024 * 1024),
                    let total = number(dict(payload["data"])["total_credits"]), let used = number(dict(payload["data"])["total_usage"]) {
                     balances["openrouter"] = total - used; balanceCaptured = now
@@ -362,13 +368,13 @@ final class OpenRouterProvider: UsageProvider {
         let balanceOld = Date().timeIntervalSince1970 - (number(blob["balance_captured_at"]) ?? number(blob["captured_at"]) ?? 0) > 21600
         if let balance = balance { rows.append(Window(label: name, right: usd(balance) + " left", stale: balanceOld)) }
         let ranked = { (rows: [JSON]) -> [(cell: Window, left: Double, warning: String?)] in
-            rows.map { Self.keyCell($0, old: old) }.enumerated().sorted { ($0.element.left, $0.offset) < ($1.element.left, $1.offset) }.map { $0.element }
+            rows.map { Self.keyCell($0, old: old, capturedAt: number(blob["captured_at"])) }.enumerated().sorted { ($0.element.left, $0.offset) < ($1.element.left, $1.offset) }.map { $0.element }
         }
         // Your own keys also appear in the team list; they show once, as yours.
         let own = Set((blob["rows"] as? [JSON] ?? []).compactMap { $0["key_label"] as? String })
         let mine = ranked(blob["rows"] as? [JSON] ?? []), team = ranked((blob["team"] as? [JSON] ?? []).filter { !own.contains($0["label"] as? String ?? "") })
         // Menu rows carry no percentage, so the battery keeps showing money.
-        rows += mine.map { Window(label: $0.cell.label, right: $0.cell.right, stale: $0.cell.stale) }
+        rows += mine.map { Window(label: $0.cell.label, right: $0.cell.right, expired: $0.cell.expired, stale: $0.cell.stale) }
         var title: String?
         if !team.isEmpty {
             let all = blob["team"] as? [JSON] ?? [], today = all.compactMap { number($0["usage_daily"]) }.reduce(0, +)

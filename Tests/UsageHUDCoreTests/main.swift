@@ -17,6 +17,11 @@ func expectError(_ action: @autoclosure () throws -> Any, file: StaticString = #
 }
 let test = CoreTests()
 let cases: [(String, () throws -> Void)] = [
+    ("testLiteLLMModelBudgetsRequireReportedUsage", test.testLiteLLMModelBudgetsRequireReportedUsage),
+    ("testModelListChangesReplaceCachedModels", test.testModelListChangesReplaceCachedModels),
+    ("testCachedReadingsRecoverWithoutInventingQuota", test.testCachedReadingsRecoverWithoutInventingQuota),
+    ("testOpenAICreditFreshnessAndManualRecovery", test.testOpenAICreditFreshnessAndManualRecovery),
+    ("testKeyPeriodsAndCachedWarnings", test.testKeyPeriodsAndCachedWarnings),
     ("testAntigravityModelQuotaAndPrivateCache", test.testAntigravityModelQuotaAndPrivateCache),
     ("testAntigravityUnavailableKeepsLastReading", test.testAntigravityUnavailableKeepsLastReading),
     ("testAntigravityRejectsInvalidQuotaAndParsesFlags", test.testAntigravityRejectsInvalidQuotaAndParsesFlags),

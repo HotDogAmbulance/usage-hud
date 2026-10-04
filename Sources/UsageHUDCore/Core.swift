@@ -62,6 +62,27 @@ public struct Window: Codable {
     public let resets_at: Double?
     public let expired: Bool?
     public var stale: Bool?
+    /// A reading is cached when the source is stale or its advertised reset has passed.
+    public var isCached: Bool { stale == true || expired == true }
+    /// Plain text for VoiceOver and custom-drawn rows; `pct` is used, while the battery shows remaining.
+    public var accessibilityReading: String {
+        let span = label == "5h" ? "five-hour window" : label == "7d" ? "seven-day window" : label
+        var parts = [span]
+        if let pct = pct { parts.append(String(Int(max(0, min(100, 100 - pct)).rounded())) + " percent remaining") }
+        if let right = right, !right.isEmpty {
+            let spoken = right.replacingOccurrences(of: #"\$(-?[0-9]+(?:\.[0-9]+)?)"#, with: "$1 US dollars", options: .regularExpression)
+                .replacingOccurrences(of: "¥", with: "Chinese yuan ")
+                .replacingOccurrences(of: "↻", with: "resets in")
+            parts.append(spoken)
+        }
+        if let reset = resets_at, reset > Date().timeIntervalSince1970,
+           right?.contains("↻") != true && right?.localizedCaseInsensitiveContains("reset") != true {
+            parts.append("resets in " + countdown(reset - Date().timeIntervalSince1970))
+        }
+        if isCached { parts.append("cached") }
+        if expired == true { parts.append("waiting for its reset") }
+        return parts.joined(separator: ", ")
+    }
     public init(label: String, pct: Double? = nil, right: String? = nil, resets_at: Double? = nil,
                 expired: Bool? = false, stale: Bool? = false) {
         self.label = label; self.pct = pct; self.right = right; self.resets_at = resets_at

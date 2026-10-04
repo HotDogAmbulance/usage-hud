@@ -6,6 +6,36 @@ enum SystemBattery {
     private static let resources = Bundle(path: "/System/Library/CoreServices/ControlCenter.app")
     static let body = mask("battery-outline", fillInterior: true)
     static let cap = mask("battery-cap", fillInterior: false)
+    static let outline = mask("battery-outline", fillInterior: false)
+
+    /// Two copies of the installed Mac battery artwork; the front copy masks the rear one.
+    static func stacked() -> NSImage {
+        let image = NSImage(size: NSSize(width: 32, height: 22))
+        image.lockFocus()
+        func paint(_ mask: CGImage?, in rect: NSRect, ink: NSColor, operation: CGBlendMode = .normal) {
+            guard let mask = mask, let context = NSGraphicsContext.current?.cgContext else { return }
+            context.saveGState(); context.setBlendMode(operation); context.clip(to: rect, mask: mask)
+            ink.setFill(); rect.fill(); context.restoreGState()
+        }
+        for (x, y, front) in [(CGFloat(1), CGFloat(8), false), (CGFloat(5), CGFloat(4), true)] {
+            let rect = NSRect(x: x, y: y, width: 23, height: 12)
+            let capRect = NSRect(x: x + 24, y: y, width: 2, height: 12)
+            if front {
+                paint(body, in: rect, ink: .black, operation: .destinationOut)
+                paint(cap, in: capRect, ink: .black, operation: .destinationOut)
+            }
+            if outline != nil {
+                paint(outline, in: rect, ink: .black.withAlphaComponent(front ? 1 : 0.55))
+            } else {
+                NSColor.black.withAlphaComponent(front ? 1 : 0.55).setStroke()
+                let fallback = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 3.5, yRadius: 3.5)
+                fallback.lineWidth = 1; fallback.stroke()
+            }
+            paint(cap, in: capRect, ink: .black.withAlphaComponent(front ? 0.5 : 0.35))
+        }
+        image.unlockFocus(); image.isTemplate = true
+        return image
+    }
 
     private static func mask(_ name: String, fillInterior: Bool) -> CGImage? {
         guard let image = resources?.image(forResource: name) else { return nil }

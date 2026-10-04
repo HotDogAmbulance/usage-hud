@@ -77,7 +77,8 @@ final class KeyProvider: UsageProvider {
     }
     func panel() -> Panel {
         let blob = cache.read(id + ".json")
-        let old = Date().timeIntervalSince1970 - (number(blob["captured_at"]) ?? 0) > 21600
+        let age = Date().timeIntervalSince1970 - (number(blob["captured_at"]) ?? 0)
+        let old = age > 21600
         var rows = quotaWindows(blob)
         if let balance = number(blob["balance"]) {
             rows.insert(Window(label: name, right: money(balance, blob["symbol"] as? String ?? "$") + " left", stale: old), at: 0)
@@ -85,16 +86,29 @@ final class KeyProvider: UsageProvider {
         // Spend against a limit is its own row; spend with no limit is all there is to show, so the battery carries it.
         if let spent = number(blob["spent"]) {
             let period = (blob["period"] as? String).map { " · " + $0 } ?? ""
-            if let limit = number(blob["limit"]) { rows.append(Window(label: "Spent", right: usd(spent) + " / " + usd(limit) + period, stale: old)) }
+            if let limit = number(blob["limit"]) { rows.append(Window(label: "Spent", right: usd(spent) + " / " + usd(limit) + period, stale: age > 600)) }
             else { rows.insert(Window(label: name, right: usd(spent) + " spent" + period, stale: old), at: 0) }
         }
         let plan = (blob["plan"] as? String).map { "Plan: " + $0 }
         var panel = Panel(id: id, name: name, windows: rows, note: plan ?? (rows.isEmpty ? "Refresh \(name) to read usage" : ""))
         // Infrastructure providers with a spending limit also show it as a small battery on hover, like OpenRouter's keys.
-        if ["xai", "fireworks", "litellm"].contains(id), let spent = number(blob["spent"]), let limit = number(blob["limit"]), limit > 0 {
+        if ["xai", "fireworks", "litellm"].contains(id), let spent = number(blob["spent"]), let limit = number(blob["limit"]), limit >= 0 {
             let period = (blob["period"] as? String).map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Budget"
-            panel.cells = [Window(label: period, pct: min(100, spent / limit * 100), right: usd(spent) + " / " + usd(limit), stale: old)]
+            let budget = rows.first { $0.pct != nil }
+            let reset = budget?.resets_at
+            let resetText = reset.map { $0 > Date().timeIntervalSince1970 ? " · ↻ " + countdown($0 - Date().timeIntervalSince1970) : "" } ?? ""
+            panel.cells = [Window(label: period, pct: limit > 0 ? min(100, spent / limit * 100) : 100, right: usd(spent) + " / " + usd(limit) + resetText,
+                                  resets_at: reset, expired: budget?.expired, stale: old || budget?.stale == true)]
         }
+        // Only usage the proxy explicitly returned is eligible; configured budgets without usage are not full batteries.
+        for row in blob["budget_cells"] as? [JSON] ?? [] {
+            guard let label = row["label"] as? String, let spent = number(row["spent"]), spent >= 0,
+                  let limit = number(row["limit"]), limit >= 0 else { continue }
+            let period = (row["period"] as? String).map { " · " + $0 } ?? ""
+            panel.cells.append(Window(label: label, pct: limit > 0 ? min(100, spent / limit * 100) : 100,
+                                      right: usd(spent) + " / " + usd(limit) + period, stale: age > 600))
+        }
+        if !panel.cells.isEmpty { panel.cellsTitle = id == "litellm" ? "Virtual key budgets" : "Account budget" }
         return panel
     }
 
@@ -293,8 +307,21 @@ final class KeyProvider: UsageProvider {
     static func liteLLMBudget(_ call: Call) throws -> JSON {
         let info = dict(try call.get("/key/info")["info"])
         guard let spent = number(info["spend"]) else { throw HTTPFailure(status: 404) }
-        guard let limit = number(info["max_budget"]), limit > 0 else { return ["spent": spent] }
-        return ["spent": spent, "limit": limit,
-                "rate_limits": ["Budget": ["used_percentage": spent / limit * 100, "resets_at": resetTime(info["budget_reset_at"]) as Any? ?? NSNull()]]]
+        var blob: JSON = ["spent": spent]
+        if let limit = number(info["max_budget"]), limit >= 0 {
+            blob["limit"] = limit
+            blob["rate_limits"] = ["Budget": ["used_percentage": limit > 0 ? min(100, spent / limit * 100) : 100,
+                "resets_at": resetTime(info["budget_reset_at"]) as Any? ?? NSNull()]]
+        }
+        if let duration = info["budget_duration"] as? String, !duration.isEmpty { blob["period"] = "every " + duration }
+        let models = dict(info["model_max_budget_usage"])
+        blob["budget_cells"] = models.keys.sorted().compactMap { label -> JSON? in
+            let model = dict(models[label])
+            guard let current = number(model["current_spend"]), current >= 0,
+                  let limit = number(model["budget_limit"]), limit >= 0 else { return nil }
+            return ["label": label, "spent": current, "limit": limit,
+                    "period": (model["time_period"] as? String).map { "every " + $0 } as Any? ?? NSNull()]
+        }
+        return blob
     }
 }

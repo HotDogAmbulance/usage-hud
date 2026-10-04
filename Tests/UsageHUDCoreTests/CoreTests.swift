@@ -455,6 +455,68 @@ final class CoreTests {
         let raw = String(decoding: try Data(contentsOf: root.appendingPathComponent("antigravity.json")), as: UTF8.self)
         expectFalse(raw.contains("private@example.com")); expectFalse(raw.contains("private-token"))
     }
+    func testModelListChangesReplaceCachedModels() throws {
+        var names = ["Gemini Pro", "Claude Opus", "GPT OSS"]
+        let provider = AntigravityProvider(cache: cache, read: {
+            ["userStatus": ["cascadeModelConfigData": ["clientModelConfigs": names.map {
+                ["label": $0, "quotaInfo": ["remainingFraction": 0.75]]
+            }]]]
+        })
+        try provider.refresh(); expectEqual(provider.panel().cellsTitle, "3 models")
+        names = ["Gemini Pro"]
+        try provider.refresh(); expectEqual(provider.panel().cellsTitle, "1 model")
+        expectEqual(Set(dict(cache.read("antigravity.json")["rate_limits"]).keys), Set(names))
+        expectFalse(provider.panel().cells.contains { $0.isCached })
+        names.append("New Model")
+        try provider.refresh(); expectEqual(provider.panel().cellsTitle, "2 models")
+    }
+    func testCachedReadingsRecoverWithoutInventingQuota() throws {
+        try cache.quota("codex-quota.json", windows: ["w300": ["used_percentage": 20]], now: 1000)
+        expectTrue(quotaWindows(cache.read("codex-quota.json"), now: 1601).allSatisfy(\.isCached))
+        try cache.quota("codex-quota.json", windows: ["w300": ["used_percentage": 30]], now: 1602)
+        expectFalse(quotaWindows(cache.read("codex-quota.json"), now: 1602)[0].isCached)
+        expectTrue(Window(label: "Budget", expired: true).isCached)
+        expectEqual(Window(label: "5h", pct: 84, stale: true).accessibilityReading,
+                    "five-hour window, 16 percent remaining, cached")
+        expectEqual(Window(label: "OpenAI API", right: "$40.47 · estimate").accessibilityReading, "OpenAI API, 40.47 US dollars · estimate")
+    }
+    func testOpenAICreditFreshnessAndManualRecovery() throws {
+        let credit = OpenAICredits(cache: cache, credentials: credentials, http: http)
+        try cache.write("codex.json", ["balance": 40.47, "live_estimate": true, "captured_at": Date().timeIntervalSince1970 - 601])
+        expectTrue(credit.row()?.isCached == true)
+        try cache.merge("codex.json", ["captured_at": Date().timeIntervalSince1970])
+        expectFalse(credit.row()?.isCached == true)
+        try cache.merge("codex.json", ["error": "Credit HTTP 403"])
+        expectTrue(credit.row()?.isCached == true)
+        try cache.merge("codex.json", ["error": NSNull()])
+        expectFalse(credit.row()?.isCached == true)
+        expectEqual(http.calls, 0); expectEqual(credentials.calls, 0)
+    }
+    func testKeyPeriodsAndCachedWarnings() {
+        for period in ["daily", "weekly", "monthly"] {
+            let fresh = OpenRouterProvider.keyCell(["name": "Test", "limit": 5, "usage": 4.99, "limit_reset": period], old: false)
+            expectNotNil(fresh.cell.resets_at); expectNotNil(fresh.warning)
+        }
+        let unknown = OpenRouterProvider.keyCell(["limit": 5, "usage": 3, "limit_reset": "custom"], old: false)
+        expectNil(unknown.cell.resets_at)
+        let cached = OpenRouterProvider.keyCell(["limit": 5, "usage": 5, "stale": true], old: false)
+        expectTrue(cached.cell.isCached); expectNil(cached.warning)
+        let failed = OpenRouterProvider.keyCell(["limit": 5, "usage": 2, "error": "All sources unavailable"], old: false)
+        expectEqual(failed.cell.pct, 40); expectTrue(failed.cell.isCached); expectNil(failed.warning)
+        let noLimit = OpenRouterProvider.keyCell(["usage": 12, "limit": NSNull()], old: false)
+        expectNil(noLimit.cell.pct); expectNil(noLimit.cell.resets_at); expectNil(noLimit.warning)
+        let beforeReset = ISO8601DateFormatter().date(from: "2026-10-04T23:59:00Z")!
+        let afterReset = ISO8601DateFormatter().date(from: "2026-10-05T00:01:00Z")!
+        let crossed = OpenRouterProvider.keyCell(["limit": 5, "usage": 5, "limit_reset": "daily"], old: false,
+                                                  capturedAt: beforeReset.timeIntervalSince1970, now: afterReset)
+        expectTrue(crossed.cell.isCached); expectTrue(crossed.cell.expired == true); expectNil(crossed.warning)
+        expectTrue(crossed.cell.right?.contains("waiting for its reset") == true)
+        let recovered = OpenRouterProvider.keyCell(["limit": 5, "usage": 0, "limit_reset": "daily"], old: false,
+                                                    capturedAt: afterReset.timeIntervalSince1970, now: afterReset)
+        expectFalse(recovered.cell.isCached); expectEqual(recovered.cell.pct, 0)
+        let zero = OpenRouterProvider.keyCell(["usage": 0, "limit": 0], old: false)
+        expectEqual(zero.cell.pct, 100); expectEqual(zero.warning, "cap reached")
+    }
     func testAntigravityUnavailableKeepsLastReading() throws {
         try cache.quota("antigravity.json", windows: ["Gemini": ["used_percentage": 30]])
         let provider = AntigravityProvider(cache: cache, read: { throw HUDProblem("Open Antigravity") })
@@ -562,6 +624,30 @@ final class CoreTests {
         expectEqual(try KeyProvider.fireworksSpend(KeyProvider.Call(host: "api.fireworks.ai", key: "k", http: http), account: "accounts/my-team")["limit"] as? Double, 50)
         expectError(try KeyProvider.fireworksSpend(KeyProvider.Call(host: "api.fireworks.ai", key: "k", http: http), account: "../x"))
     }
+    func testLiteLLMModelBudgetsRequireReportedUsage() throws {
+        http.response = ["info": ["spend": 12, "max_budget": NSNull(),
+            "model_max_budget": ["missing": ["budget_limit": 10]],
+            "model_max_budget_usage": ["model-a": ["current_spend": 2, "budget_limit": 10, "time_period": "7d"],
+                                       "invalid": ["current_spend": -1, "budget_limit": 10]]]]
+        let blob = try KeyProvider.liteLLMBudget(KeyProvider.Call(host: "http://localhost:4000", key: "fixture", http: http))
+        try cache.write("litellm.json", blob.merging(["captured_at": Date().timeIntervalSince1970]) { _, new in new })
+        let provider = KeyProvider.liteLLM(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
+        let panel = provider.panel()
+        expectNil(panel.displayedQuota)
+        expectEqual(panel.cells.map(\.label), ["model-a"])
+        expectEqual(panel.cells.first?.pct, 20)
+        expectEqual(panel.cells.first?.right, "$2 / $10 · every 7d")
+        expectNil(panel.cells.first?.resets_at)
+        expectFalse(panel.cells.first?.isCached == true)
+        http.response = ["info": ["spend": 12, "max_budget": 50]]
+        let cleared = try KeyProvider.liteLLMBudget(KeyProvider.Call(host: "http://localhost:4000", key: "fixture", http: http))
+        expectTrue((cleared["budget_cells"] as? [JSON])?.isEmpty == true)
+        http.response = ["info": ["spend": 0, "max_budget": 0]]
+        let zero = try KeyProvider.liteLLMBudget(KeyProvider.Call(host: "http://localhost:4000", key: "fixture", http: http))
+        try cache.write("litellm.json", zero.merging(["captured_at": Date().timeIntervalSince1970]) { _, new in new })
+        expectEqual(provider.panel().displayedQuota?.pct, 100)
+        expectEqual(provider.panel().cells.first?.pct, 100)
+    }
     /// A LiteLLM key reads its own budget; a gateway Claude Code uses that isn't LiteLLM is asked once, then left alone.
     func testLiteLLMBudgetAndOtherGateways() throws {
         http.handler = { url in
@@ -576,6 +662,9 @@ final class CoreTests {
         let panel = proxy.panel()
         expectEqual(panel.windows.first?.label, "Budget"); expectEqual(panel.windows.first?.pct, 25)
         expectEqual(panel.windows.last?.right, "$12.50 / $50")
+        expectEqual(panel.cells.first?.resets_at, panel.windows.first?.resets_at)
+        expectTrue(panel.cells.first?.right?.contains("↻") == true)
+        expectFalse(panel.cells.first?.isCached == true)
         expectEqual(try KeyProvider.liteLLMBudget(KeyProvider.Call(host: "http://localhost:4000", key: "k", http: http))["limit"] as? Double, 50)
         // A key with no budget shows what it spent, and that is never a low balance.
         http.handler = { _ in ["info": ["spend": 3, "max_budget": NSNull()]] }
