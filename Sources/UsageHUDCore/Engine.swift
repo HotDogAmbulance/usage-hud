@@ -92,34 +92,59 @@ public final class Engine {
         }
         return bits.joined(separator: " | ")
     }
-    public func migrateHooks(executable: String, settings: URL? = nil) throws -> Int {
+    /// Claude Code's hooks call this when it starts, takes a prompt and finishes a turn, in the CLI or the app's Code tab.
+    public static let claudeCodeRan = Notification.Name("local.usage-hud.claude-code-ran")
+    /// Our own hook and statusline commands, in exactly the form we write; one someone wrapped in a script of theirs stays theirs.
+    static let ownCommand = #"^(python3? )?'?[^']*/(usagehud|usage_hud\.py)'? (--probe-if-stale|--claude-statusline)( 2>/dev/null)?( \|\| true)?$"#
+    /// Whether this HUD keeps its hooks in Claude Code; the person can switch it off from Claude's menu.
+    public var claudeCodeConnected: Bool {
+        get { cache.read("claude-code.json")["connected"] as? Bool != false }
+        set { try? cache.write("claude-code.json", ["connected": newValue]) }
+    }
+    /// Adds this HUD's hooks and statusline to Claude Code's settings, or removes them, touching nothing else. Claude Code
+    /// not installed means nothing to do, and the app checks again later, so reinstalling it reconnects by itself.
+    /// The commands go through the stable link in our folder and stay silent if the app was deleted.
+    /// Writes only on a change, after a one-time backup. Returns whether the file changed.
+    @discardableResult
+    public func connectClaudeCode(_ on: Bool, settings: URL? = nil) throws -> Bool {
         let file = settings ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/settings.json")
-        guard let data = try? Data(contentsOf: file), var value = try JSONSerialization.jsonObject(with: data) as? JSON else { return 0 }
-        // Change only commands pointing at this HUD's retired script. Unrelated hooks remain untouched.
-        let script = root.appendingPathComponent("usage_hud.py").path
-        var changed = 0
-        func rewrite(_ item: Any) -> Any {
-            if let items = item as? [Any] { return items.map(rewrite) }
-            guard var object = item as? JSON else { return item }
-            for (key, raw) in object {
-                if key == "command", let command = raw as? String, command.contains(script) {
-                    if let flag = ["--claude-statusline", "--probe-if-stale"].first(where: command.contains) {
-                        // POSIX single quotes protect spaces and shell metacharacters in user paths.
-                        let quoted = "'" + executable.replacingOccurrences(of: "'", with: "'\\''") + "'"
-                        object[key] = quoted + " " + flag; changed += 1
-                    }
-                } else if raw is JSON || raw is [Any] { object[key] = rewrite(raw) }
+        guard FileManager.default.fileExists(atPath: file.deletingLastPathComponent().path) else { return false }
+        let data = try? Data(contentsOf: file)
+        // A settings file that isn't readable JSON, or isn't shaped the way Claude Code writes it, is left as it is.
+        guard let original = data.map({ (try? JSONSerialization.jsonObject(with: $0)) as? JSON }) ?? JSON(),
+              original["hooks"] == nil || original["hooks"] is JSON else { return false }
+        let executable = "'" + root.appendingPathComponent("usagehud").path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let legacy = root.appendingPathComponent("usage_hud.py").path
+        func command(_ item: Any) -> String { (item as? JSON)?["command"] as? String ?? "" }
+        func ours(_ item: Any) -> Bool { command(item).contains(legacy) || command(item).range(of: Self.ownCommand, options: .regularExpression) != nil }
+        var value = original, hooks = dict(original["hooks"])
+        for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+            guard hooks[event] == nil || hooks[event] is [Any] else { continue }
+            let before = hooks[event] as? [Any] ?? []
+            var groups = before.compactMap { raw -> Any? in
+                guard var group = raw as? JSON, let inner = group["hooks"] as? [Any], inner.contains(where: ours) else { return raw }
+                let kept = inner.filter { !ours($0) }
+                group["hooks"] = kept
+                return kept.isEmpty ? nil : group
             }
-            return object
+            let wrapped = groups.contains { ((($0 as? JSON)?["hooks"] as? [Any]) ?? []).contains { command($0).contains("usagehud") && command($0).contains("--probe-if-stale") } }
+            if on && !wrapped { groups.append(["hooks": [["type": "command", "command": executable + " --probe-if-stale 2>/dev/null || true"]]]) }
+            if !groups.isEmpty { hooks[event] = groups } else if !before.isEmpty { hooks[event] = nil }
         }
-        value = dict(rewrite(value))
-        if changed > 0 {
-            let backup = file.appendingPathExtension("usagehud-native-backup")
-            if !FileManager.default.fileExists(atPath: backup.path) { try data.write(to: backup, options: .atomic); chmod(backup.path, 0o600) }
-            try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]).write(to: file, options: .atomic)
-            chmod(file.path, 0o600)
+        value["hooks"] = hooks.isEmpty && original["hooks"] == nil ? nil : hooks
+        // Someone else's statusline stays; the hooks alone keep the battery current.
+        if original["statusLine"] == nil || (original["statusLine"] as? JSON).map({ ours($0) }) == true {
+            var line = original["statusLine"] as? JSON ?? ["type": "command"]
+            line["command"] = executable + " --claude-statusline 2>/dev/null"
+            value["statusLine"] = on ? line : nil
         }
-        return changed
+        guard !NSDictionary(dictionary: value).isEqual(to: original) else { return false }
+        let backup = file.appendingPathExtension("usagehud-backup")
+        if let data = data, !FileManager.default.fileExists(atPath: backup.path) { try data.write(to: backup, options: .atomic); chmod(backup.path, 0o600) }
+        let mode = (try? FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int) ?? 0o600
+        try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: file, options: .atomic)
+        chmod(file.path, mode_t(mode))
+        return true
     }
     public func handleCLI(_ arguments: [String]) throws -> Bool {
         // macOS may pass its own arguments (-psn_…, -NSDocument…); only ours start with two dashes.
@@ -128,11 +153,17 @@ public final class Engine {
             print(try statusline(FileHandle.standardInput.readDataToEndOfFile())); return true
         }
         if arguments == ["--probe-if-stale"] {
-            if !prompted("claude"), Date().timeIntervalSince1970 - (number(cache.read("claude.json")["captured_at"]) ?? 0) > 300 { _ = panels(refresh: "claude") }
+            // The running app reads Claude: it already holds the Keychain's answer, so a hook never brings a password prompt.
+            DistributedNotificationCenter.default().postNotificationName(Self.claudeCodeRan, object: nil, userInfo: nil, deliverImmediately: true)
             return true
         }
         if arguments == ["--migrate-hooks"] {
-            print("Updated \(try migrateHooks(executable: root.appendingPathComponent("usagehud").path)) Usage HUD hook commands")
+            print(try connectClaudeCode(claudeCodeConnected) ? "Connected Claude Code" : "Claude Code already up to date")
+            return true
+        }
+        if arguments == ["--disconnect-claude-code"] {
+            // For uninstalling: our lines leave Claude Code's settings, and a later install connects again.
+            print(try connectClaudeCode(false) ? "Removed Usage HUD from Claude Code's settings" : "Nothing to remove from Claude Code's settings")
             return true
         }
         if arguments.count == 4 && arguments[0] == "--write-bundle-info" {
@@ -161,7 +192,7 @@ public final class Engine {
             return true
         }
         if arguments == ["--help"] {
-            print("usagehud [--json | --refresh automatic|codex|claude|openrouter|glm|antigravity|grok|vercel|deepseek|kimi|openai-credits | --claude-statusline | --probe-if-stale]")
+            print("usagehud [--json | --refresh automatic|codex|claude|openrouter|glm|antigravity|grok|vercel|deepseek|kimi|openai-credits | --claude-statusline | --probe-if-stale | --disconnect-claude-code]")
             return true
         }
         let refresh: String?

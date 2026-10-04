@@ -96,7 +96,7 @@ final class GrokProvider: UsageProvider {
         let blob = cache.read("grok.json")
         var rows = quotaWindows(blob)
         if let spent = number(blob["spent_cents"]), let limit = number(blob["limit_cents"]) {
-            rows.append(Window(label: "spent", right: "\(usd(spent / 100)) of \(usd(limit / 100)) this month",
+            rows.append(Window(label: "Spent", right: "\(usd(spent / 100)) / \(usd(limit / 100)) · this month",
                                stale: Date().timeIntervalSince1970 - (number(blob["captured_at"]) ?? 0) > 600))
         }
         return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Refresh Grok to read quota" : "")

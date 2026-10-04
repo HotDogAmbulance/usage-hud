@@ -46,7 +46,9 @@ That installs the app in `~/Applications`. If you prefer keeping it on your Desk
 
 The installed app carries its own executable, so you can remove the source checkout afterwards. Your settings and cached readings stay in the private `~/.usage-hud` folder. Set `USAGE_HUD_HOME` if you’d like to keep them somewhere else.
 
-If you’re coming from the older Python version, the installer keeps your existing configuration and readings. It also moves Usage HUD’s own Claude hook and statusline commands to the Swift executable, with a local backup of the settings file. Other Claude commands stay as they were.
+If you’re coming from the older Python version, the installer keeps your existing configuration and readings.
+
+When Claude Code is on the Mac, the app adds three small hooks (session start, each prompt, each finished turn) and its statusline to `~/.claude/settings.json`, keeping a backup the first time and leaving everything else, including a statusline of your own, as it was. They work in the CLI and in the Claude app’s Code tab, and only tell the running app to read Claude, so they never bring a Keychain prompt. If Claude Code is removed and installed again later, the app adds them back by itself. To take them out, untick **Live from Claude Code** in Claude’s battery menu; deleting the app leaves them silent.
 
 ## A few things to know
 
@@ -87,7 +89,7 @@ swift run usagehud --self-test
 swift build --configuration release --product usagehud
 ```
 
-The `--claude-statusline` command also keeps the context cache used by existing Claude burn guards. `--probe-if-stale` lets the Claude hook refresh a reading when it’s getting old.
+The `--claude-statusline` command also keeps the context cache used by existing Claude burn guards. `--probe-if-stale` is what the hooks run: it asks the running app to read Claude. `--disconnect-claude-code` removes the hooks.
 
 ## When you want to remove it
 
@@ -101,6 +103,6 @@ To remove the cached readings and provider configuration as well:
 ./uninstall.sh --purge
 ```
 
-If you added Usage HUD hooks to Claude Code, remove those entries from Claude’s settings too. Your provider credentials stay in the Keychain.
+The uninstaller also takes Usage HUD’s hooks out of Claude Code’s settings. Your provider credentials stay in the Keychain.
 
 Usage HUD is available under the [MIT license](LICENSE). Make it your own.

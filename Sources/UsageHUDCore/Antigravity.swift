@@ -38,11 +38,12 @@ final class AntigravityProvider: UsageProvider {
     /// every model its own quota just yield more rows, and once there are many, untouched ones fold into one.
     func panel() -> Panel {
         let models = quotaWindows(cache.read("antigravity.json")), now = Date().timeIntervalSince1970
-        func text(_ row: Window, models count: Int) -> String {
-            var text = "\(Int((100 - (row.pct ?? 0)).rounded()))% left"
-            if let reset = row.resets_at, reset > now { text += " · resets in " + countdown(reset - now) }
-            if count > 1 { text += " · \(count) models" }
-            return text + (row.stale == true || row.expired == true ? " · cached" : "")
+        // The cell's battery already shows the share left, so the text only says when it refills.
+        func text(_ row: Window, share: Bool = false) -> String {
+            var bits = share ? ["\(Int((100 - (row.pct ?? 0)).rounded()))% left"] : []
+            if let reset = row.resets_at, reset > now { bits.append("↻ " + countdown(reset - now)) }
+            if row.stale == true || row.expired == true { bits.append("cached") }
+            return bits.joined(separator: " · ")
         }
         var pools: [String: [Window]] = [:], order: [String] = []
         for model in models.sorted(by: { $0.label < $1.label }) {
@@ -55,19 +56,20 @@ final class AntigravityProvider: UsageProvider {
             for model in members where !families.contains(Self.family(model.label)) { families.append(Self.family(model.label)) }
             let first = members[0]
             return Window(label: members.count == 1 ? first.label : families.joined(separator: " & "), pct: first.pct,
-                          right: text(first, models: members.count), resets_at: first.resets_at, expired: first.expired, stale: first.stale)
+                          right: text(first), resets_at: first.resets_at, expired: first.expired, stale: first.stale)
         }.enumerated().sorted { ($0.element.pct ?? 0, -$0.offset) > ($1.element.pct ?? 0, -$1.offset) }.map { $0.element }
         let untouched = rows.filter { ($0.pct ?? 0) < 0.5 }
         if rows.count > 4 && untouched.count > 1 {
             let count = models.filter { ($0.pct ?? 0) < 0.5 }.count
-            rows = rows.filter { ($0.pct ?? 0) >= 0.5 } + [Window(label: "Other models", pct: 0, right: "100% left · \(count) models",
+            rows = rows.filter { ($0.pct ?? 0) >= 0.5 } + [Window(label: "Other models (\(count))", pct: 0, right: "",
                                                                   stale: untouched.contains { $0.stale == true })]
         }
         let details = models.sorted { ($0.pct ?? 0, $1.label) > ($1.pct ?? 0, $0.label) }.map {
-            Window(label: $0.label, pct: $0.pct, right: text($0, models: 1), resets_at: $0.resets_at, expired: $0.expired, stale: $0.stale)
+            Window(label: $0.label, pct: $0.pct, right: text($0, share: true), resets_at: $0.resets_at, expired: $0.expired, stale: $0.stale)
         }
-        return Panel(id: id, name: name, windows: rows, note: "Model quotas · updates while Antigravity is open",
-                     cells: rows, cellsTitle: "\(models.count) models · \(rows.count) quota \(rows.count == 1 ? "pool" : "pools") · click for every model",
+        // Readings come from the running app; once it closes they dim, and the note says why.
+        return Panel(id: id, name: name, windows: rows, note: models.contains { $0.stale == true } ? "Updates while Antigravity is open" : "",
+                     cells: rows, cellsTitle: "\(models.count) models",
                      details: details, lead: rows.first?.label)
     }
 }

@@ -53,7 +53,7 @@ final class BalanceProvider: UsageProvider {
         guard let balance = number(blob["balance"]) else { return Panel(id: id, name: name, note: "Refresh \(name) to read balance") }
         let symbol = blob["symbol"] as? String ?? "$"
         let old = Date().timeIntervalSince1970 - (number(blob["captured_at"]) ?? 0) > 21600
-        return Panel(id: id, name: name, windows: [Window(label: name, right: symbol + String(format: "%.2f", balance) + " left", stale: old)])
+        return Panel(id: id, name: name, windows: [Window(label: name, right: money(balance, symbol) + " left", stale: old)])
     }
 
     static func vercel(cache: Cache, credentials: CredentialReading, http: HTTPReading, home: URL = FileManager.default.homeDirectoryForCurrentUser,

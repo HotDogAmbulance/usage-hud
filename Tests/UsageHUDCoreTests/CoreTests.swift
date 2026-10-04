@@ -137,10 +137,11 @@ final class CoreTests {
         try seed(); try cache.merge("claude.json", ["usage_credits": ["is_enabled": true]])
         credentials.text = "{\"claudeAiOauth\":{\"accessToken\":\"fixture\"}}"
         http.response = ["five_hour": ["utilization": 12, "resets_at": "2099-01-01T00:00:00Z"]]
-        try ClaudeProvider(cache: cache, credentials: credentials, http: http).refresh()
+        try ClaudeProvider(cache: cache, credentials: credentials, http: http, home: root).refresh()
         let blob = cache.read("claude.json")
         expectEqual(number(blob["context_pct"]), 42); expectNotNil(blob["usage_credits"])
-        expectEqual(http.calls, 1)
+        // The quota, plus the hourly free-reset read; without Claude Code's config there is no organization to ask.
+        expectEqual(http.calls, 2)
         expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("claude.json")), encoding: .utf8)!.contains("fixture"))
     }
     func testClaude429DoesNotInventExhaustedQuota() throws {
@@ -178,7 +179,7 @@ final class CoreTests {
         try cache.write("codex-quota.json", ["plan": "pro", "captured_at": Date().timeIntervalSince1970,
                                             "subscription_credits": ["balance": "125.5", "hasCredits": true, "unlimited": false]])
         let panel = CodexProvider(cache: cache, credits: OpenAICredits(cache: cache, credentials: credentials, http: http)).panel()
-        expectEqual(panel.windows.first?.right, "125.5 credits left")
+        expectEqual(panel.windows.first?.right, "125.5")
         expectNil(panel.displayedQuota)
     }
     func testCreditOnlyCodexResponseDoesNotInventQuota() throws {
@@ -209,7 +210,7 @@ final class CoreTests {
         http.handler = { url in url.path.hasSuffix("credits") ? ["data": ["total_credits": 50, "total_usage": 7]] : ["data": ["usage": 7]] }
         let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http)
         try provider.refresh()
-        expectEqual(provider.panel().windows.first?.right, "$43.00 left")
+        expectEqual(provider.panel().windows.first?.right, "$43 left")
         expectNil(provider.panel().windows.first?.pct)
         let old = Date().timeIntervalSince1970 - 86400
         try cache.merge("openrouter.json", ["balance_captured_at": old])
@@ -218,7 +219,7 @@ final class CoreTests {
             return ["data": ["usage": 8]]
         }
         try provider.refresh()
-        expectEqual(provider.panel().windows.first?.right, "$43.00 left")
+        expectEqual(provider.panel().windows.first?.right, "$43 left")
         expectEqual(provider.panel().windows.first?.stale, true)
         expectEqual(number(cache.read("openrouter.json")["balance_captured_at"]), old)
     }
@@ -230,18 +231,87 @@ final class CoreTests {
         expectEqual(number(cache.read("claude.json")["context_pct"]), 42)
         expectNotNil(dict(cache.read("claude.json")["rate_limits"])["seven_day"])
     }
-    func testHookMigrationPreservesUnrelatedCommands() throws {
-        let file = root.appendingPathComponent("settings.json")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let before: JSON = ["statusLine": ["command": "python3 '\(root.path)/usage_hud.py' --claude-statusline"],
-                            "hooks": [["command": "unrelated --probe-if-stale"]], "model": "fixture-model"]
-        try JSONSerialization.data(withJSONObject: before).write(to: file)
+    /// Free resets and prepaid credits show beside the quota: Codex's from its usage read, Claude's from an hourly read.
+    func testFreeResetsAndPrepaidBalance() throws {
+        expectEqual(money(20), "$20"); expectEqual(money(1.25), "$1.25"); expectEqual(money(0.001), "$0"); expectEqual(money(3.5, "¥"), "¥3.50")
+        let soon = Date().timeIntervalSince1970 + 3 * 86400
+        let codex = CodexProvider.freeResets(["rateLimitResetCredits": ["availableCount": 2, "credits": [
+            ["status": "available", "expiresAt": soon + 86400], ["status": "available", "expiresAt": soon], ["status": "redeemed", "expiresAt": 1]]]])
+        expectEqual(number(codex?["left"]), 2); expectEqual(number(codex?["until"]), soon)
+        expectNil(CodexProvider.freeResets([:]))
+        try cache.write("codex-quota.json", ["captured_at": Date().timeIntervalSince1970, "free_resets": codex!,
+                                            "subscription_credits": ["balance": "0", "hasCredits": false]])
+        let rows = CodexProvider(cache: cache, credits: OpenAICredits(cache: cache, credentials: credentials, http: http)).panel().windows
+        // No purchased credits is the normal case and shows nothing; the free resets do show.
+        expectEqual(rows.map { $0.label }, ["Free resets"])
+        expectTrue(rows.first?.right?.hasPrefix("2 · until ") == true)
+        let home = root.appendingPathComponent("home"), org = "12345678-1234-1234-1234-123456789abc"
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["oauthAccount": ["organizationUuid": org]]).write(to: home.appendingPathComponent(".claude.json"))
+        credentials.text = "{\"claudeAiOauth\":{\"accessToken\":\"fixture\"}}"
+        var asked: [String] = []
+        http.handler = { url in
+            asked.append(url.absoluteString)
+            if url.path.hasSuffix("/prepaid/credits") { return ["amount": 2776, "currency": "USD"] }
+            if url.query?.contains("cedar_ember=1") == true {
+                return ["cedar_ember": ["grants": [["resets_left": 1, "ends_at": "2099-10-22T00:00:00Z"], ["resets_left": 3, "paused": true],
+                                                   ["resets_left": 0, "ends_at": "2099-01-01T00:00:00Z"]]]]
+            }
+            return ["five_hour": ["utilization": 4]]
+        }
+        let claude = ClaudeProvider(cache: cache, credentials: credentials, http: http, home: home)
+        try claude.refresh()
+        expectTrue(asked.contains("https://api.anthropic.com/api/oauth/organizations/\(org)/prepaid/credits"))
+        expectEqual(http.sentHeaders["x-organization-uuid"], org)
+        let panel = claude.panel()
+        expectEqual(panel.windows.first { $0.label == "Balance" }?.right, "$27.76")
+        expectTrue(panel.windows.first { $0.label == "Free resets" }?.right?.hasPrefix("1 · until ") == true)
+        // Those two are read hourly, not with every quota refresh.
+        asked = []; try claude.refresh()
+        expectEqual(asked.count, 1)
+    }
+    /// Claude Code gets our hooks and statusline beside the person's own, once; switched off, only ours leave.
+    func testClaudeCodeConnectsAndDisconnectsCleanly() throws {
+        let folder = root.appendingPathComponent("claude"), file = folder.appendingPathComponent("settings.json")
         let engine = Engine(root: root, credentials: credentials, http: http)
-        expectEqual(try engine.migrateHooks(executable: "/a path/usagehud", settings: file), 1)
-        let after = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! JSON
-        expectEqual(dict(after["statusLine"])["command"] as? String, "'/a path/usagehud' --claude-statusline")
-        expectEqual((after["hooks"] as? [JSON])?.first?["command"] as? String, "unrelated --probe-if-stale")
+        expectFalse(try engine.connectClaudeCode(true, settings: file))
+        expectFalse(FileManager.default.fileExists(atPath: folder.path))
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let before: JSON = ["statusLine": ["command": "python3 '\(root.path)/usage_hud.py' --claude-statusline", "padding": 0],
+                            "hooks": ["Stop": [["hooks": [["type": "command", "command": "my-linter"]]]],
+                                      "UserPromptSubmit": [["hooks": [["type": "command", "command": "'\(root.path)/usagehud' --probe-if-stale"]]]]],
+                            "model": "fixture-model"]
+        try JSONSerialization.data(withJSONObject: before).write(to: file)
+        expectTrue(try engine.connectClaudeCode(true, settings: file))
+        expectFalse(try engine.connectClaudeCode(true, settings: file))
+        var after: JSON = [:]
+        func load() throws { after = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! JSON }
+        func commands(_ event: String) -> [String] {
+            ((dict(after["hooks"])[event] as? [JSON]) ?? []).flatMap { $0["hooks"] as? [JSON] ?? [] }.compactMap { $0["command"] as? String }
+        }
+        try load()
+        let ours = "'\(root.path)/usagehud' --probe-if-stale 2>/dev/null || true"
+        expectEqual(commands("Stop"), ["my-linter", ours])
+        expectEqual(commands("UserPromptSubmit"), [ours]); expectEqual(commands("SessionStart"), [ours])
+        expectEqual(dict(after["statusLine"])["command"] as? String, "'\(root.path)/usagehud' --claude-statusline 2>/dev/null")
+        expectEqual(number(dict(after["statusLine"])["padding"]), 0)
         expectEqual(after["model"] as? String, "fixture-model")
+        expectTrue(FileManager.default.fileExists(atPath: file.path + ".usagehud-backup"))
+        expectTrue(try engine.connectClaudeCode(false, settings: file))
+        try load()
+        expectEqual(commands("Stop"), ["my-linter"]); expectEqual(commands("UserPromptSubmit"), [])
+        expectNil(after["statusLine"])
+        // Someone else's statusline is never replaced, and a file that isn't JSON is left alone.
+        try JSONSerialization.data(withJSONObject: ["statusLine": ["type": "command", "command": "starship"]]).write(to: file)
+        expectTrue(try engine.connectClaudeCode(true, settings: file))
+        try load()
+        expectEqual(dict(after["statusLine"])["command"] as? String, "starship"); expectEqual(commands("Stop"), [ours])
+        try Data("{oops".utf8).write(to: file)
+        expectFalse(try engine.connectClaudeCode(true, settings: file))
+        expectEqual(String(data: try Data(contentsOf: file), encoding: .utf8), "{oops")
+        expectTrue(engine.claudeCodeConnected)
+        engine.claudeCodeConnected = false
+        expectFalse(Engine(root: root, credentials: credentials, http: http).claudeCodeConnected)
     }
     func testRPCFramingAndEOF() throws {
         let rpc = try RPCProcess(binary: URL(fileURLWithPath: "/usr/bin/printf"), arguments: ["{\"id\":1,\"result\":{\"ok\":true}}\\n"])
@@ -355,7 +425,7 @@ final class CoreTests {
         let windows = try GrokProvider.windows(billing)
         expectEqual(number(dict(windows["month"])["used_percentage"]), 25)
         try cache.quota("grok.json", windows: windows, extra: ["spent_cents": 1250, "limit_cents": 5000])
-        expectEqual(GrokProvider(cache: cache).panel().windows.last?.right, "$12.50 of $50.00 this month")
+        expectEqual(GrokProvider(cache: cache).panel().windows.last?.right, "$12.50 / $50 · this month")
         expectError(try GrokProvider.windows(["usage": ["totalUsed": ["val": 1]]]))
     }
     func testUnusedPlansStayOutOfMenuBar() {
@@ -413,11 +483,11 @@ final class CoreTests {
         try cache.merge("claude.json", ["usage_credits": ["is_enabled": true, "monthly_limit": 5000, "used_credits": 1234,
                                                           "utilization": 24.68, "currency": "USD", "decimal_places": 2]])
         let provider = ClaudeProvider(cache: cache, credentials: credentials, http: http)
-        expectEqual(provider.panel().windows.first { $0.label == "extra usage" }?.right, "$12.34 of $50.00 this month · 25%")
+        expectEqual(provider.panel().windows.first { $0.label == "Extra usage" }?.right, "$12.34 / $50 · this month")
         try cache.merge("claude.json", ["usage_credits": ["is_enabled": true, "monthly_limit": NSNull(), "used_credits": 250]])
-        expectEqual(provider.panel().windows.first { $0.label == "extra usage" }?.right, "$2.50 spent this month")
+        expectEqual(provider.panel().windows.first { $0.label == "Extra usage" }?.right, "$2.50 · this month")
         try cache.merge("claude.json", ["usage_credits": ["is_enabled": false, "user_disabled": true, "used_credits": NSNull()]])
-        expectEqual(provider.panel().windows.first { $0.label == "extra usage" }?.right, "Off")
+        expectEqual(provider.panel().windows.first { $0.label == "Extra usage" }?.right, "Off")
     }
     func testUpdateTagsCompareNumerically() {
         expectTrue(Updates.isNewer("v2.10", than: "2.9")); expectTrue(Updates.isNewer("2.1.1", than: "2.1"))
@@ -449,8 +519,8 @@ final class CoreTests {
         let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http)
         try provider.refresh()
         let panel = provider.panel()
-        expectEqual(panel.windows.first?.right, "$43.00 left")
-        expectTrue(panel.windows[1].right?.hasPrefix("$4.60 of $5.00 today · resets in ") == true)
+        expectEqual(panel.windows.first?.right, "$43 left")
+        expectTrue(panel.windows[1].right?.hasPrefix("$4.60 / $5 today · ↻ ") == true)
         expectEqual(panel.alert, "One: near its cap")
     }
     func testRouterCapsResetOnUTCBoundaries() {
@@ -473,7 +543,7 @@ final class CoreTests {
         expectTrue(provider.automatic)
         try provider.refresh()
         let panel = provider.panel()
-        expectEqual(panel.windows.first?.right, "$43.00 left")
+        expectEqual(panel.windows.first?.right, "$43 left")
         expectEqual(panel.cellsTitle, "100 keys · $50.50 today · 1 near cap")
         expectEqual(panel.cells.first?.label, "k7"); expectEqual(panel.cells.last?.label, "sk-or-v1-abc")
         expectNil(panel.alert); expectNil(panel.displayedQuota)
@@ -567,7 +637,7 @@ final class CoreTests {
         try provider.refresh()
         let panel = provider.panel()
         expectEqual(panel.cells.map { $0.label }, ["guy1", "Other"])
-        expectEqual(panel.cellsTitle, "2 keys · $3.00 today")
+        expectEqual(panel.cellsTitle, "2 keys · $3 today")
         expectFalse(panel.windows.contains { $0.label == "management" })
     }
     /// A revoked key left in an old script is skipped, and with nothing working OpenRouter stays out of sight.
@@ -589,7 +659,7 @@ final class CoreTests {
         try provider.refresh()
         let panel = provider.panel()
         expectEqual(panel.cells.map { $0.label }, ["Claude & GPT", "Gemini"])
-        expectTrue(panel.cells.first?.right?.hasPrefix("97% left · resets in ") == true)
+        expectTrue(panel.cells.first?.right?.hasPrefix("↻ ") == true)
         expectTrue(panel.cells.first?.right?.hasSuffix("· 3 models") == true)
         expectEqual(panel.details.count, 5); expectEqual(panel.displayedQuota?.label, "Claude & GPT")
         // Closed app: no pulse, last reading kept and still shown.
@@ -607,7 +677,7 @@ final class CoreTests {
         try? cache.write("claude.json", ["captured_at": 1])
         let claude = { (refresh: String?) in Engine(root: self.root, credentials: self.credentials, http: self.http).panels(refresh: refresh).first { $0.id == "claude" } }
         let idle = claude("claude")
-        expectTrue(idle?.fix == nil && idle?.alert == nil && idle?.note.contains("idle") == true)
+        expectTrue(idle?.fix == nil && idle?.alert == nil && idle?.note.contains("Code tab") == true)
         // A rejected token is a real sign-out, and the menu offers the sign-in.
         credentials.text = "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"expiresAt\":99999999999999}}"
         http.error = HTTPFailure(status: 401)
@@ -697,8 +767,8 @@ final class CoreTests {
         expectEqual(credentials.calls, 0); expectEqual(http.calls, 0)
         try cache.merge("claude.json", ["oauth_at": 0])
         credentials.text = "{\"accessToken\":\"fixture\"}"; http.response = ["five_hour": ["utilization": 12]]
-        try ClaudeProvider(cache: cache, credentials: credentials, http: http).refresh()
-        expectEqual(http.calls, 1)
+        try ClaudeProvider(cache: cache, credentials: credentials, http: http, home: root).refresh()
+        expectEqual(http.calls, 2)
     }
     /// A provider in use refreshes between background passes, but a paused one stays paused.
     func testProvidersInUseRefreshBetweenPasses() {

@@ -12,19 +12,22 @@ final class HoverTracker: NSResponder {
     override func mouseExited(with event: NSEvent) { changed(false) }
 }
 
-/// The hover panel for providers with per-key detail: a few header lines, then one small battery per key, green while
-/// plenty is left, yellow under 30%, red under 10% (where your own keys start to pulse). It sizes itself to its text.
+/// The hover panel for providers with per-key detail: the name in bold with a short grey summary beside it, any problem
+/// below, then one small battery per key or pool, green while plenty is left, yellow under 30%, red under 10% (where your
+/// own keys start to pulse). It sizes itself to its text.
 final class CellsView: NSView {
-    let lines: [String], rows: [Window]
+    let title: String, subtitle: String, lines: [String], rows: [Window]
     static let head: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor]
     static let body: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor]
-    let nameWidth: CGFloat
-    init(lines: [String], rows: [Window]) {
-        self.lines = lines; self.rows = rows
+    let nameWidth: CGFloat, titleWidth: CGFloat
+    init(title: String, subtitle: String? = nil, lines: [String] = [], rows: [Window]) {
+        self.title = title; self.subtitle = subtitle ?? ""; self.lines = lines; self.rows = rows
         func width(_ text: String, _ style: [NSAttributedString.Key: Any]) -> CGFloat { ceil((text as NSString).size(withAttributes: style).width) }
         nameWidth = min(140, rows.map { width($0.label, Self.body) }.max() ?? 0)
-        let text = max(lines.map { width($0, Self.head) }.max() ?? 0, nameWidth + 54 + (rows.map { width($0.right ?? "", Self.body) }.max() ?? 0))
-        super.init(frame: NSRect(x: 0, y: 0, width: min(560, max(260, text + 24)), height: CGFloat(lines.count * 18 + rows.count * 20 + 16)))
+        titleWidth = width(title, Self.head)
+        let text = max(titleWidth + 8 + width(self.subtitle, Self.body), lines.map { width($0, Self.body) }.max() ?? 0,
+                       nameWidth + 54 + (rows.map { width($0.right ?? "", Self.body) }.max() ?? 0))
+        super.init(frame: NSRect(x: 0, y: 0, width: min(560, max(220, text + 24)), height: CGFloat(18 + lines.count * 18 + rows.count * 20 + 16)))
     }
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
@@ -34,7 +37,10 @@ final class CellsView: NSView {
         var head = Self.head, body = Self.body; head[.paragraphStyle] = clip; body[.paragraphStyle] = clip
         let width = bounds.width - 24
         var y: CGFloat = 8
-        for line in lines { (line as NSString).draw(in: NSRect(x: 12, y: y, width: width, height: 16), withAttributes: head); y += 18 }
+        (title as NSString).draw(in: NSRect(x: 12, y: y, width: width, height: 16), withAttributes: head)
+        (subtitle as NSString).draw(in: NSRect(x: 20 + titleWidth, y: y + 1, width: max(0, width - titleWidth - 8), height: 16), withAttributes: body)
+        y += 18
+        for line in lines { (line as NSString).draw(in: NSRect(x: 12, y: y, width: width, height: 16), withAttributes: body); y += 18 }
         for row in rows {
             (row.label as NSString).draw(in: NSRect(x: 12, y: y + 2, width: nameWidth, height: 16), withAttributes: body)
             let x = 12 + nameWidth + 8
@@ -104,7 +110,12 @@ final class HUD: NSObject, NSApplicationDelegate {
         if lockDescriptor < 0 || flock(lockDescriptor, LOCK_EX | LOCK_NB) != 0 { NSApp.terminate(nil); return }
         load(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.load("automatic") }
-        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.load("automatic") }
+        // Claude Code's hooks and statusline bring Claude's readings while it runs; added once, and again whenever
+        // Claude Code is (re)installed, unless the person switched them off from Claude's menu.
+        connectClaudeCode()
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(claudeCodeRan(_:)), name: Engine.claudeCodeRan,
+                                                            object: nil, suspensionBehavior: .deliverImmediately)
+        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.load("automatic"); self?.connectClaudeCode() }
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.load(nil) }
         // A provider used in the last ten minutes refreshes every minute, so its battery follows a chat as it happens.
         Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
@@ -142,6 +153,31 @@ final class HUD: NSObject, NSApplicationDelegate {
                 for panel in self.panels.values { self.render(panel) }
             }
         }.resume()
+    }
+    /// Points our folder's stable link at this app and keeps Claude Code's hooks in step. Only an installed app does this;
+    /// a build run from Terminal, or a copy macOS runs from a temporary place before it's moved, does not.
+    func connectClaudeCode() {
+        guard Bundle.main.bundleURL.pathExtension == "app", let executable = Bundle.main.executablePath,
+              !executable.contains("/AppTranslocation/") else { return }
+        let link = home.appendingPathComponent("usagehud"), files = FileManager.default
+        let target = try? files.destinationOfSymbolicLink(atPath: link.path)
+        if target != executable && (target != nil || !files.fileExists(atPath: link.path)) {
+            try? files.removeItem(at: link); try? files.createSymbolicLink(atPath: link.path, withDestinationPath: executable)
+        }
+        try? engine.connectClaudeCode(engine.claudeCodeConnected)
+    }
+    /// Claude Code started, took a prompt or finished a turn: read Claude now (at most once a minute) with the Keychain
+    /// answer this app already holds, so nothing new is asked.
+    var claudeNudged = 0.0
+    @objc func claudeCodeRan(_ note: Notification) {
+        let now = Date().timeIntervalSince1970
+        guard now - claudeNudged > 60 else { return }
+        claudeNudged = now; load(nil, also: ["claude"])
+    }
+    @objc func toggleClaudeCode() {
+        engine.claudeCodeConnected.toggle()
+        connectClaudeCode()
+        if let panel = panels["claude"] { render(panel) }
     }
     @objc func openUpdate() { if let page = update?.page { NSWorkspace.shared.open(page) } }
     func load(_ refresh: String?, also: Set<String> = []) {
@@ -241,8 +277,9 @@ final class HUD: NSObject, NSApplicationDelegate {
     /// `weeklyShade` draws the main fill in the same lighter tone the 7d layer uses behind 5h.
     /// `glow` washes the body in soft red, for a battery asking for attention.
     /// The digits' font, by size. `--self-test` also renders the candidates side by side in font-preview.png.
-    /// macOS 27's battery digits: SF Pro with tabular figures (the "1" has a foot), at Medium weight, nearly as tall as the body.
-    static var digitFont: (CGFloat) -> NSFont = { tabular($0 + 1.5, .medium) }
+    /// macOS 27's battery digits: SF Pro with tabular figures (the "1" has a foot), Regular, about 10pt. Measured on a zoomed
+    /// menu bar: the system's digits stand 7.5pt tall with 1pt strokes, where Medium 11pt stood 8pt with 1.5pt strokes.
+    static var digitFont: (CGFloat) -> NSFont = { tabular($0 + 0.5, .regular) }
     static func tabular(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont { NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight) }
     func icon(_ panel: Panel, weeklyShade: Bool = false, glow: CGFloat = 0) -> NSImage {
         let quota = displayedQuota(panel)
@@ -357,21 +394,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         item.button?.setAccessibilityLabel(panel.name + " usage" + (panel.alert.map { ", " + $0 } ?? ""))
         updatePulse()
         let menu = NSMenu()
-        menu.addItem(withTitle: panel.name + " · Usage HUD", action: nil, keyEquivalent: "")
-        if let alert = panel.alert { menu.addItem(withTitle: "⚠︎ " + alert, action: nil, keyEquivalent: "") }
-        if displayed?.label == "7d" { menu.addItem(withTitle: "Showing 7d" + (cached ? " · cached" : ""), action: nil, keyEquivalent: "") }
-        if !panel.note.isEmpty { menu.addItem(withTitle: panel.note, action: nil, keyEquivalent: "") }
-        for window in panel.windows {
-            var text = window.label + ": "
-            if let pct = window.pct {
-                text += "\(Int((100-pct).rounded()))% " + (window.expired == true ? "last known · window reset" : "remaining")
-                if let reset = window.resets_at, reset > Date().timeIntervalSince1970 {
-                    let minutes = Int((reset - Date().timeIntervalSince1970) / 60)
-                    text += " · resets in \(minutes/60)h \(minutes%60)m"
-                }
-            } else { text += window.right ?? "Unavailable" }
-            if window.stale == true { text += " · cached" }
-            menu.addItem(withTitle: text, action: nil, keyEquivalent: "")
+        for line in HUD.menuLines(panel, showingWeek: displayed?.label == "7d", cached: cached) {
+            menu.addItem(withTitle: line.string, action: nil, keyEquivalent: "").attributedTitle = line
         }
         if panel.cellsTitle != nil {
             let all = NSMenu()
@@ -387,6 +411,10 @@ final class HUD: NSObject, NSApplicationDelegate {
             let item = menu.addItem(withTitle: "Sign in to " + panel.name + " again…", action: #selector(runFix(_:)), keyEquivalent: "")
             item.representedObject = [panel.id, fix]; item.target = self
         }
+        if panel.id == "claude", FileManager.default.fileExists(atPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path) {
+            let live = menu.addItem(withTitle: "Live from Claude Code", action: #selector(toggleClaudeCode), keyEquivalent: "")
+            live.target = self; live.state = engine.claudeCodeConnected ? .on : .off
+        }
         let refresh = menu.addItem(withTitle: "Refresh " + panel.name, action: #selector(refreshProvider(_:)), keyEquivalent: "r")
         refresh.representedObject = panel.id; refresh.target = self
         if panel.id == "codex" {
@@ -398,6 +426,43 @@ final class HUD: NSObject, NSApplicationDelegate {
         }
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
         item.menu = menu
+    }
+    /// The menu's reading, kept short: the name in bold (with its plan or balance), then one line per window with its
+    /// value in bold and grey detail after it, values lined up on a tab stop. "↻ 4h 11m" is when it refills.
+    static func menuLines(_ panel: Panel, showingWeek: Bool, cached: Bool) -> [NSAttributedString] {
+        let size = NSFont.menuFont(ofSize: 0).pointSize, now = Date().timeIntervalSince1970
+        let plain = NSFont.menuFont(ofSize: 0), strong = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .semibold)
+        let grey: [NSAttributedString.Key: Any] = [.font: plain, .foregroundColor: NSColor.secondaryLabelColor]
+        let rows = panel.windows.filter { $0.label != panel.name }
+        let tabs = NSMutableParagraphStyle()
+        tabs.tabStops = [NSTextTab(textAlignment: .left, location: (rows.map { ($0.label as NSString).size(withAttributes: grey).width }.max() ?? 0) + 16)]
+        func line(_ parts: [(String, Bool)]) -> NSAttributedString {
+            let text = NSMutableAttributedString()
+            for (part, bold) in parts where !part.isEmpty {
+                text.append(NSAttributedString(string: part, attributes: [.font: bold ? strong : plain, .paragraphStyle: tabs,
+                                                                          .foregroundColor: bold ? NSColor.labelColor : NSColor.secondaryLabelColor]))
+            }
+            return text
+        }
+        let plan = panel.note.hasPrefix("Plan: ") ? String(panel.note.dropFirst(6)).capitalized : nil
+        let balance = panel.windows.first { $0.label == panel.name }
+        var lines = [line([(panel.name, true), (plan.map { " · " + $0 } ?? "", false), (balance?.right.map { "  " + $0 } ?? "", true),
+                           (balance?.stale == true ? " · cached" : "", false)])]
+        if let alert = panel.alert { lines.append(line([("⚠︎ " + alert, false)])) }
+        if showingWeek { lines.append(line([("Showing 7d" + (cached ? " · cached" : ""), false)])) }
+        if !panel.note.isEmpty && plan == nil && panel.note != panel.alert { lines.append(line([(panel.note, false)])) }
+        for row in rows {
+            // "96% left · ↻ 4h 11m" for a quota; "$0 / $20 · this month" for money, the part before the first dot in bold.
+            var parts = (row.right ?? "Unavailable").components(separatedBy: " · "), unit = ""
+            if let pct = row.pct {
+                parts = ["\(Int((100 - pct).rounded()))%"]; unit = " left"
+                if row.expired == true { parts.append("waiting for its reset") }
+                else if let reset = row.resets_at, reset > now { parts.append("↻ " + countdown(reset - now)) }
+            }
+            if row.stale == true { parts.append("cached") }
+            lines.append(line([(row.label + "\t", false), (parts[0], true), (unit + parts.dropFirst().map { " · " + $0 }.joined(), false)]))
+        }
+        return lines
     }
     /// Keeps the most recently used batteries in the menu bar, so a crowded bar or the notch never hides them silently.
     func arrange(_ ids: [String]) {
@@ -440,10 +505,11 @@ final class HUD: NSObject, NSApplicationDelegate {
     func showCells(_ id: String) {
         guard hovered == id, let panel = panels[id], !panel.cells.isEmpty, let button = items[id]?.button, button.window != nil else { return }
         // A refresh problem rides along too, since this panel replaces the tooltip that would have said so.
-        let lines = [panel.alert.map { "⚠︎ " + $0 }, panel.windows.first { $0.label == panel.name }.map { panel.name + " · " + ($0.right ?? "") },
-                     panel.cellsTitle, panel.note.isEmpty || panel.note == panel.alert ? nil : panel.note].compactMap { $0 }
+        let lines = [panel.alert.map { "⚠︎ " + $0 }, panel.note.isEmpty || panel.note == panel.alert ? nil : panel.note].compactMap { $0 }
+        let balance = panel.windows.first { $0.label == panel.name }?.right
         let controller = NSViewController()
-        controller.view = CellsView(lines: lines, rows: Array(panel.cells.prefix(8)))
+        controller.view = CellsView(title: panel.name + (balance.map { "  " + $0 } ?? ""), subtitle: panel.cellsTitle, lines: lines,
+                                    rows: Array(panel.cells.prefix(8)))
         popover.contentViewController = controller
         popover.contentSize = controller.view.frame.size
         popover.animates = false
@@ -566,10 +632,10 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.items["claude"]?.menu?.items.contains { $0.title == "Approve the sign-in in your browser…" } == true)
     delegate.signingIn = nil
     precondition(delegate.items["openrouter"]?.menu?.items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
-    precondition(CellsView(lines: ["a", "b"], rows: team.cells).frame.height == 92)
+    precondition(CellsView(title: "a", lines: ["b"], rows: team.cells).frame.height == 92)
     // The panel widens to show a whole reset time instead of cutting it off.
     let long = Window(label: "Guy1", pct: 0, right: "$0.00 of $5.00 today · resets in 7h 16m")
-    precondition(CellsView(lines: ["OpenRouter"], rows: [long]).frame.width > CellsView(lines: ["OpenRouter"], rows: [Window(label: "a", pct: 0, right: "$1")]).frame.width)
+    precondition(CellsView(title: "OpenRouter", rows: [long]).frame.width > CellsView(title: "OpenRouter", rows: [Window(label: "a", pct: 0, right: "$1")]).frame.width)
     // No tint may pass for the system battery's white.
     for id in ["codex", "claude", "glm", "antigravity", "grok", "vercel", "deepseek", "kimi", "openrouter", "other"] {
         let rgb = delegate.tint(id).usingColorSpace(.sRGB)!
@@ -588,11 +654,11 @@ if CommandLine.arguments.contains("--self-test") {
     let representation = NSBitmapImageRep(data: image.tiffRepresentation!)!
     try! representation.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("battery-preview.png"))
     // Candidate digit fonts, numbered, to compare against the system battery beside them in the menu bar.
-    // Tabular SF Pro around Medium, the closest match to macOS 27's own battery.
+    // Tabular SF Pro around Regular 10pt, measured from macOS 27's own battery; 6 is the previous default.
     let candidates: [(String, (CGFloat) -> NSFont)] = [
-        ("1 regular 11pt", { HUD.tabular($0 + 1.5, .regular) }), ("2 medium 10pt", { HUD.tabular($0 + 0.5, .medium) }),
-        ("3 medium 10.5pt", { HUD.tabular($0 + 1, .medium) }), ("4 medium 11pt (now)", { HUD.tabular($0 + 1.5, .medium) }),
-        ("5 medium 11.5pt", { HUD.tabular($0 + 2, .medium) }), ("6 semibold 11pt", { HUD.tabular($0 + 1.5, .semibold) })]
+        ("1 regular 10pt (now)", { HUD.tabular($0 + 0.5, .regular) }), ("2 regular 10.5pt", { HUD.tabular($0 + 1, .regular) }),
+        ("3 regular 9.5pt", { HUD.tabular($0, .regular) }), ("4 light 10pt", { HUD.tabular($0 + 0.5, .light) }),
+        ("5 medium 10pt", { HUD.tabular($0 + 0.5, .medium) }), ("6 medium 11pt (before)", { HUD.tabular($0 + 1.5, .medium) })]
     let samples = [Panel(id: "codex", name: "Codex", windows: [Window(label: "5h", pct: 30)]),
                    Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 0)]),
                    Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$26.25 left")])]
@@ -608,7 +674,7 @@ if CommandLine.arguments.contains("--self-test") {
     }
     sheet.unlockFocus()
     try! NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("font-preview.png"))
-    HUD.digitFont = candidates[3].1
+    HUD.digitFont = candidates[0].1
     print("Battery drawing and note-free menus passed; fonts: " + delegate.home.appendingPathComponent("font-preview.png").path)
     exit(0)
 }

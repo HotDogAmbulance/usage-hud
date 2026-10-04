@@ -27,9 +27,24 @@ func number(_ value: Any?) -> Double? {
     return result?.isFinite == true ? result : nil
 }
 func dict(_ value: Any?) -> JSON { value as? JSON ?? [:] }
-func usd(_ value: Double) -> String { String(format: "$%.2f", value) }
+/// "$20", "$1.25": whole amounts drop their cents, so "$0 / $20" reads at a glance.
+func money(_ value: Double, _ symbol: String = "$") -> String {
+    symbol + ((value * 100).rounded() == (value.rounded() * 100) ? String(Int(value.rounded())) : String(format: "%.2f", value))
+}
+func usd(_ value: Double) -> String { money(value) }
+/// Free quota resets a plan granted (Claude, Codex): how many, and the soonest expiry, as "2 · until Oct 23".
+func freeResetsRow(_ value: Any?, stale: Bool) -> Window? {
+    let resets = dict(value)
+    guard let left = number(resets["left"]), left >= 1 else { return nil }
+    var text = String(Int(left))
+    if let until = number(resets["until"]) {
+        let format = DateFormatter(); format.setLocalizedDateFormatFromTemplate("MMMd")
+        text += " · until " + format.string(from: Date(timeIntervalSince1970: until))
+    }
+    return Window(label: "Free resets", right: text, stale: stale)
+}
 /// "3h 12m" or "2d 5h"; never negative.
-func countdown(_ seconds: Double) -> String {
+public func countdown(_ seconds: Double) -> String {
     let minutes = max(0, Int(seconds / 60))
     return minutes >= 1440 ? "\(minutes / 1440)d \(minutes % 1440 / 60)h" : "\(minutes / 60)h \(minutes % 60)m"
 }

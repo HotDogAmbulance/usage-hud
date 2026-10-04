@@ -14,18 +14,20 @@ final class ClaudeProvider: UsageProvider {
     let id = "claude", name = "Claude", automatic = true
     /// Hidden until a first read or a Claude Code status line, so Codex-only people don't carry an empty battery.
     func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("claude.json").path) }
-    let cache: Cache, credentials: CredentialReading, http: HTTPReading
-    init(cache: Cache, credentials: CredentialReading, http: HTTPReading) {
-        self.cache = cache; self.credentials = credentials; self.http = http
+    let cache: Cache, credentials: CredentialReading, http: HTTPReading, home: URL
+    init(cache: Cache, credentials: CredentialReading, http: HTTPReading, home: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        self.cache = cache; self.credentials = credentials; self.http = http; self.home = home
     }
+    static let headers = ["anthropic-beta": "oauth-2025-04-20", "anthropic-version": "2023-06-01"]
     static func accessToken(_ text: String, now: Double = Date().timeIntervalSince1970) throws -> String {
         guard let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? JSON else {
             throw HUDProblem("Claude credential unreadable")
         }
         let oauth = (object["claudeAiOauth"] as? JSON) ?? object
         guard let token = oauth["accessToken"] as? String, !token.isEmpty else { throw HUDProblem("Claude token missing") }
-        // Claude Code renews its token while in use, so an old one only means it sat idle; nothing needs signing in.
-        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Claude Code is idle; this updates the next time you use it") }
+        // Claude Code renews its token while in use, in the CLI or the Claude app's Code tab; an old one only means it sat
+        // idle. Chat alone doesn't renew it. Nothing needs signing in.
+        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Updates when you next use Claude Code (CLI or the app's Code tab)") }
         return token
     }
     func refresh() throws {
@@ -36,8 +38,7 @@ final class ClaudeProvider: UsageProvider {
         let token = try Self.accessToken(credentials.password(service: "Claude Code-credentials", account: nil))
         let data: JSON
         do {
-            data = try http.get(URL(string: "https://api.anthropic.com/api/oauth/usage")!, token: token,
-                                headers: ["anthropic-beta": "oauth-2025-04-20", "anthropic-version": "2023-06-01"], limit: 1024 * 1024)
+            data = try http.get(URL(string: "https://api.anthropic.com/api/oauth/usage")!, token: token, headers: Self.headers, limit: 1024 * 1024)
         } catch let error as HTTPFailure {
             if error.status == 401 || error.status == 403 { throw HUDProblem("Claude needs sign-in: claude auth login", attention: true, fix: "claude auth login") }
             if error.status == 429 { throw HUDProblem("Claude usage endpoint throttled; retry later") }
@@ -54,7 +55,36 @@ final class ClaudeProvider: UsageProvider {
         if var credits = data["extra_usage"] as? JSON {
             credits["captured_at"] = Date().timeIntervalSince1970; extra["usage_credits"] = credits
         }
+        if now - (number(cache.read("claude.json")["extras_at"]) ?? 0) > 3600 { extra.merge(extras(token)) { _, new in new } }
         try cache.quota("claude.json", windows: windows, extra: extra)
+    }
+    /// Free resets and prepaid credits change rarely, so they're read hourly, the way Claude Code reads them; either one
+    /// failing just leaves its row out.
+    func extras(_ token: String) -> JSON {
+        var extras: JSON = ["extras_at": Date().timeIntervalSince1970]
+        if let usage = try? http.get(URL(string: "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")!, token: token,
+                                     headers: Self.headers, limit: 1024 * 1024), let status = usage["cedar_ember"] as? JSON {
+            let now = Date().timeIntervalSince1970
+            let grants = (status["grants"] as? [JSON] ?? []).filter {
+                $0["paused"] as? Bool != true && (number($0["resets_left"]) ?? 0) >= 1 && (resetTime($0["ends_at"]) ?? .infinity) > now
+            }
+            extras["free_resets"] = ["left": grants.compactMap { number($0["resets_left"]) }.reduce(0, +),
+                                     "until": grants.compactMap { resetTime($0["ends_at"]) }.min() as Any? ?? NSNull()]
+        }
+        if let organization = organization(),
+           let paid = try? http.get(URL(string: "https://api.anthropic.com/api/oauth/organizations/\(organization)/prepaid/credits")!, token: token,
+                                    headers: Self.headers.merging(["x-organization-uuid": organization], uniquingKeysWith: { $1 }), limit: 64 * 1024),
+           let amount = number(paid["amount"]) {
+            extras["prepaid"] = ["amount": amount, "currency": paid["currency"] as? String ?? "USD"]
+        }
+        return extras
+    }
+    /// The organization Claude Code signed in to, from its own config file (an id, not a secret).
+    func organization() -> String? {
+        guard let data = try? Data(contentsOf: home.appendingPathComponent(".claude.json")),
+              let id = dict(dict(try? JSONSerialization.jsonObject(with: data))["oauthAccount"])["organizationUuid"] as? String,
+              id.range(of: "^[0-9a-fA-F-]{36}$", options: .regularExpression) != nil else { return nil }
+        return id
     }
     func panel() -> Panel {
         let blob = cache.read("claude.json")
@@ -65,16 +95,19 @@ final class ClaudeProvider: UsageProvider {
             // Amounts are in minor units; `decimal_places` says how many, and cents when it is absent.
             let scale = pow(10, number(credits["decimal_places"]) ?? 2)
             let code = credits["currency"] as? String ?? "USD"
-            let money = { (value: Double) in (code == "USD" ? "$" : code + " ") + String(format: "%.2f", value / scale) }
-            if let limit = number(credits["monthly_limit"]), limit > 0 {
-                let percent = number(credits["utilization"]) ?? used / limit * 100
-                rows.append(Window(label: "extra usage", right: "\(money(used)) of \(money(limit)) this month · \(Int(percent.rounded()))%", stale: old))
-            } else {
-                rows.append(Window(label: "extra usage", right: "\(money(used)) spent this month", stale: old))
-            }
+            let amount = { (value: Double) in money(value / scale, code == "USD" ? "$" : code + " ") }
+            let limit = number(credits["monthly_limit"]).flatMap { $0 > 0 ? $0 : nil }
+            rows.append(Window(label: "Extra usage", right: amount(used) + (limit.map { " / " + amount($0) } ?? "") + " · this month", stale: old))
         } else if credits["user_disabled"] as? Bool == true || credits["credits_ever_enabled"] as? Bool == true {
-            rows.append(Window(label: "extra usage", right: "Off", stale: old))
+            rows.append(Window(label: "Extra usage", right: "Off", stale: old))
         }
+        let extrasOld = Date().timeIntervalSince1970 - (number(blob["extras_at"]) ?? 0) > 7200
+        let prepaid = dict(blob["prepaid"])
+        if let cents = number(prepaid["amount"]) {
+            let code = prepaid["currency"] as? String ?? "USD"
+            rows.append(Window(label: "Balance", right: money(cents / 100, code == "USD" ? "$" : code + " "), stale: extrasOld))
+        }
+        if let resets = freeResetsRow(blob["free_resets"], stale: extrasOld) { rows.append(resets) }
         return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Refresh Claude to read quota" : "")
     }
 }
@@ -119,7 +152,15 @@ final class CodexProvider: UsageProvider {
         try rpc.send(["id": 2, "method": "account/rateLimits/read"])
         let response = try rpc.receive(2), bucket = try Self.bucket(response)
         try cache.quota("codex-quota.json", windows: Self.windows(response), extra: ["source": "standalone-cli",
-            "plan": bucket["planType"] ?? NSNull(), "subscription_credits": bucket["credits"] ?? NSNull()])
+            "plan": bucket["planType"] ?? NSNull(), "subscription_credits": bucket["credits"] ?? NSNull(),
+            "free_resets": Self.freeResets(response) as Any? ?? NSNull()])
+    }
+    /// The usage-limit resets ChatGPT grants, from the same read: how many, and when the soonest one expires.
+    static func freeResets(_ response: JSON) -> JSON? {
+        let grants = dict(response["rateLimitResetCredits"])
+        guard let left = number(grants["availableCount"]) else { return nil }
+        let expiries = (grants["credits"] as? [JSON] ?? []).filter { ($0["status"] as? String ?? "available") == "available" }.compactMap { number($0["expiresAt"]) }
+        return ["left": left, "until": expiries.min() as Any? ?? NSNull()]
     }
     func panel() -> Panel {
         let blob = cache.read("codex-quota.json"), plan = blob["plan"] as? String
@@ -127,13 +168,13 @@ final class CodexProvider: UsageProvider {
         if ["pro", "prolite"].contains(plan ?? "") { rows.removeAll { $0.label == "5h" } }
         let purchased = dict(blob["subscription_credits"])
         let old = Date().timeIntervalSince1970 - (number(blob["captured_at"]) ?? 0) > 600
+        // Purchased credits show only when there are some; an empty balance is the normal case, not news.
         if purchased["unlimited"] as? Bool == true {
-            rows.append(Window(label: "Codex credits", right: "Unlimited credits", stale: old))
-        } else if let balance = number(purchased["balance"]), balance >= 0 {
-            rows.append(Window(label: "Codex credits", right: String(format: "%g credits left", balance), stale: old))
-        } else if purchased["hasCredits"] as? Bool == false {
-            rows.append(Window(label: "Codex credits", right: "No purchased credits", stale: old))
+            rows.append(Window(label: "Credits", right: "Unlimited", stale: old))
+        } else if let balance = number(purchased["balance"]), balance > 0 {
+            rows.append(Window(label: "Credits", right: String(format: "%g", balance), stale: old))
         }
+        if let resets = freeResetsRow(blob["free_resets"], stale: old) { rows.append(resets) }
         if let credit = credits.row() { rows.append(credit) }
         return Panel(id: id, name: name, windows: rows, note: plan.map { "Plan: " + $0 } ?? (rows.isEmpty ? "Refresh Codex to read quota" : ""))
     }
@@ -232,8 +273,8 @@ final class OpenRouterProvider: UsageProvider {
         }
         let period = row["limit_reset"] as? String
         let remaining = max(0, number(row["limit_remaining"]) ?? limit - usage), left = remaining / limit
-        let reset = nextReset(period).map { " · resets in " + countdown($0.timeIntervalSinceNow) } ?? ""
-        let text = "\(usd(limit - remaining)) of \(usd(limit)) " + (periodName[period ?? ""] ?? "cap") + reset
+        let reset = nextReset(period).map { " · ↻ " + countdown($0.timeIntervalSinceNow) } ?? ""
+        let text = "\(usd(limit - remaining)) / \(usd(limit)) " + (periodName[period ?? ""] ?? "cap") + reset
         return (Window(label: label, pct: (1 - left) * 100, right: text, stale: old), left,
                 left > 0.1 ? nil : remaining <= 0 ? "cap reached" : "near its cap")
     }
