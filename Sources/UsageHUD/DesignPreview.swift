@@ -46,6 +46,19 @@ enum DesignPreview {
             text("#0117BE → #5B3FD1", 268, 43)
             text("Hai màu brand trong cùng một quota", 268, 23, size: 11)
         }
+        try save("quota-cells-preview.png", size: NSSize(width: 860, height: 225)) {
+            text("Same quota cells · hover and overflow submenu", 24, 185, size: 18, strong: true)
+            let router = Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$24 left")],
+                               cells: [Window(label: "Research", pct: 0, right: "$0 / $5 · ↻ 4h"), Window(label: "Production", pct: 20, right: "$20 / $100 · ↻ 4h")], cellsTitle: "2 keys")
+            let gravity = Panel(id: "antigravity", name: "Antigravity", cells: [Window(label: "Gemini", pct: 84, right: "↻ 5d 23h"), Window(label: "Claude & GPT", pct: 24, right: "↻ 5d 23h")], cellsTitle: "14 models")
+            for x: CGFloat in [18, 445] {
+                NSColor(srgbRed: 0.17, green: 0.18, blue: 0.19, alpha: 1).setFill()
+                NSBezierPath(roundedRect: NSRect(x: x, y: 59, width: 397, height: 99), xRadius: 10, yRadius: 10).fill()
+            }
+            preview(hud.cellsView(router, inMenu: true), at: NSPoint(x: 24, y: 81))
+            preview(hud.cellsView(gravity), at: NSPoint(x: 451, y: 81))
+            text("Native neutral fill · yellow/red warnings retained · simulated readings", 24, 24, size: 12)
+        }
         // Read existing menu-bar glyphs, never substitute a square application icon.
         func glyph(_ path: String, at point: NSPoint, size: CGFloat = 18) {
             guard let source = NSImage(contentsOfFile: path) else { return }

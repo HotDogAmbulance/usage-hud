@@ -13,7 +13,7 @@ final class HoverTracker: NSResponder {
 }
 
 /// The hover panel for providers with per-key detail: the name in bold with a short grey summary beside it, any problem
-/// below, then one small battery per key or pool, green while plenty is left, yellow under 30%, red under 10% (where your
+/// below, then one small battery per key or pool, white while plenty is left, yellow under 30%, red under 10% (where your
 /// own keys start to pulse). It sizes itself to its text.
 final class CellsView: NSView {
     let title: String, subtitle: String, lines: [String], rows: [Window]
@@ -21,9 +21,10 @@ final class CellsView: NSView {
     static let body: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor]
     let nameWidth: CGFloat, titleWidth: CGFloat
     let allCached: Bool, more: Int
+    let moreHint: String
     func detail(_ row: Window) -> String { (row.right ?? "") + (row.isCached && !allCached ? " · cached" : "") }
-    init(title: String, subtitle: String? = nil, lines: [String] = [], rows: [Window], more: Int = 0, allReadingsCached: Bool? = nil) {
-        self.title = title; self.lines = lines; self.rows = rows; self.more = more
+    init(title: String, subtitle: String? = nil, lines: [String] = [], rows: [Window], more: Int = 0, allReadingsCached: Bool? = nil, moreHint: String = "click battery for all") {
+        self.title = title; self.lines = lines; self.rows = rows; self.more = more; self.moreHint = moreHint
         let allOld = allReadingsCached ?? (!rows.isEmpty && rows.allSatisfy(\.isCached))
         allCached = allOld
         self.subtitle = (subtitle ?? "") + (allCached ? (subtitle?.isEmpty == false ? " · cached" : "cached") : "")
@@ -33,10 +34,11 @@ final class CellsView: NSView {
         let text = max(titleWidth + 8 + width(self.subtitle, Self.body), lines.map { width($0, Self.body) }.max() ?? 0,
                        nameWidth + 54 + (rows.map { width(($0.right ?? "") + ($0.isCached && !allOld ? " · cached" : ""), Self.body) }.max() ?? 0))
         super.init(frame: NSRect(x: 0, y: 0, width: min(560, max(220, text + 24)), height: CGFloat(18 + lines.count * 18 + rows.count * 20 + (more > 0 ? 18 : 0) + 16)))
+        autoresizingMask = [.width]
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel(title + (self.subtitle.isEmpty ? "" : ", " + self.subtitle))
-        let spoken: [String] = lines + rows.map(\.accessibilityReading) + (more > 0 ? ["\(more) more. Click battery for all."] : [])
+        let spoken: [String] = lines + rows.map(\.accessibilityReading) + (more > 0 ? ["\(more) more. " + moreHint + "."] : [])
         let children = spoken.enumerated().map { index, label in
             let element = NSAccessibilityElement.element(withRole: .staticText, frame: .zero, label: label, parent: self) as! NSAccessibilityElement
             let y = index < lines.count ? 26 + index * 18 : 26 + lines.count * 18 + (index - lines.count) * 20
@@ -49,7 +51,7 @@ final class CellsView: NSView {
     }
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
-    static func color(left: Double) -> NSColor { left <= 0.1 ? .systemRed : left <= 0.3 ? .systemYellow : .systemGreen }
+    static func color(left: Double) -> NSColor { left <= 0.1 ? .systemRed : left <= 0.3 ? .systemYellow : .labelColor }
     
     override func draw(_ dirtyRect: NSRect) {
         let clip = NSMutableParagraphStyle(); clip.lineBreakMode = .byTruncatingTail
@@ -86,7 +88,7 @@ final class CellsView: NSView {
             (detail(row) as NSString).draw(in: NSRect(x: x + 46, y: y + 2, width: bounds.width - x - 58, height: 16), withAttributes: body)
             y += 20
         }
-        if more > 0 { ("\(more) more · click battery for all" as NSString).draw(in: NSRect(x: 12, y: y + 2, width: width, height: 16), withAttributes: body) }
+        if more > 0 { ("\(more) more · " + moreHint as NSString).draw(in: NSRect(x: 12, y: y + 2, width: width, height: 16), withAttributes: body) }
     }
 }
 
@@ -476,12 +478,26 @@ class HUD: NSObject, NSApplicationDelegate {
         item.button?.setAccessibilityHelp(([panel.alert, panel.note.isEmpty ? nil : panel.note,
             "Click for usage details and refresh actions"].compactMap { $0 }).joined(separator: ". "))
         updatePulse()
+        item.menu = providerMenu(panel)
+        if hovered == panel.id && popover.isShown { showCells(panel.id) }
+    }
+    /// Construct a fresh menu for both the status item and overflow: copying an NSMenu archives its views.
+    func providerMenu(_ panel: Panel) -> NSMenu {
+        let displayed = displayedQuota(panel)
+        let balance = panel.windows.first { $0.label == panel.name }
+        let cached = displayed?.isCached == true || balance?.isCached == true
         let menu = NSMenu()
-        for line in HUD.menuLines(panel, showingWeek: displayed?.label == "7d", cached: cached) {
-            menu.addItem(withTitle: line.string, action: nil, keyEquivalent: "").attributedTitle = line
+        if !panel.cells.isEmpty {
+            let detail = NSMenuItem(title: panel.name + " usage", action: nil, keyEquivalent: "")
+            detail.view = cellsView(panel, inMenu: true)
+            menu.addItem(detail)
+        } else {
+            for line in HUD.menuLines(panel, showingWeek: displayed?.label == "7d", cached: cached) {
+                menu.addItem(withTitle: line.string, action: nil, keyEquivalent: "").attributedTitle = line
+            }
         }
-        // A submenu only when the hover holds keys the menu doesn't already list (a team's keys).
-        if panel.cells.contains(where: { cell in !panel.windows.contains { $0.label == cell.label } }) {
+        // Keep complete names available when the compact view truncates labels or limits rows.
+        if panel.cells.contains(where: { cell in !panel.windows.contains { $0.label == cell.label } }) || panel.cells.count > 8 || panel.cells.contains(where: { ($0.label as NSString).size(withAttributes: CellsView.body).width > 140 }) {
             let all = NSMenu()
             for cell in panel.cells { all.addItem(withTitle: cell.label + " · " + (cell.right ?? "") + (cell.isCached ? " · cached" : ""), action: nil, keyEquivalent: "") }
             menu.addItem(withTitle: (panel.id == "openrouter" ? "All keys" : "All budgets") + " (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
@@ -507,8 +523,7 @@ class HUD: NSObject, NSApplicationDelegate {
             menu.addItem(withTitle: "Update available: " + update.tag + "…", action: #selector(openUpdate), keyEquivalent: "").target = self
         }
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
-        item.menu = menu
-        if hovered == panel.id && popover.isShown { showCells(panel.id) }
+        return menu
     }
     /// The menu's reading, kept short: the name in bold (with its plan or balance), then one line per window with its
     /// value in bold and grey detail after it, values lined up on a tab stop. "↻ 4h 11m" is when it refills.
@@ -584,21 +599,33 @@ class HUD: NSObject, NSApplicationDelegate {
             let balance = panel.windows.first { $0.label == panel.name }?.right
             let entry = menu.addItem(withTitle: panel.name + (balance.map { "  " + $0 } ?? ""), action: nil, keyEquivalent: "")
             entry.image = icon(panel)
-            entry.submenu = items[id]?.menu?.copy() as? NSMenu
+            entry.submenu = providerMenu(panel)
         }
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
         item.menu = menu
     }
+    /// One presentation of keys/pools/budgets, whether the provider is visible or folded into overflow.
+    func cellsView(_ panel: Panel, inMenu: Bool = false) -> CellsView {
+        var lines = [panel.alert.map { "⚠︎ " + $0 }, panel.note.isEmpty || panel.note == panel.alert ? nil : panel.note].compactMap { $0 }
+        let balance = panel.windows.first { $0.label == panel.name }
+        // Retain any additional accounting lines that the key/pool rows do not already describe.
+        for row in panel.windows where row.label != panel.name && row.pct == nil && row.label != "Team" {
+            if let value = row.right, !panel.cells.contains(where: { $0.label == row.label || $0.right?.hasPrefix(value) == true }) {
+                lines.append(row.label + ": " + value + (row.isCached ? " · cached" : ""))
+            }
+        }
+        let allOld = panel.cells.allSatisfy(\.isCached)
+        let balanceCached = balance?.isCached == true && !allOld ? " · cached" : ""
+        return CellsView(title: panel.name + (balance?.right.map { "  " + $0 + balanceCached } ?? ""), subtitle: panel.cellsTitle, lines: lines,
+                         rows: Array(panel.cells.prefix(8)), more: max(0, panel.cells.count - 8), allReadingsCached: allOld,
+                         moreHint: inMenu ? (panel.id == "openrouter" ? "All keys below" : "All budgets below") : "click battery for all")
+    }
     /// Opens the per-key panel under a battery that is still hovered.
     func showCells(_ id: String) {
         guard hovered == id, let panel = panels[id], !panel.cells.isEmpty, let button = items[id]?.button, button.window != nil else { return }
-        // A refresh problem rides along too, since this panel replaces the tooltip that would have said so.
-        let lines = [panel.alert.map { "⚠︎ " + $0 }, panel.note.isEmpty || panel.note == panel.alert ? nil : panel.note].compactMap { $0 }
-        let balance = panel.windows.first { $0.label == panel.name }?.right
         let controller = NSViewController()
-        controller.view = CellsView(title: panel.name + (balance.map { "  " + $0 } ?? ""), subtitle: panel.cellsTitle, lines: lines,
-                                    rows: Array(panel.cells.prefix(8)), more: max(0, panel.cells.count - 8), allReadingsCached: panel.cells.allSatisfy(\.isCached))
+        controller.view = cellsView(panel)
         popover.contentViewController = controller
         popover.contentSize = controller.view.frame.size
         popover.animates = false
@@ -712,6 +739,19 @@ if CommandLine.arguments.contains("--self-test") {
                      cells: [Window(label: "k7", pct: 96, right: "$4.80 of $5.00 today"), Window(label: "k8", right: "$1.00 today")], cellsTitle: "2 keys")
     delegate.render(team)
     precondition(delegate.items["openrouter"]?.button?.toolTip == nil)
+    let visibleDetail = delegate.items["openrouter"]?.menu?.items.first?.view as? CellsView
+    precondition(visibleDetail?.rows.count == 2 && visibleDetail?.rows.first?.pct == 96)
+    delegate.shelf = Shelf()
+    delegate.arrange(["codex", "claude", "glm", "openrouter"])
+    let hiddenMenu = delegate.overflow?.menu?.items.first { $0.title.hasPrefix("OpenRouter") }?.submenu
+    let hiddenDetail = hiddenMenu?.items.first?.view as? CellsView
+    precondition(hiddenDetail?.rows.count == 2 && hiddenDetail !== visibleDetail)
+    precondition(hiddenMenu?.items.contains { $0.title == "Refresh OpenRouter" && $0.action != nil } == true)
+    precondition(hiddenMenu?.items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
+    let many = Panel(id: "openrouter", name: "OpenRouter", cells: (1...12).map { Window(label: "Key \($0)", pct: Double($0)) })
+    let manyMenu = delegate.providerMenu(many)
+    precondition((manyMenu.items.first?.view as? CellsView)?.moreHint == "All keys below")
+    precondition(manyMenu.items.contains { $0.title == "All keys (12)" && $0.submenu?.items.count == 12 })
     // A sign-in problem offers its harmless fix in the menu and says so on hover.
     var signedOut = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 20)], note: "Claude needs sign-in")
     signedOut.fix = "claude auth login"
@@ -742,7 +782,7 @@ if CommandLine.arguments.contains("--self-test") {
         let chroma = max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) - min(rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
         precondition(0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] <= 0.5 || chroma >= 0.3, id + " is too close to white")
     }
-    precondition(CellsView.color(left: 0.05) == .systemRed && CellsView.color(left: 0.2) == .systemYellow && CellsView.color(left: 0.9) == .systemGreen)
+    precondition(CellsView.color(left: 0.05) == .systemRed && CellsView.color(left: 0.2) == .systemYellow && CellsView.color(left: 0.9) == .labelColor)
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))

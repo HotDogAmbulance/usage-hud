@@ -24,6 +24,8 @@ OpenRouter shows **dollars left**. Its lime body gives the balance a readable ho
 
 By default, at most three provider batteries sit in the menu bar to limit the space the HUD takes. The HUD learns which tools you use most and keeps those, whatever your main tools are, so one you only tried today doesn't push them out; the most used one takes the first spot when the app starts. The rest fold into a small **stacked-battery** item, and resting the pointer on it opens their batteries and menus. To show more or fewer, run `defaults write local.usage-hud visibleBatteries 4`.
 
+Detailed key/pool/budget cells use the same layout in hover panels and overflow submenus. Their healthy fill is white in dark appearance and dark in light appearance, with yellow/red warnings for low headroom. Sources that report only a balance keep their currency reading.
+
 On a light menu bar the batteries switch to dark outlines, and every colour stays deep enough never to pass for the Mac's own battery. Claude's extra usage (spent, cap, or Off) appears in the hover text with any other money rows.
 
 A battery that needs you breathes a soft red: a key rejected or signed out, an OpenRouter key near its cap, or a balance under $1 (change it with `defaults write local.usage-hud lowBalance 5`). Hover over it to read why; it stays calm until something new happens. OpenRouter keys show their own daily, weekly or monthly cap and when it resets, counted in UTC like OpenRouter itself, with the key closest to its cap first.
