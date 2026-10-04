@@ -115,9 +115,9 @@ final class OpenAICredits {
     func row() -> Window? {
         let blob = cache.read("codex.json")
         guard let balance = number(blob["balance"]) else { return nil }
-        if let error = blob["error"] as? String { return Window(label: "credits", right: "Cached · " + error, stale: true) }
-        let text = usd(balance) + (blob["manual"] as? Bool == true ? " left (manual)" : blob["live_estimate"] as? Bool == true ? " live est." : " left")
+        if let error = blob["error"] as? String { return Window(label: "OpenAI API", right: usd(balance) + " · " + error, stale: true) }
+        let text = usd(balance) + (blob["manual"] as? Bool == true ? " · set by hand" : blob["live_estimate"] as? Bool == true ? " · estimate" : "")
         let expiry: Double = blob["live_estimate"] as? Bool == true ? 600 : 21600
-        return Window(label: "credits", right: text, stale: Date().timeIntervalSince1970 - (number(blob["captured_at"]) ?? 0) > expiry)
+        return Window(label: "OpenAI API", right: text, stale: Date().timeIntervalSince1970 - (number(blob["captured_at"]) ?? 0) > expiry)
     }
 }

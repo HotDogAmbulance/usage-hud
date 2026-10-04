@@ -27,15 +27,29 @@ func number(_ value: Any?) -> Double? {
     return result?.isFinite == true ? result : nil
 }
 func dict(_ value: Any?) -> JSON { value as? JSON ?? [:] }
-func usd(_ value: Double) -> String { String(format: "$%.2f", value) }
+/// "$20", "$1.25": whole amounts drop their cents, so "$0 / $20" reads at a glance.
+func money(_ value: Double, _ symbol: String = "$") -> String {
+    symbol + ((value * 100).rounded() == (value.rounded() * 100) ? String(format: "%.0f", value) : String(format: "%.2f", value))
+}
+func usd(_ value: Double) -> String { money(value) }
+/// Free quota resets a plan granted (Claude, Codex): how many, and the soonest expiry, as "2 · ends in 5d 7h".
+func freeResetsRow(_ value: Any?, stale: Bool) -> Window? {
+    let resets = dict(value)
+    guard let left = number(resets["left"]), left >= 1 else { return nil }
+    var text = String(format: "%.0f", left.rounded(.towardZero))
+    // Shown only when there is one; the countdown to its expiry, like the other reset times.
+    if let until = number(resets["until"]), until > Date().timeIntervalSince1970 { text += " · ends in " + countdown(until - Date().timeIntervalSince1970) }
+    return Window(label: "Free resets", right: text, stale: stale)
+}
 /// "3h 12m" or "2d 5h"; never negative.
-func countdown(_ seconds: Double) -> String {
-    let minutes = max(0, Int(seconds / 60))
+public func countdown(_ seconds: Double) -> String {
+    let minutes = seconds.isFinite ? Int(max(0, min(Double(Int.max / 2), seconds / 60))) : 0
     return minutes >= 1440 ? "\(minutes / 1440)d \(minutes % 1440 / 60)h" : "\(minutes / 60)h \(minutes % 60)m"
 }
 func resetTime(_ value: Any?) -> Double? {
     if let n = number(value) { return n }
-    guard let text = value as? String else { return nil }
+    // Some APIs send nanoseconds ("…13.716839300Z"); the formatter wants at most milliseconds.
+    guard let text = (value as? String)?.replacingOccurrences(of: #"(\.\d{3})\d+"#, with: "$1", options: .regularExpression) else { return nil }
     let format = ISO8601DateFormatter()
     format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return (format.date(from: text) ?? ISO8601DateFormatter().date(from: text))?.timeIntervalSince1970
@@ -48,6 +62,27 @@ public struct Window: Codable {
     public let resets_at: Double?
     public let expired: Bool?
     public var stale: Bool?
+    /// A reading is cached when the source is stale or its advertised reset has passed.
+    public var isCached: Bool { stale == true || expired == true }
+    /// Plain text for VoiceOver and custom-drawn rows; `pct` is used, while the battery shows remaining.
+    public var accessibilityReading: String {
+        let span = label == "5h" ? "five-hour window" : label == "7d" ? "seven-day window" : label
+        var parts = [span]
+        if let pct = pct { parts.append(String(Int(max(0, min(100, 100 - pct)).rounded())) + " percent remaining") }
+        if let right = right, !right.isEmpty {
+            let spoken = right.replacingOccurrences(of: #"\$(-?[0-9]+(?:\.[0-9]+)?)"#, with: "$1 US dollars", options: .regularExpression)
+                .replacingOccurrences(of: "¥", with: "Chinese yuan ")
+                .replacingOccurrences(of: "↻", with: "resets in")
+            parts.append(spoken)
+        }
+        if let reset = resets_at, reset > Date().timeIntervalSince1970,
+           right?.contains("↻") != true && right?.localizedCaseInsensitiveContains("reset") != true {
+            parts.append("resets in " + countdown(reset - Date().timeIntervalSince1970))
+        }
+        if isCached { parts.append("cached") }
+        if expired == true { parts.append("waiting for its reset") }
+        return parts.joined(separator: ", ")
+    }
     public init(label: String, pct: Double? = nil, right: String? = nil, resets_at: Double? = nil,
                 expired: Bool? = false, stale: Bool? = false) {
         self.label = label; self.pct = pct; self.right = right; self.resets_at = resets_at
@@ -65,16 +100,18 @@ public struct Panel: Codable {
     public var cells: [Window]
     /// A one-line overview above the cells, such as "23 keys · $41.20 today · 3 near cap".
     public var cellsTitle: String?
-    /// The full list behind the cells, when the cells summarise it (Antigravity's models behind their quota pools).
-    public var details: [Window]
     /// The window the battery shows, when the provider knows better than the 5h/7d rule; shown dimmed once cached.
     public var lead: String?
+    /// Something worth knowing but not urgent (a balance getting low): the battery turns amber, without pulsing.
+    public var caution: String?
+    /// For a balance battery: the share (0...1) of the tightest key cap still free, which sets how full the body is.
+    public var gauge: Double?
     /// A command that fixes the current problem, from the provider; the menu can run it in Terminal.
     public var fix: String?
     public init(id: String, name: String, windows: [Window] = [], note: String = "", alert: String? = nil,
-                cells: [Window] = [], cellsTitle: String? = nil, details: [Window] = [], lead: String? = nil) {
+                cells: [Window] = [], cellsTitle: String? = nil, lead: String? = nil) {
         self.id = id; self.name = name; self.windows = windows; self.note = note; self.alert = alert
-        self.cells = cells; self.cellsTitle = cellsTitle; self.details = details; self.lead = lead
+        self.cells = cells; self.cellsTitle = cellsTitle; self.lead = lead
     }
     public var displayedQuota: Window? {
         if let lead = lead, let window = windows.first(where: { $0.label == lead && $0.pct != nil }) { return window }
@@ -145,7 +182,7 @@ func quotaWindows(_ blob: JSON, now: Double = Date().timeIntervalSince1970) -> [
         guard let pct = number(value["used_percentage"]) ?? number(value["used_percent"]) else { continue }
         let minutes = number(value["window_minutes"])
         var label = labels[key] ?? key.replacingOccurrences(of: "_", with: " ")
-        if let minutes = minutes, minutes > 0 {
+        if let minutes = minutes, minutes > 0, minutes < Double(Int.max) {
             label = minutes.truncatingRemainder(dividingBy: 10080) == 0 ? "\(Int(minutes / 1440))d" :
                     minutes.truncatingRemainder(dividingBy: 1440) == 0 ? "\(Int(minutes / 1440))d" :
                     minutes.truncatingRemainder(dividingBy: 60) == 0 ? "\(Int(minutes / 60))h" : "\(Int(minutes))m"

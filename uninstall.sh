@@ -17,7 +17,7 @@ done
 APP="$DEST/$APP_NAME.app"
 STATE_DIR="${USAGE_HUD_HOME:-$HOME/.usage-hud}"
 BINARY="$APP/Contents/MacOS/usagehud"
-if [ -x "$BINARY" ]; then "$BINARY" --stop-running "$BINARY"; fi
+if [ -x "$BINARY" ]; then "$BINARY" --stop-running "$BINARY"; USAGE_HUD_HOME="$STATE_DIR" "$BINARY" --disconnect-claude-code || true; fi
 rm -rf "$APP"
 rm -f "$STATE_DIR/usagehud"
 if [ "$PURGE" -eq 1 ]; then
@@ -25,4 +25,3 @@ if [ "$PURGE" -eq 1 ]; then
     rm -rf "$STATE_DIR"
 fi
 echo 'Removed Usage HUD. Provider credentials were not changed.'
-echo 'Remove any Usage HUD hooks from Claude settings if no longer needed.'

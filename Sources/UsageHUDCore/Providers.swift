@@ -14,18 +14,20 @@ final class ClaudeProvider: UsageProvider {
     let id = "claude", name = "Claude", automatic = true
     /// Hidden until a first read or a Claude Code status line, so Codex-only people don't carry an empty battery.
     func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("claude.json").path) }
-    let cache: Cache, credentials: CredentialReading, http: HTTPReading
-    init(cache: Cache, credentials: CredentialReading, http: HTTPReading) {
-        self.cache = cache; self.credentials = credentials; self.http = http
+    let cache: Cache, credentials: CredentialReading, http: HTTPReading, home: URL
+    init(cache: Cache, credentials: CredentialReading, http: HTTPReading, home: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        self.cache = cache; self.credentials = credentials; self.http = http; self.home = home
     }
+    static let headers = ["anthropic-beta": "oauth-2025-04-20", "anthropic-version": "2023-06-01"]
     static func accessToken(_ text: String, now: Double = Date().timeIntervalSince1970) throws -> String {
         guard let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? JSON else {
             throw HUDProblem("Claude credential unreadable")
         }
         let oauth = (object["claudeAiOauth"] as? JSON) ?? object
         guard let token = oauth["accessToken"] as? String, !token.isEmpty else { throw HUDProblem("Claude token missing") }
-        // Claude Code renews its token while in use, so an old one only means it sat idle; nothing needs signing in.
-        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Claude Code is idle; this updates the next time you use it") }
+        // Claude Code renews its token while in use, in the CLI or the Claude app's Code tab; an old one only means it sat
+        // idle. Chat alone doesn't renew it. Nothing needs signing in.
+        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Updates when you next use Claude Code (CLI or the app's Code tab)") }
         return token
     }
     func refresh() throws {
@@ -36,8 +38,7 @@ final class ClaudeProvider: UsageProvider {
         let token = try Self.accessToken(credentials.password(service: "Claude Code-credentials", account: nil))
         let data: JSON
         do {
-            data = try http.get(URL(string: "https://api.anthropic.com/api/oauth/usage")!, token: token,
-                                headers: ["anthropic-beta": "oauth-2025-04-20", "anthropic-version": "2023-06-01"], limit: 1024 * 1024)
+            data = try http.get(URL(string: "https://api.anthropic.com/api/oauth/usage")!, token: token, headers: Self.headers, limit: 1024 * 1024)
         } catch let error as HTTPFailure {
             if error.status == 401 || error.status == 403 { throw HUDProblem("Claude needs sign-in: claude auth login", attention: true, fix: "claude auth login") }
             if error.status == 429 { throw HUDProblem("Claude usage endpoint throttled; retry later") }
@@ -54,7 +55,27 @@ final class ClaudeProvider: UsageProvider {
         if var credits = data["extra_usage"] as? JSON {
             credits["captured_at"] = Date().timeIntervalSince1970; extra["usage_credits"] = credits
         }
+        if now - (number(cache.read("claude.json")["extras_at"]) ?? 0) > 3600 { extra.merge(extras(token)) { _, new in new } }
         try cache.quota("claude.json", windows: windows, extra: extra)
+    }
+    /// The prepaid balance changes rarely, so it is read hourly, the way Claude Code reads it; a failure just leaves the row out.
+    /// (Claude's free resets are not read: the server only answers them for Claude Code's own client identity.)
+    func extras(_ token: String) -> JSON {
+        var extras: JSON = ["extras_at": Date().timeIntervalSince1970]
+        if let organization = organization(),
+           let paid = try? http.get(URL(string: "https://api.anthropic.com/api/oauth/organizations/\(organization)/prepaid/credits")!, token: token,
+                                    headers: Self.headers.merging(["x-organization-uuid": organization], uniquingKeysWith: { $1 }), limit: 64 * 1024),
+           let amount = number(paid["amount"]) {
+            extras["prepaid"] = ["amount": amount, "currency": paid["currency"] as? String ?? "USD"]
+        }
+        return extras
+    }
+    /// The organization Claude Code signed in to, from its own config file (an id, not a secret).
+    func organization() -> String? {
+        guard let data = try? Data(contentsOf: home.appendingPathComponent(".claude.json")),
+              let id = dict(dict(try? JSONSerialization.jsonObject(with: data))["oauthAccount"])["organizationUuid"] as? String,
+              id.range(of: "^[0-9a-fA-F-]{36}$", options: .regularExpression) != nil else { return nil }
+        return id
     }
     func panel() -> Panel {
         let blob = cache.read("claude.json")
@@ -65,15 +86,17 @@ final class ClaudeProvider: UsageProvider {
             // Amounts are in minor units; `decimal_places` says how many, and cents when it is absent.
             let scale = pow(10, number(credits["decimal_places"]) ?? 2)
             let code = credits["currency"] as? String ?? "USD"
-            let money = { (value: Double) in (code == "USD" ? "$" : code + " ") + String(format: "%.2f", value / scale) }
-            if let limit = number(credits["monthly_limit"]), limit > 0 {
-                let percent = number(credits["utilization"]) ?? used / limit * 100
-                rows.append(Window(label: "extra usage", right: "\(money(used)) of \(money(limit)) this month · \(Int(percent.rounded()))%", stale: old))
-            } else {
-                rows.append(Window(label: "extra usage", right: "\(money(used)) spent this month", stale: old))
-            }
+            let amount = { (value: Double) in money(value / scale, code == "USD" ? "$" : code + " ") }
+            let limit = number(credits["monthly_limit"]).flatMap { $0 > 0 ? $0 : nil }
+            rows.append(Window(label: "Extra usage", right: amount(used) + (limit.map { " / " + amount($0) } ?? "") + " · this month", stale: old))
         } else if credits["user_disabled"] as? Bool == true || credits["credits_ever_enabled"] as? Bool == true {
-            rows.append(Window(label: "extra usage", right: "Off", stale: old))
+            rows.append(Window(label: "Extra usage", right: "Off", stale: old))
+        }
+        let extrasOld = Date().timeIntervalSince1970 - (number(blob["extras_at"]) ?? 0) > 7200
+        let prepaid = dict(blob["prepaid"])
+        if let cents = number(prepaid["amount"]) {
+            let code = prepaid["currency"] as? String ?? "USD"
+            rows.append(Window(label: "Balance", right: money(cents / 100, code == "USD" ? "$" : code + " "), stale: extrasOld))
         }
         return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Refresh Claude to read quota" : "")
     }
@@ -119,7 +142,15 @@ final class CodexProvider: UsageProvider {
         try rpc.send(["id": 2, "method": "account/rateLimits/read"])
         let response = try rpc.receive(2), bucket = try Self.bucket(response)
         try cache.quota("codex-quota.json", windows: Self.windows(response), extra: ["source": "standalone-cli",
-            "plan": bucket["planType"] ?? NSNull(), "subscription_credits": bucket["credits"] ?? NSNull()])
+            "plan": bucket["planType"] ?? NSNull(), "subscription_credits": bucket["credits"] ?? NSNull(),
+            "free_resets": Self.freeResets(response) as Any? ?? NSNull()])
+    }
+    /// The usage-limit resets ChatGPT grants, from the same read: how many, and when the soonest one expires.
+    static func freeResets(_ response: JSON) -> JSON? {
+        let grants = dict(response["rateLimitResetCredits"])
+        guard let left = number(grants["availableCount"]) else { return nil }
+        let expiries = (grants["credits"] as? [JSON] ?? []).filter { ($0["status"] as? String ?? "available") == "available" }.compactMap { number($0["expiresAt"]) }
+        return ["left": left, "until": expiries.min() as Any? ?? NSNull()]
     }
     func panel() -> Panel {
         let blob = cache.read("codex-quota.json"), plan = blob["plan"] as? String
@@ -127,13 +158,13 @@ final class CodexProvider: UsageProvider {
         if ["pro", "prolite"].contains(plan ?? "") { rows.removeAll { $0.label == "5h" } }
         let purchased = dict(blob["subscription_credits"])
         let old = Date().timeIntervalSince1970 - (number(blob["captured_at"]) ?? 0) > 600
+        // Purchased credits show only when there are some; an empty balance is the normal case, not news.
         if purchased["unlimited"] as? Bool == true {
-            rows.append(Window(label: "Codex credits", right: "Unlimited credits", stale: old))
-        } else if let balance = number(purchased["balance"]), balance >= 0 {
-            rows.append(Window(label: "Codex credits", right: String(format: "%g credits left", balance), stale: old))
-        } else if purchased["hasCredits"] as? Bool == false {
-            rows.append(Window(label: "Codex credits", right: "No purchased credits", stale: old))
+            rows.append(Window(label: "Credits", right: "Unlimited", stale: old))
+        } else if let balance = number(purchased["balance"]), balance > 0 {
+            rows.append(Window(label: "Credits", right: String(format: "%g", balance), stale: old))
         }
+        if let resets = freeResetsRow(blob["free_resets"], stale: old) { rows.append(resets) }
         if let credit = credits.row() { rows.append(credit) }
         return Panel(id: id, name: name, windows: rows, note: plan.map { "Plan: " + $0 } ?? (rows.isEmpty ? "Refresh Codex to read quota" : ""))
     }
@@ -217,27 +248,32 @@ final class OpenRouterProvider: UsageProvider {
         return ["slot_id": slot.id, "label": slot.label, "provider": "openrouter", "source_id": fingerprint, "key_label": result["key_label"] ?? NSNull(),
                 "usage": usage, "limit": result["limit"] ?? NSNull(), "day": day,
                 "usage_daily": result["usage_daily"] ?? NSNull(), "limit_remaining": result["limit_remaining"] ?? NSNull(),
-                "limit_reset": result["limit_reset"] ?? NSNull(),
+                "limit_reset": result["limit_reset"] ?? NSNull(), "captured_at": Date().timeIntervalSince1970,
                 "day_start_usage": same ? number(previous["day_start_usage"]) ?? usage : usage]
     }
     /// One key, personal or a teammate's: `pct` is the share of its cap used, `left` the share remaining (for ordering),
     /// and `warning` is set within 10% of the cap.
-    static func keyCell(_ row: JSON, old: Bool) -> (cell: Window, left: Double, warning: String?) {
+    static func keyCell(_ row: JSON, old: Bool, capturedAt: Double? = nil, now: Date = Date()) -> (cell: Window, left: Double, warning: String?) {
         let label = (row["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? row["label"] as? String ?? "Key"
-        if row["error"] != nil { return (Window(label: label, right: "Unavailable · cached", stale: true), 2, nil) }
+        let problem = row["error"] is String
+        let cached = old || row["stale"] as? Bool == true || problem
+        if problem && number(row["usage"]) == nil { return (Window(label: label, right: "Unavailable", stale: true), 2, nil) }
         let usage = number(row["usage"]) ?? 0
         let today = number(row["usage_daily"]) ?? number(row["day_start_usage"]).map { max(0, usage - $0) }
-        guard let limit = number(row["limit"]), limit > 0 else {
-            return (Window(label: label, right: today.map { usd($0) + " today" } ?? usd(usage) + " total", stale: old), 1, nil)
+        guard let limit = number(row["limit"]), limit >= 0 else {
+            return (Window(label: label, right: today.map { usd($0) + " today" } ?? usd(usage) + " total", stale: cached), 1, nil)
         }
         let period = row["limit_reset"] as? String
-        let remaining = max(0, number(row["limit_remaining"]) ?? limit - usage), left = remaining / limit
-        let reset = nextReset(period).map { " · resets in " + countdown($0.timeIntervalSinceNow) } ?? ""
-        let text = "\(usd(limit - remaining)) of \(usd(limit)) " + (periodName[period ?? ""] ?? "cap") + reset
-        return (Window(label: label, pct: (1 - left) * 100, right: text, stale: old), left,
-                left > 0.1 ? nil : remaining <= 0 ? "cap reached" : "near its cap")
+        let remaining = min(limit, max(0, number(row["limit_remaining"]) ?? limit - usage)), left = limit > 0 ? remaining / limit : 0
+        let captured = number(row["captured_at"]) ?? capturedAt ?? now.timeIntervalSince1970
+        let resetAt = nextReset(period, after: Date(timeIntervalSince1970: captured))?.timeIntervalSince1970
+        let expired = resetAt.map { $0 <= now.timeIntervalSince1970 } ?? false
+        let stale = cached || now.timeIntervalSince1970 - captured > 600
+        let reset = expired ? " · waiting for its reset" : resetAt.map { " · ↻ " + countdown($0 - now.timeIntervalSince1970) } ?? ""
+        let text = "\(usd(limit - remaining)) / \(usd(limit))" + reset
+        return (Window(label: label, pct: (1 - left) * 100, right: text, resets_at: resetAt, expired: expired, stale: stale), left,
+                stale || expired || left > 0.1 ? nil : remaining <= 0 ? "cap reached" : "near its cap")
     }
-    static let periodName = ["daily": "today", "weekly": "this week", "monthly": "this month"]
     /// When a key's cap resets: OpenRouter counts days, weeks (from Monday) and months in UTC.
     static func nextReset(_ period: String?, after now: Date = Date()) -> Date? {
         var calendar = Calendar(identifier: .gregorian)
@@ -304,7 +340,7 @@ final class OpenRouterProvider: UsageProvider {
         var teamRows = previous["team"] as? [JSON], teamProblem: HUDProblem?
         if let team = team {
             do {
-                teamRows = try listed ?? teamKeys(team)
+                teamRows = try (listed ?? teamKeys(team)).map { $0.merging(["captured_at": now]) { _, new in new } }
                 if let payload = try? http.get(URL(string: "https://openrouter.ai/api/v1/credits")!, token: team, headers: [:], limit: 1024 * 1024),
                    let total = number(dict(payload["data"])["total_credits"]), let used = number(dict(payload["data"])["total_usage"]) {
                     balances["openrouter"] = total - used; balanceCaptured = now
@@ -332,13 +368,13 @@ final class OpenRouterProvider: UsageProvider {
         let balanceOld = Date().timeIntervalSince1970 - (number(blob["balance_captured_at"]) ?? number(blob["captured_at"]) ?? 0) > 21600
         if let balance = balance { rows.append(Window(label: name, right: usd(balance) + " left", stale: balanceOld)) }
         let ranked = { (rows: [JSON]) -> [(cell: Window, left: Double, warning: String?)] in
-            rows.map { Self.keyCell($0, old: old) }.enumerated().sorted { ($0.element.left, $0.offset) < ($1.element.left, $1.offset) }.map { $0.element }
+            rows.map { Self.keyCell($0, old: old, capturedAt: number(blob["captured_at"])) }.enumerated().sorted { ($0.element.left, $0.offset) < ($1.element.left, $1.offset) }.map { $0.element }
         }
         // Your own keys also appear in the team list; they show once, as yours.
         let own = Set((blob["rows"] as? [JSON] ?? []).compactMap { $0["key_label"] as? String })
         let mine = ranked(blob["rows"] as? [JSON] ?? []), team = ranked((blob["team"] as? [JSON] ?? []).filter { !own.contains($0["label"] as? String ?? "") })
         // Menu rows carry no percentage, so the battery keeps showing money.
-        rows += mine.map { Window(label: $0.cell.label, right: $0.cell.right, stale: $0.cell.stale) }
+        rows += mine.map { Window(label: $0.cell.label, right: $0.cell.right, expired: $0.cell.expired, stale: $0.cell.stale) }
         var title: String?
         if !team.isEmpty {
             let all = blob["team"] as? [JSON] ?? [], today = all.compactMap { number($0["usage_daily"]) }.reduce(0, +)
@@ -348,7 +384,10 @@ final class OpenRouterProvider: UsageProvider {
         }
         // Only your own keys pulse: a teammate reaching the cap they were given is the cap doing its job.
         let alert = mine.first { $0.warning != nil }.map { $0.cell.label + ": " + ($0.warning ?? "") }
-        return Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Add an OpenRouter key; see PROVIDERS.md" : "", alert: alert,
-                     cells: (mine + team).map { $0.cell }, cellsTitle: title)
+        var panel = Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Add an OpenRouter key; see PROVIDERS.md" : "", alert: alert,
+                          cells: (mine + team).map { $0.cell }, cellsTitle: title)
+        // The balance is the number; how full the body is says how close your tightest capped key is to its cap.
+        panel.gauge = mine.filter { $0.cell.pct != nil }.map { $0.left }.min()
+        return panel
     }
 }

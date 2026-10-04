@@ -2,6 +2,10 @@
 
 A little room for your AI usage, right in the Mac menu bar.
 
+![First provider moodboard, illustrated readings](docs/marketing/provider-moodboard.png)
+
+*Visual study rendered by the app. Readings are simulated; provider adapters have different live-account coverage. See [product-test evidence](PRODUCT_TEST.md).*
+
 I wanted to see how much Codex and Claude I had left without opening another window. Usage HUD puts that information inside a few small batteries, borrowing the familiar shape of the Mac’s own battery icon. OpenRouter sits beside them with its dollar balance.
 
 Built for macOS, entirely in Swift. Small enough to stay out of the way.
@@ -10,15 +14,15 @@ Built for macOS, entirely in Swift. Small enough to stay out of the way.
 
 Using Codex Pro or Claude Pro/Max? [Here’s how your plan is displayed and how to set it up](PAID_PLANS.md). The same app adapts to your account’s reported windows.
 
-Each provider has its own color: teal for Codex (its 7d layer a muted teal), terracotta for Claude, poison green for OpenRouter, indigo for GLM, Google's four colours for Antigravity, slate for Grok, warm grey for Vercel, DeepSeek's whale blue and Kimi's azure.
+Each provider has its own color: teal for Codex (its 7d layer a muted teal), terracotta for Claude, poison green for OpenRouter, turquoise for GLM, Google's four colours for Antigravity, slate for Grok, warm grey for Vercel, DeepSeek's whale blue, Kimi's azure (Kimi Code too), Fireworks purple, LiteLLM blue-to-purple, and xAI graphite blue.
 
 For Codex and Claude, the number is the **percentage remaining** in your 5-hour window. The stronger color follows that reading. Behind it, a lighter shade shows what remains for the week. Grey is the unused part of the battery. The digits are cut out of the fill, so your menu-bar background shows through, just like the reference Mac battery. When the week has less left than the 5-hour window, the 5-hour fill covers it: hover over a battery to see the weekly reading on its own, in that same lighter shade. It returns to the 5-hour view when the pointer moves away.
 
 If the 5-hour reading is unavailable or its window has reset, the battery falls back to the latest 7-day reading. Older readings look dimmer, and the menu tells you when you’re seeing cached information. Click any battery to see the individual windows, reset times, and refresh controls.
 
-OpenRouter shows **dollars left**. Its pale green body gives the balance a readable home; the fill doesn’t represent a percentage. Whole amounts keep the standard battery size; cents stretch the body to fit. Any OpenAI API credit estimate lives separately in the Codex menu.
+OpenRouter shows **dollars left**. Its lime body gives the balance a readable home; the digits are the balance, and the body is as full as your tightest capped key (full when no key has a cap). Under $15 the body turns the Mac battery's yellow, and under $10 it breathes a faint red once, because OpenRouter caps free models at 50 requests a day until $10 has been bought. Whole amounts keep the standard battery size; cents stretch the body to fit. Any OpenAI API credit estimate lives separately in the Codex menu.
 
-At most three batteries sit in the menu bar, so a crowded bar or the notch never hides one silently. The HUD learns which tools you use most and keeps those, whatever your main tools are, so one you only tried today doesn't push them out; the most used one takes the first spot when the app starts. The rest fold into a small **+N** item, and resting the pointer on it opens their batteries and menus. To show more or fewer, run `defaults write local.usage-hud visibleBatteries 4`.
+By default, at most three provider batteries sit in the menu bar to limit the space the HUD takes. The HUD learns which tools you use most and keeps those, whatever your main tools are, so one you only tried today doesn't push them out; the most used one takes the first spot when the app starts. The rest fold into a small **stacked-battery** item, and resting the pointer on it opens their batteries and menus. To show more or fewer, run `defaults write local.usage-hud visibleBatteries 4`.
 
 On a light menu bar the batteries switch to dark outlines, and every colour stays deep enough never to pass for the Mac's own battery. Claude's extra usage (spent, cap, or Off) appears in the hover text with any other money rows.
 
@@ -46,13 +50,15 @@ That installs the app in `~/Applications`. If you prefer keeping it on your Desk
 
 The installed app carries its own executable, so you can remove the source checkout afterwards. Your settings and cached readings stay in the private `~/.usage-hud` folder. Set `USAGE_HUD_HOME` if you’d like to keep them somewhere else.
 
-If you’re coming from the older Python version, the installer keeps your existing configuration and readings. It also moves Usage HUD’s own Claude hook and statusline commands to the Swift executable, with a local backup of the settings file. Other Claude commands stay as they were.
+If you’re coming from the older Python version, the installer keeps your existing configuration and readings.
+
+When Claude Code is on the Mac, the app adds three small hooks (session start, each prompt, each finished turn) and its statusline to `~/.claude/settings.json`, keeping a backup the first time and leaving everything else, including a statusline of your own, as it was. They work in the CLI and in the Claude app’s Code tab, and only tell the running app to read Claude, so they never bring a Keychain prompt. If Claude Code is removed and installed again later, the app adds them back by itself. To take them out, untick **Live from Claude Code** in Claude’s battery menu; deleting the app leaves them silent.
 
 ## A few things to know
 
-Codex and Claude refresh in the background every five minutes. OpenRouter balances and OpenAI API credit estimates refresh when you ask for them from the menu. The display checks its local cache every 30 seconds, including readings supplied by Claude’s statusline.
+Codex and Claude refresh in the background every five minutes. OpenRouter and the other key-based providers refresh in the background too; OpenAI API credit estimates refresh when you ask for them from the menu. The display checks its local cache every 30 seconds, including readings supplied by Claude’s statusline.
 
-Credentials stay in your existing macOS Keychain. Usage HUD reads them when needed and keeps tokens in memory for the corresponding requests. It doesn’t change your Keychain entries, renew your Claude sign-in, or send app telemetry. If Claude’s authentication expires, sign in again through Claude Code.
+Credentials stay in your existing macOS Keychain, CLI sign-in stores or provider configuration. Usage HUD reads them when needed and holds tokens in memory for the corresponding requests; it does not copy them into its usage cache. It doesn’t change your Keychain entries, renew your Claude sign-in, or send app telemetry. If Claude’s authentication expires, sign in again through Claude Code.
 
 The Claude usage endpoint can change, and an API credit estimate may differ from your final bill. The estimate supports a pinned set of tariffs and stops when it encounters an unsupported model or service tier. Your provider’s billing page is the place to check the final amount.
 
@@ -67,7 +73,7 @@ The app has no third-party packages or interpreter to install. The code is split
 | `Providers.swift` | Codex, Claude, and OpenRouter adapters |
 | `Antigravity.swift` | Local Antigravity model quotas, using the app’s own session |
 | `CodingPlans.swift` | Optional GLM and Grok adapters, shown once signed in |
-| `Balances.swift` | Optional Vercel AI Gateway, DeepSeek and Kimi money balances |
+| `Balances.swift` | `KeyProvider`: every provider read with an API key (Vercel, DeepSeek, Kimi, Kimi Code, xAI, Fireworks, LiteLLM) |
 | `OpenAICredits.swift` | Separate API credit accounting |
 | `Tests` | Native Swift checks |
 
@@ -87,7 +93,7 @@ swift run usagehud --self-test
 swift build --configuration release --product usagehud
 ```
 
-The `--claude-statusline` command also keeps the context cache used by existing Claude burn guards. `--probe-if-stale` lets the Claude hook refresh a reading when it’s getting old.
+The `--claude-statusline` command also keeps the context cache used by existing Claude burn guards. `--probe-if-stale` is what the hooks run: it asks the running app to read Claude. `--disconnect-claude-code` removes the hooks.
 
 ## When you want to remove it
 
@@ -101,6 +107,8 @@ To remove the cached readings and provider configuration as well:
 ./uninstall.sh --purge
 ```
 
-If you added Usage HUD hooks to Claude Code, remove those entries from Claude’s settings too. Your provider credentials stay in the Keychain.
+The uninstaller also takes Usage HUD’s hooks out of Claude Code’s settings. Your provider credentials stay in the Keychain.
 
 Usage HUD is available under the [MIT license](LICENSE). Make it your own.
+
+For development UI testing without accounts, build and run `.build/debug/usagehud --product-test`. This uses the normal drawing and menus with simulated readings; Refresh supplies a fresh fixture. See [PRODUCT_TEST.md](PRODUCT_TEST.md) for verified behavior and remaining live-account checks.

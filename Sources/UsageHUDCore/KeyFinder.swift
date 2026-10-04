@@ -72,11 +72,20 @@ enum KeyFinder {
         }
         return keys
     }
+    /// The first group of `pattern`'s first match in `text`.
+    static func capture(_ pattern: String, in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
+    }
     /// The value given to one of `variables` (`DEEPSEEK_API_KEY=…`, `export …`, or a JSON `"…": "…"`) in the environment or
     /// the usual places. These keys look like any other provider's, so only the variable's name can say whose they are.
-    static func assigned(_ variables: [String], in files: [URL], environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
-        if let key = variables.lazy.compactMap({ environment[$0] }).first(where: { $0.count >= 16 }) { return key }
-        guard let pattern = try? NSRegularExpression(pattern: "\\b(?:" + variables.joined(separator: "|") + ")[\"']?\\s*[=:]\\s*[\"']?([A-Za-z0-9._-]{16,})") else { return nil }
+    /// `value` is what the value must look like: a key by default, or a proxy's address.
+    static func assigned(_ variables: [String], in files: [URL], environment: [String: String] = ProcessInfo.processInfo.environment,
+                         value: String = "[A-Za-z0-9._-]{16,}") -> String? {
+        if let key = variables.lazy.compactMap({ environment[$0] }).first(where: { $0.range(of: "^" + value + "$", options: .regularExpression) != nil }) { return key }
+        guard let pattern = try? NSRegularExpression(pattern: "\\b(?:" + variables.joined(separator: "|") + ")[\"']?\\s*[=:]\\s*[\"']?(" + value + ")") else { return nil }
         for file in files where ((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? .max) < 1 << 20 {
             guard let text = try? String(contentsOf: file, encoding: .utf8),
                   let match = pattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { continue }

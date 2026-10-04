@@ -29,10 +29,11 @@ enum CLI {
 public enum SignIn {
     public static let commands: Set<String> = ["claude auth login", "codex login", "grok login"]
     public static func start(_ command: String, done: @escaping (_ ok: Bool, _ quick: Bool) -> Void) -> Bool {
+        guard commands.contains(command) else { return false }
         let words = command.split(separator: " ").map(String.init), env = ProcessInfo.processInfo.environment
         let configured = ["codex": env["USAGE_HUD_CODEX_CLI"] ?? Bundle.main.object(forInfoDictionaryKey: "UsageHUDCodexCLI") as? String,
                           "grok": env["USAGE_HUD_GROK_CLI"]][words[0]] ?? nil
-        guard commands.contains(command), let binary = CLI.find(words[0], configured: configured) else { return false }
+        guard let binary = CLI.find(words[0], configured: configured) else { return false }
         let process = Process(), started = Date()
         process.executableURL = binary; process.arguments = Array(words.dropFirst())
         process.environment = CLI.environment(for: binary)
@@ -157,10 +158,35 @@ final class KeychainReader: CredentialReading {
 protocol HTTPReading {
     func get(_ url: URL, token: String, headers: [String: String], limit: Int) throws -> JSON
     func post(_ url: URL, token: String, headers: [String: String], body: JSON, limit: Int) throws -> JSON
+    /// One response header, for the APIs that answer there (Fireworks names a key's account that way).
+    func header(_ url: URL, token: String, name: String) throws -> String?
 }
 struct HTTPFailure: Error { let status: Int }
-final class ResponseBox: @unchecked Sendable {
-    var data: Data?; var response: URLResponse?; var error: Error?
+/// Credentials never follow a redirect. Stop receiving as soon as the body exceeds its bound.
+final class ResponseBox: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    let limit: Int, semaphore = DispatchSemaphore(value: 0)
+    var data = Data(), response: HTTPURLResponse?, error: Error?
+    init(limit: Int) { self.limit = limit }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        self.response = response as? HTTPURLResponse
+        if response.expectedContentLength > Int64(limit) {
+            error = HUDProblem("Usage response too large"); completionHandler(.cancel)
+        } else { completionHandler(.allow) }
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard data.count <= limit - self.data.count else {
+            error = HUDProblem("Usage response too large"); dataTask.cancel(); return
+        }
+        self.data.append(data)
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        self.error = self.error ?? error; semaphore.signal()
+    }
 }
 struct HTTPReader: HTTPReading {
     func get(_ url: URL, token: String, headers: [String: String] = [:], limit: Int = 8 * 1024 * 1024) throws -> JSON {
@@ -172,7 +198,16 @@ struct HTTPReader: HTTPReading {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return try send(request, token: token, headers: headers, limit: limit)
     }
-    private func send(_ original: URLRequest, token: String, headers: [String: String], limit: Int) throws -> JSON {
+    func header(_ url: URL, token: String, name: String) throws -> String? {
+        try exchange(URLRequest(url: url, timeoutInterval: 25), token: token, headers: [:], limit: 1024 * 1024).response.value(forHTTPHeaderField: name)
+    }
+    private func send(_ request: URLRequest, token: String, headers: [String: String], limit: Int) throws -> JSON {
+        guard let result = try JSONSerialization.jsonObject(with: exchange(request, token: token, headers: headers, limit: limit).data) as? JSON else {
+            throw HUDProblem("Invalid usage response")
+        }
+        return result
+    }
+    private func exchange(_ original: URLRequest, token: String, headers: [String: String], limit: Int) throws -> (data: Data, response: HTTPURLResponse) {
         var request = original
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -180,18 +215,17 @@ struct HTTPReader: HTTPReading {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.urlCache = nil
         config.timeoutIntervalForResource = 30
-        let session = URLSession(configuration: config)
+        config.httpShouldSetCookies = false
+        guard limit >= 0 else { throw HUDProblem("Invalid response limit") }
+        let box = ResponseBox(limit: limit)
+        let session = URLSession(configuration: config, delegate: box, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
-        let semaphore = DispatchSemaphore(value: 0), box = ResponseBox()
-        let task = session.dataTask(with: request) { data, response, error in
-            box.data = data; box.response = response; box.error = error; semaphore.signal()
-        }
+        let task = session.dataTask(with: request)
         task.resume()
-        guard semaphore.wait(timeout: .now() + 30) == .success else { task.cancel(); throw HUDProblem("Usage request timed out") }
-        guard box.error == nil, let response = box.response as? HTTPURLResponse else { throw HUDProblem("Usage connection failed") }
+        guard box.semaphore.wait(timeout: .now() + 30) == .success else { task.cancel(); throw HUDProblem("Usage request timed out") }
+        if let problem = box.error as? HUDProblem { throw problem }
+        guard box.error == nil, let response = box.response else { throw HUDProblem("Usage connection failed") }
         guard (200..<300).contains(response.statusCode) else { throw HTTPFailure(status: response.statusCode) }
-        guard let data = box.data, data.count <= limit,
-              let result = try JSONSerialization.jsonObject(with: data) as? JSON else { throw HUDProblem("Invalid usage response") }
-        return result
+        return (box.data, response)
     }
 }

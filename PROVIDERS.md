@@ -42,7 +42,7 @@ These three stay out of the menu bar until their first successful read, so peopl
 | --- | --- | --- |
 | GLM Coding Plan | 5h and weekly credit windows from `/api/monitor/usage/quota/limit` | Nothing, if Claude Code already points at Z.ai or Zhipu; otherwise store the key in the Keychain (below) |
 | Antigravity | Remaining quota and reset time for each available model | Sign in to the Antigravity macOS app and keep it running |
-| Grok | Monthly spend against the plan limit, via `grok agent stdio` | Install Grok CLI and run `grok login` |
+| Grok | Credit usage this period (weekly on current plans) and the plan name, from `cli-chat-proxy.grok.com/v1/billing` | Install Grok CLI and run `grok login` |
 
 **GLM.** The HUD reads the key Z.ai's setup puts in `~/.claude/settings.json` (`ANTHROPIC_BASE_URL` on `z.ai` or `bigmodel.cn`, with `ANTHROPIC_AUTH_TOKEN`) and sends it only to that provider's own quota host. To use a different key, store it with `api.z.ai` as the account for Z.ai, or `open.bigmodel.cn` for Zhipu; a stored key wins:
 
@@ -52,11 +52,11 @@ security add-generic-password -s "Usage HUD GLM" -a api.z.ai -w
 
 macOS asks for the key without echoing it. Z.ai reports credit windows (`CREDIT_LIMIT`, unit 3 = hours, unit 6 = weeks) and older plans report `TOKENS_LIMIT` for the 5h window; the monthly MCP allowance (`TIME_LIMIT`) is not shown.
 
-**Antigravity.** The HUD reads the running macOS app’s local `GetUserStatus` service. Antigravity owns Google authentication and token renewal; the HUD never reads or changes its Google token, Keychain entry or credential file. It discovers the app’s language-server process and loopback listener on every refresh, keeps the local CSRF token only in memory, forbids redirects and stores only model percentages and reset times. The battery leads with the model closest to exhausting its quota; hover shows the individual models. A missing model quota is not treated as 100% remaining.
+**Antigravity.** The HUD reads the running macOS app’s local `GetUserStatus` service. Antigravity owns Google authentication and token renewal; the HUD never reads or changes its Google token, Keychain entry or credential file. It discovers the app’s language-server process and loopback listener on every refresh, keeps the local CSRF token only in memory, forbids redirects and stores only model percentages and reset times. The battery leads with the pool used most recently, falling back to the tightest pool; hover shows grouped quota pools. A missing model quota is not treated as 100% remaining.
 
 This is an internal integration verified with Antigravity 2.19.1, not a public Google quota API. It requires the app to remain running and may need updating when its local protocol changes. If unavailable, the HUD preserves the last reading with its error/stale state. Google credentials are never copied into the HUD. Gemini CLI integration has been removed. Gemini API / AI Studio usage is a separate planned integration and is not enabled by this adapter. Purchased credit balances are not inferred from legacy plan fields.
 
-**Grok.** Set `USAGE_HUD_GROK_CLI` to an absolute path if `grok` is not in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.npm-global/bin`, `~/.bun/bin`, `~/.volta/bin`, an nvm Node version or the app's PATH. Codex is found the same way.
+**Grok.** The HUD reads the sign-in Grok CLI saved in `~/.grok/auth.json` (or `$GROK_HOME`) and sends its token only to the CLI's own billing endpoint. It never renews the sign-in: once it is past its expiry the battery dims and says it updates when you next use Grok CLI, which renews it itself. Grok CLI's `x.ai/billing` RPC answers "method not found" in current versions, so it is no longer used. Field names follow CodexBar's live fixtures; **not yet checked against a real account by us.**
 
 The Z.ai monitor endpoint and Grok’s billing RPC are not documented public APIs; their parsers use fixtures. Antigravity model quota has also been checked against a live local session.
 
@@ -80,6 +80,27 @@ security add-generic-password -s "Usage HUD DeepSeek" -a api.deepseek.com -w
 security add-generic-password -s "Usage HUD Kimi" -a api.moonshot.ai -w
 ```
 
+## Kimi Code, xAI API, Fireworks and LiteLLM
+
+These were built from each provider's documentation and other open-source readers, with test fixtures only: **none has been checked against a real account yet.** Each stays hidden until its first good read, and a key found on the Mac that doesn't work stays quiet.
+
+| Battery | What it shows | Key, found automatically | Keychain account |
+| --- | --- | --- | --- |
+| Kimi Code (Kimi For Coding) | 5h, weekly and monthly windows, plan name, from `GET https://api.kimi.com/coding/v1/usages` | Claude Code pointed at `api.kimi.com/coding`, kimi-cli's `~/.kimi/config.toml`, `KIMI_CODE_API_KEY`, or a `sk-kimi-` key in `KIMI_API_KEY` | `api.kimi.com` or `api.kimi.ai` |
+| xAI | Prepaid balance (`/v1/billing/teams/{team}/prepaid/balance`), or this month's spend against the spending limit for teams billed afterwards | A **management key** (xAI Console › Settings › Management keys) in `XAI_MANAGEMENT_API_KEY` or `XAI_MANAGEMENT_KEY`; the key names its own team. Ordinary API keys can't read billing | `management-api.x.ai` |
+| Fireworks | This month's spend against the `monthly-spend-usd` limit (Fireworks has no balance API) | `FIREWORKS_API_KEY`, or the key firectl saved in `~/.fireworks/auth.ini`; the account comes from `FIREWORKS_ACCOUNT_ID`, firectl, or the key itself (`/verifyApiKey`) | `api.fireworks.ai` |
+| LiteLLM | The virtual key's spend/budget/reset, plus per-model budgets when `/key/info` reports `model_max_budget_usage` | `LITELLM_PROXY_API_BASE` or `LITELLM_BASE_URL` with `LITELLM_PROXY_API_KEY` or `LITELLM_API_KEY`, or the gateway Claude Code is pointed at | none (the address varies) |
+
+xAI's prepaid ledger posts spend when a billing cycle closes, so mid-cycle it can show more than the Console. LiteLLM’s address and key must be in the same environment or file. Its key goes back only to that address, with redirects rejected; an address that answers like something other than LiteLLM is left alone until the app restarts.
+
+To store a key instead (a stored key wins), for example:
+
+```bash
+security add-generic-password -s "Usage HUD xAI" -a management-api.x.ai -w
+security add-generic-password -s "Usage HUD Fireworks" -a api.fireworks.ai -w
+security add-generic-password -s "Usage HUD Kimi Code" -a api.kimi.com -w
+```
+
 ## OpenAI API credit estimate
 
 `~/.usage-hud/credits.json` can select a restricted organization Admin key:
@@ -93,3 +114,5 @@ A non-secret USD seed and timestamp come from `codex.json`, or `balance_seed_usd
 ## Boundaries
 
 All credential access is read-only. Swift calls macOS's existing `/usr/bin/security` tool for credential reads, and the independent Codex CLI for its official app-server integration. No app-owned interpreter or script runs. Account credentials and caches are not distributed with the repository.
+
+Quota and budget readings are marked cached after ten minutes or on a failed read; money balances use six hours. A passed reset retains the old reading until a fresh response arrives. LiteLLM null budget is unlimited; zero is a zero-dollar cap. Durations/absolute resets follow the proxy; no calendar reset is guessed from a per-model duration alone. See [PRODUCT_TEST.md](PRODUCT_TEST.md) for the native simulation and live-account coverage limits.
