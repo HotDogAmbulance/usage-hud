@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A provider used in the last ten minutes refreshes every minute instead of every five, so Codex and Antigravity batteries follow a chat while it runs. A provider paused after a Keychain prompt stays paused.
 - Keychain prompts can't come back every few minutes, even for someone who clicks Allow instead of Always Allow: secrets stay in memory and are fetched again only when the Keychain item itself changes (its attributes are read without asking). While Claude Code's statusline reports, Claude's battery doesn't touch the Keychain at all; extra-usage credits still update hourly.
 - Battery digits use condensed SF, 1pt taller and lighter than before, to match macOS 27's own battery; the font preview compares the nearby cuts, and the self-test prints where it saved it.
 - Antigravity groups models that share a quota into one row each ("Claude & GPT", "Gemini"), leads the battery with the tightest pool, keeps every model under All models, and folds untouched pools into one row when a plan has many. A closed Antigravity no longer pulses; its battery dims with the last reading.

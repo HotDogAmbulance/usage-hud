@@ -106,6 +106,12 @@ final class HUD: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.load("automatic") }
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.load("automatic") }
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.load(nil) }
+        // A provider used in the last ten minutes refreshes every minute, so its battery follows a chat as it happens.
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let now = Date().timeIntervalSince1970, active = Set(self.shelf.lastUsed.filter { now - $0.value < 600 }.keys)
+            if !active.isEmpty { self.load(nil, also: active) }
+        }
         let lowBalance = UserDefaults.standard.double(forKey: "lowBalance")
         if lowBalance > 0 { engine.lowBalance = lowBalance }
         checkForUpdate()
@@ -138,11 +144,11 @@ final class HUD: NSObject, NSApplicationDelegate {
         }.resume()
     }
     @objc func openUpdate() { if let page = update?.page { NSWorkspace.shared.open(page) } }
-    func load(_ refresh: String?) {
+    func load(_ refresh: String?, also: Set<String> = []) {
         guard !busy else { if let refresh = refresh, refresh != "automatic" { pending = refresh }; return }
         busy = true
         DispatchQueue.global(qos: .utility).async {
-            let panels = self.engine.panels(refresh: refresh)
+            let panels = self.engine.panels(refresh: refresh, also: also)
             DispatchQueue.main.async {
                 self.busy = false
                 // Batteries are placed as they first appear, so the most used one takes the first spot, then the next.

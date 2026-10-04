@@ -36,11 +36,12 @@ public final class Engine {
         let status = cache.read(id + "-status.json")
         return status["prompted"] as? Bool == true && Date().timeIntervalSince1970 - (number(status["checked_at"]) ?? 0) < 86400
     }
-    public func panels(refresh: String? = nil) -> [Panel] {
+    /// `also` names providers to refresh the way the background does, so one in use can follow along between passes.
+    public func panels(refresh: String? = nil, also: Set<String> = []) -> [Panel] {
         if refresh == "openai-credits" { try? credits.refresh() }
         return providers.compactMap { provider -> Panel? in
             let statusFile = provider.id + "-status.json"
-            if refresh == provider.id || refresh == "automatic" && !prompted(provider.id) && provider.automatic {
+            if refresh == provider.id || (refresh == "automatic" || also.contains(provider.id)) && !prompted(provider.id) && provider.automatic {
                 do {
                     try provider.refresh()
                     try cache.write(statusFile, ["error": NSNull(), "checked_at": Date().timeIntervalSince1970])
