@@ -196,7 +196,7 @@ public final class Engine {
             return true
         }
         if arguments == ["--help"] {
-            print("usagehud [--json | --refresh automatic|codex|claude|openrouter|glm|antigravity|grok|vercel|deepseek|kimi|openai-credits | --claude-statusline | --probe-if-stale | --disconnect-claude-code]")
+            print("usagehud [--json | --refresh automatic|\(providers.map { $0.id }.joined(separator: "|"))|openai-credits | --claude-statusline | --probe-if-stale | --disconnect-claude-code]")
             return true
         }
         let refresh: String?

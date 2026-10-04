@@ -26,7 +26,8 @@ final class KeyProvider: UsageProvider {
     var found: (at: Double, keys: [String: String]) = (0, [:])
     /// Addresses found beside a key that turned out not to be this provider (a company gateway that isn't LiteLLM),
     /// left alone until the app restarts.
-    var notHere = Set<String>()
+    /// Gateways found by discovery that did not answer: skipped for an hour (forever when they answered "not LiteLLM").
+    var notHere: [String: Date] = [:]
     init(id: String, name: String, hosts: [String], variables: [String], cache: Cache, credentials: CredentialReading, http: HTTPReading,
          home: URL = FileManager.default.homeDirectoryForCurrentUser, environment: [String: String] = ProcessInfo.processInfo.environment,
          discover: @escaping (URL, [String: String]) -> [String: String] = { _, _ in [:] }, read: @escaping (Call) throws -> JSON) {
@@ -50,15 +51,19 @@ final class KeyProvider: UsageProvider {
     func refresh() throws {
         var lastProblem = HUDProblem("No \(name) API key found on this Mac; see PROVIDERS.md", gone: true)
         let keys = discovered()
-        for host in hosts + keys.keys.filter({ !hosts.contains($0) && !notHere.contains($0) }).sorted() {
+        for host in hosts + keys.keys.filter({ !hosts.contains($0) && notHere[$0].map { $0 < Date() } ?? true }).sorted() {
             let stored = try hosts.contains(host) ? credentials.stored(service: service, account: host) : nil
             guard let key = stored ?? keys[host] else { continue }
             let blob: JSON
             do { blob = try read(Call(host: host, key: key, http: http)) }
             catch let error as HTTPFailure {
-                if !hosts.contains(host), [401, 403, 404, 405].contains(error.status) { notHere.insert(host) }
+                if !hosts.contains(host), [401, 403, 404, 405].contains(error.status) { notHere[host] = .distantFuture }
                 // A key someone stored and that stopped working needs them; an old one left in a profile doesn't.
                 lastProblem = error.status == 401 || error.status == 403 ? HUDProblem("\(name) API key rejected", attention: stored != nil) : HUDProblem("\(name) HTTP \(error.status)")
+                continue
+            } catch let error as HUDProblem where !hosts.contains(host) {
+                // A gateway that is down or slow costs a 30 s wait; try it again in an hour, not at every refresh.
+                notHere[host] = Date().addingTimeInterval(3600); lastProblem = error
                 continue
             }
             if let windows = blob["rate_limits"] as? JSON {
@@ -138,7 +143,7 @@ final class KeyProvider: UsageProvider {
         let folder = environment["KIMI_SHARE_DIR"].map { URL(fileURLWithPath: $0) } ?? home.appendingPathComponent(".kimi")
         let text = (try? String(contentsOf: folder.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
         for table in text.components(separatedBy: "\n[") where table.contains("/coding") {
-            if let key = KeyFinder.capture(#"api_key\s*=\s*"([A-Za-z0-9._-]{16,})""#, in: table) {
+            if let key = KeyFinder.capture(#"api_key\s*=\s*["']([A-Za-z0-9._-]{16,})["']"#, in: table) {
                 return [table.contains("kimi.ai") ? "api.kimi.ai" : "api.kimi.com": key]
             }
         }
@@ -196,7 +201,7 @@ final class KeyProvider: UsageProvider {
               team.range(of: "^[A-Za-z0-9-]{1,64}$", options: .regularExpression) != nil else { throw HUDProblem("Use an xAI management key made for one team") }
         func cents(_ value: Any?) -> Double? { (number(dict(value)["val"]) ?? number(value)).map { $0 / 100 } }
         let billing = "/v1/billing/teams/" + team
-        let prepaid = try cents(call.get(billing + "/prepaid/balance")["total"]).map { -$0 }
+        let prepaid = (try? call.get(billing + "/prepaid/balance")).flatMap { cents($0["total"]) }.map { -$0 }
         let preview = (try? call.get(billing + "/postpaid/invoice/preview")) ?? [:]
         var blob: JSON = [:]
         if let limit = cents(preview["effectiveSpendingLimit"]), limit > 0, let spent = cents(dict(preview["coreInvoice"])["amountBeforeVat"]) {
@@ -224,7 +229,7 @@ final class KeyProvider: UsageProvider {
     }
     static func fireworksSpend(_ call: Call, account: String?) throws -> JSON {
         guard let account = account.map({ $0.hasPrefix("accounts/") ? String($0.dropFirst(9)) : $0 }),
-              account.range(of: "^[A-Za-z0-9-]{1,63}$", options: .regularExpression) != nil else { throw HUDProblem("Fireworks account not found for this key") }
+              account.range(of: "^[A-Za-z0-9_-]{1,63}$", options: .regularExpression) != nil else { throw HUDProblem("Fireworks account not found for this key") }
         let quota = try call.get("/v1/accounts/\(account)/quotas/monthly-spend-usd")
         guard let spent = number(quota["usage"]) else { throw HUDProblem("Fireworks response missing spend") }
         guard let limit = number(quota["value"]), limit > 0 else { return ["spent": spent, "period": "this month"] }
@@ -241,11 +246,20 @@ final class KeyProvider: UsageProvider {
     }
     /// Hosts whose own APIs Claude Code may be pointed at; any other gateway may be LiteLLM.
     static let knownHosts = ["anthropic.com", "z.ai", "bigmodel.cn", "moonshot.ai", "moonshot.cn", "kimi.com", "kimi.ai", "deepseek.com",
-                             "x.ai", "openrouter.ai", "vercel.sh", "fireworks.ai", "googleapis.com", "amazonaws.com", "azure.com"]
+                             "x.ai", "openai.com", "openrouter.ai", "vercel.sh", "fireworks.ai", "googleapis.com", "amazonaws.com", "azure.com"]
+    /// Plain http is for a proxy on this machine or its own network, where nothing crosses the internet.
+    static func isLocalHost(_ host: String) -> Bool {
+        let host = host.lowercased()
+        if host == "localhost" || host == "::1" || host.hasSuffix(".local") || host.hasSuffix(".localhost") { return true }
+        let octets = host.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4, host.split(separator: ".").count == 4 else { return false }
+        return octets[0] == 10 || octets[0] == 127 || (octets[0] == 192 && octets[1] == 168) || (octets[0] == 172 && (16...31).contains(octets[1]))
+    }
     static func liteLLMProxies(home: URL, environment: [String: String]) -> [String: String] {
         /// "https://host:4000/v1" is the proxy at "https://host:4000"; its management routes live at the root.
         func root(_ address: String?) -> String? {
-            guard let url = URL(string: address ?? ""), let scheme = url.scheme, ["http", "https"].contains(scheme), let host = url.host else { return nil }
+            guard let url = URL(string: address ?? ""), let scheme = url.scheme, ["http", "https"].contains(scheme), let host = url.host,
+                  scheme == "https" || isLocalHost(host) else { return nil }
             return scheme + "://" + host + (url.port.map { ":\($0)" } ?? "")
         }
         var proxies: [String: String] = [:]

@@ -32,15 +32,13 @@ func money(_ value: Double, _ symbol: String = "$") -> String {
     symbol + ((value * 100).rounded() == (value.rounded() * 100) ? String(Int(value.rounded())) : String(format: "%.2f", value))
 }
 func usd(_ value: Double) -> String { money(value) }
-/// Free quota resets a plan granted (Claude, Codex): how many, and the soonest expiry, as "2 · until Oct 23".
+/// Free quota resets a plan granted (Claude, Codex): how many, and the soonest expiry, as "2 · ends in 5d 7h".
 func freeResetsRow(_ value: Any?, stale: Bool) -> Window? {
     let resets = dict(value)
     guard let left = number(resets["left"]), left >= 1 else { return nil }
     var text = String(Int(left))
-    if let until = number(resets["until"]) {
-        let format = DateFormatter(); format.setLocalizedDateFormatFromTemplate("MMMd")
-        text += " · until " + format.string(from: Date(timeIntervalSince1970: until))
-    }
+    // Shown only when there is one; the countdown to its expiry, like the other reset times.
+    if let until = number(resets["until"]), until > Date().timeIntervalSince1970 { text += " · ends in " + countdown(until - Date().timeIntervalSince1970) }
     return Window(label: "Free resets", right: text, stale: stale)
 }
 /// "3h 12m" or "2d 5h"; never negative.

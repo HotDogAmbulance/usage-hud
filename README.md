@@ -52,7 +52,7 @@ When Claude Code is on the Mac, the app adds three small hooks (session start, e
 
 ## A few things to know
 
-Codex and Claude refresh in the background every five minutes. OpenRouter balances and OpenAI API credit estimates refresh when you ask for them from the menu. The display checks its local cache every 30 seconds, including readings supplied by Claude’s statusline.
+Codex and Claude refresh in the background every five minutes. OpenRouter and the other key-based providers refresh in the background too; OpenAI API credit estimates refresh when you ask for them from the menu. The display checks its local cache every 30 seconds, including readings supplied by Claude’s statusline.
 
 Credentials stay in your existing macOS Keychain. Usage HUD reads them when needed and keeps tokens in memory for the corresponding requests. It doesn’t change your Keychain entries, renew your Claude sign-in, or send app telemetry. If Claude’s authentication expires, sign in again through Claude Code.
 

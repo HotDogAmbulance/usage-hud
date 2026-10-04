@@ -248,7 +248,7 @@ final class CoreTests {
         let rows = CodexProvider(cache: cache, credits: OpenAICredits(cache: cache, credentials: credentials, http: http)).panel().windows
         // No purchased credits is the normal case and shows nothing; the free resets do show.
         expectEqual(rows.map { $0.label }, ["Free resets"])
-        expectTrue(rows.first?.right?.hasPrefix("2 · until ") == true)
+        expectTrue(rows.first?.right?.hasPrefix("2 · ends in ") == true)
         let home = root.appendingPathComponent("home"), org = "12345678-1234-1234-1234-123456789abc"
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: ["oauthAccount": ["organizationUuid": org]]).write(to: home.appendingPathComponent(".claude.json"))
@@ -269,7 +269,7 @@ final class CoreTests {
         expectEqual(http.sentHeaders["x-organization-uuid"], org)
         let panel = claude.panel()
         expectEqual(panel.windows.first { $0.label == "Balance" }?.right, "$27.76")
-        expectTrue(panel.windows.first { $0.label == "Free resets" }?.right?.hasPrefix("1 · until ") == true)
+        expectTrue(panel.windows.first { $0.label == "Free resets" }?.right?.hasPrefix("1 · ends in ") == true)
         // Those two are read hourly, not with every quota refresh.
         asked = []; try claude.refresh()
         expectEqual(asked.count, 1)
@@ -543,6 +543,28 @@ final class CoreTests {
         let gateway = KeyProvider.liteLLM(cache: cache, credentials: credentials, http: http, home: none,
                                           environment: ["ANTHROPIC_BASE_URL": "https://gateway.example.com/anthropic", "ANTHROPIC_AUTH_TOKEN": "t"])
         http.handler = { _ in throw HTTPFailure(status: 404) }; http.calls = 0
+        expectError(try gateway.refresh()); expectError(try gateway.refresh())
+        expectEqual(http.calls, 1)
+    }
+    /// Review fixes: postpaid-only xAI teams, underscores in Fireworks accounts, a gateway that is down, public http.
+    func testReviewFixesForNewReaders() throws {
+        http.handler = { url in
+            if url.path.hasSuffix("validation") { return ["teamId": "team-3"] }
+            if url.path.hasSuffix("prepaid/balance") { throw HTTPFailure(status: 404) }
+            return ["effectiveSpendingLimit": "20000", "coreInvoice": ["amountBeforeVat": "5000"]]
+        }
+        let postpaid = try KeyProvider.xaiBilling(KeyProvider.Call(host: "management-api.x.ai", key: "k", http: http))
+        expectNil(postpaid["balance"]); expectEqual(number(postpaid["spent"]), 50)
+        http.handler = { _ in ["value": "50", "usage": 1] }
+        expectEqual(try KeyProvider.fireworksSpend(KeyProvider.Call(host: "api.fireworks.ai", key: "k", http: http), account: "team_prod")["limit"] as? Double, 50)
+        let none = root.appendingPathComponent("none")
+        expectEqual(KeyProvider.liteLLMProxies(home: none, environment: ["ANTHROPIC_BASE_URL": "http://gateway.example.com", "ANTHROPIC_AUTH_TOKEN": "t"]), [:])
+        expectEqual(KeyProvider.liteLLMProxies(home: none, environment: ["ANTHROPIC_BASE_URL": "http://192.168.1.5:4000", "ANTHROPIC_AUTH_TOKEN": "t"]), ["http://192.168.1.5:4000": "t"])
+        expectEqual(KeyProvider.liteLLMProxies(home: none, environment: ["ANTHROPIC_BASE_URL": "https://api.openai.com/v1", "ANTHROPIC_AUTH_TOKEN": "t"]), [:])
+        // A gateway that times out is left alone for the next refreshes instead of costing 30 s each time.
+        let gateway = KeyProvider.liteLLM(cache: cache, credentials: credentials, http: http, home: none,
+                                          environment: ["ANTHROPIC_BASE_URL": "https://gateway.example.com/anthropic", "ANTHROPIC_AUTH_TOKEN": "t"])
+        http.handler = { _ in throw HUDProblem("Usage request timed out") }; http.calls = 0
         expectError(try gateway.refresh()); expectError(try gateway.refresh())
         expectEqual(http.calls, 1)
     }

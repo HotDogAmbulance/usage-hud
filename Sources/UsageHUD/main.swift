@@ -164,7 +164,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         if target != executable && (target != nil || !files.fileExists(atPath: link.path)) {
             try? files.removeItem(at: link); try? files.createSymbolicLink(atPath: link.path, withDestinationPath: executable)
         }
-        try? engine.connectClaudeCode(engine.claudeCodeConnected)
+        _ = try? engine.connectClaudeCode(engine.claudeCodeConnected)
     }
     /// Claude Code started, took a prompt or finished a turn: read Claude now (at most once a minute) with the Keychain
     /// answer this app already holds, so nothing new is asked.
@@ -289,8 +289,8 @@ final class HUD: NSObject, NSApplicationDelegate {
         let moneyWindow = quota == nil ? panel.windows.first(where: {$0.label == panel.name}) : nil
         let cached = quota?.stale == true || quota?.expired == true || moneyWindow?.stale == true
         let remaining = valid ? min(100, max(0, 100 - (quota?.pct ?? 0))) : 0
-        let money = moneyWindow?.right?.split(separator: " ").first.map(String.init)
-        var text = valid ? String(Int(remaining.rounded())) : money.map{$0.replacingOccurrences(of: "$", with: "")} ?? "?"
+        let money = moneyWindow?.right?.components(separatedBy: " left").first
+        var text = valid ? String(Int(remaining.rounded())) : money.map { String($0.drop { !$0.isNumber }) } ?? "?"
         if !valid, text.hasSuffix(".00") { text.removeLast(3) }
         // Full-height layers share the native battery silhouette: grey, 7d, then 5h.
         let weekly = panel.windows.first(where: {$0.label == "7d" && $0.label != quota?.label && $0.pct != nil})
@@ -387,7 +387,7 @@ final class HUD: NSObject, NSApplicationDelegate {
         item.length = (item.button?.image?.size.width ?? 28) + 4
         let displayed = displayedQuota(panel)
         let cached = displayed?.stale == true || displayed?.expired == true
-        let reading = displayed.map { $0.label + (cached ? " · cached" : " · remaining") } ?? "balance in USD"
+        let reading = displayed.map { $0.label + (cached ? " · cached" : " · remaining") } ?? "balance"
         // Money rows (credits, extra usage) ride along in the hover text, so balances need no click.
         let money = panel.windows.filter { $0.pct == nil && $0.right != nil && $0.label != panel.name }.map { "\n" + $0.label + ": " + ($0.right ?? "") }
         if panel.alert == nil { acknowledged[panel.id] = nil }
