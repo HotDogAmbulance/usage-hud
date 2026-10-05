@@ -356,23 +356,19 @@ class HUD: NSObject, NSApplicationDelegate {
         openMenu = nil
     }
     /// Fills `rect` with the provider tint, or the model-family palette carried by an Antigravity row.
-    /// On a light menu bar, pale tints are deepened and the weekly shade is softened less, so white and silver stay visible.
-    /// `muted` is the 7d layer behind 5h: on a dark bar it sinks toward grey instead of toward white, so it reads as the
-    /// same colour further away rather than as a white battery.
+    /// The 5h colour is always the one chosen for the provider, on any bar. `muted` is the 7d layer behind it: the same colour at
+    /// about half strength over the empty part (which is the bar's own ink), so it stays between the colour and the empty part
+    /// whatever the wallpaper; a provider with its own 7d colour uses that.
     func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, muted: Bool = false, alpha: CGFloat, dark: Bool = true, palette: QuotaPalette? = nil) {
         let shade = { (color: NSColor) -> NSColor in
             var color = color
-            if !dark, let rgb = color.usingColorSpace(.sRGB),
-               0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent > 0.6 {
-                color = color.blended(withFraction: 0.45, of: .black)!
-            }
             // Black and graphite would vanish on a dark bar; lift them just enough to read as a battery.
             if dark, let rgb = color.usingColorSpace(.sRGB), max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) < 0.35 {
                 color = color.blended(withFraction: max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) < 0.05 ? 0.55 : 0.40, of: .white)!
             }
             if muted, let side = Self.side[id] { return side.withAlphaComponent(alpha) }
-            if muted && dark { return color.blended(withFraction: 0.5, of: NSColor(srgbRed: 0.45, green: 0.45, blue: 0.45, alpha: 1))!.withAlphaComponent(alpha) }
-            return (light || muted ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
+            if muted { return color.withAlphaComponent(alpha * 0.55) }
+            return (light ? color.blended(withFraction: dark ? 0.65 : 0.45, of: .white)! : color).withAlphaComponent(alpha)
         }
         // The battery warning yellow stays the Mac's own on a light bar too; deepening it would turn it to mud.
         if id == "caution" || id == "critical" { tint(id).withAlphaComponent(alpha).setFill(); rect.fill(); return }
@@ -500,8 +496,8 @@ class HUD: NSObject, NSApplicationDelegate {
         let fillEnd = money != nil ? pixel(bodyWidth * CGFloat(panel.gauge ?? 1)) : pixel(fillWidth)
         let weeklyEnd = weeklyValid ? max(fillEnd, pixel(bodyWidth * weeklyRemaining / 100)) : fillEnd
         let weeklyAlpha: CGFloat = weekly?.stale == true || weekly?.expired == true ? 0.50 : 1, fillAlpha: CGFloat = cached ? (money != nil ? 0.50 : 0.45) : 1
-        // A translucent layer still needs the track behind it.
-        let trackStart = fillAlpha < 1 ? 0 : weeklyAlpha < 1 ? fillEnd : weeklyEnd
+        // The 7d layer and any translucent layer sit on the track, so they keep their place between colour and empty.
+        let trackStart = fillAlpha < 1 || weeklyShade ? 0 : fillEnd
         BatteryText.track(dark: dark).setFill(); span(trackStart, bodyWidth).fill()
         if weeklyEnd > fillEnd {
             paint(span(fillEnd, weeklyEnd), body: bodyRect, id: warning, light: false, muted: true, alpha: weeklyAlpha, dark: dark, palette: palette)
@@ -1015,7 +1011,7 @@ if CommandLine.arguments.contains("--self-test") {
     delegate.forcedDarkBar = nil
     // The empty part against grey bars: the old fixed greys, the ink-strength model, and what the native battery measured.
     do {
-        let grays: [(Int, Int?)] = [(0, 201), (84, 161), (115, nil), (149, nil), (231, 133), (255, 116)]
+        let grays: [(Int, Int?)] = [(32, 131), (64, 150), (112, 175), (135, 188), (149, nil), (231, 133), (255, 147)]
         let scale: CGFloat = 3, rowHeight: CGFloat = 34 * scale, width: CGFloat = 330 * scale
         let sheet = NSImage(size: NSSize(width: width, height: rowHeight * CGFloat(grays.count) + 20 * scale))
         sheet.lockFocus()
@@ -1026,7 +1022,7 @@ if CommandLine.arguments.contains("--self-test") {
         }
         for (index, entry) in grays.enumerated() {
             let (level, native) = entry
-            let bar = NSColor(white: CGFloat(level) / 255, alpha: 1), dark = level < 128
+            let bar = NSColor(white: CGFloat(level) / 255, alpha: 1), dark = level <= 140
             let y = sheet.size.height - 20 * scale - rowHeight * CGFloat(index + 1)
             bar.setFill(); NSRect(x: 0, y: y, width: width, height: rowHeight).fill()
             let ink: NSColor = dark ? .white : .black
