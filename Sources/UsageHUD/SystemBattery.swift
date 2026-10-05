@@ -20,7 +20,7 @@ enum SystemBattery {
             context.saveGState(); context.setBlendMode(operation); context.clip(to: rect, mask: mask)
             ink.setFill(); rect.fill(); context.restoreGState()
         }
-        for (x, y, front) in [(CGFloat(1), CGFloat(8), false), (CGFloat(5), CGFloat(4), true)] {
+        for (x, y, front) in [(CGFloat(1), CGFloat(6.5), false), (CGFloat(5), CGFloat(2.5), true)] {
             let rect = NSRect(x: x, y: y, width: 23, height: 12)
             let capRect = NSRect(x: x + 24, y: y, width: 2, height: 12)
             if front {

@@ -79,7 +79,15 @@ enum MenuBarInk {
 
 final class GroupView: NSView {
     var appearanceChanged: () -> Void = {}
+    var hover: (Bool) -> Void = { _ in }
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); appearanceChanged() }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { hover(true) }
+    override func mouseExited(with event: NSEvent) { hover(false) }
 }
 
 final class StatusGroup {
@@ -88,13 +96,25 @@ final class StatusGroup {
     let surface: NativeSurface
     private(set) var order: [String] = []
     var dark = false
+    /// The rounded edge belongs to hover and press only, like the system's own highlight; at rest the batteries sit on the bar.
+    private(set) var pointerInside = false
+    var menuOpen = false { didSet { setEmphasis(pointerInside || menuOpen) } }
     init() {
-        surface = NativeSurface(content: content, radius: 11)
+        surface = NativeSurface(content: NSView(), radius: 11)
         item.autosaveName = "Usage HUD group"
         item.button?.title = ""; item.button?.image = nil
+        surface.alphaValue = 0
         item.button?.addSubview(surface)
+        item.button?.addSubview(content)
         item.button?.setAccessibilityElement(false)
         content.setAccessibilityElement(false)
+        content.hover = { [weak self] inside in
+            guard let self = self else { return }
+            self.pointerInside = inside; self.setEmphasis(inside || self.menuOpen)
+        }
+    }
+    func setEmphasis(_ on: Bool) {
+        NSAnimationContext.runAnimationGroup { context in context.duration = 0.15; surface.animator().alphaValue = on ? 1 : 0 }
     }
     /// Space inside the rounded edge, and between neighbouring batteries (each side of a battery gets half of `gap`).
     static let pad: CGFloat = 7, gap: CGFloat = 6
@@ -110,7 +130,9 @@ final class StatusGroup {
         item.length = width; item.isVisible = !cells.isEmpty
         guard let button = item.button else { return }
         let height = max(22, button.bounds.height - 2)
-        surface.frame = NSRect(x: 1, y: (button.bounds.height - height) / 2, width: width - 2, height: height)
+        // Half a point above centre: that is where the system's own battery sits, measured on a real bar.
+        surface.frame = NSRect(x: 1, y: (button.bounds.height - height) / 2 + 0.5, width: width - 2, height: height)
+        content.frame = surface.frame
         surface.layoutSubtreeIfNeeded()
         var x = Self.pad
         let retained = Set(cells.compactMap { $0.button.map(ObjectIdentifier.init) })

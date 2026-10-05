@@ -358,7 +358,15 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let menu = cell?.menu else { ClickLog.write("open \(sender.sourceID) no menu"); return }
         ClickLog.write("open \(sender.sourceID) menu=\(menu.items.first?.title ?? "-") items=\(menu.items.count)")
         openMenu = menu
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY - 3), in: sender)
+        // Placed in screen coordinates just under the cell: a point in the cell's own coordinates put the menu above the bar.
+        if let window = sender.window {
+            let rect = window.convertToScreen(sender.convert(sender.bounds, to: nil))
+            group.menuOpen = true
+            menu.popUp(positioning: nil, at: NSPoint(x: rect.minX, y: rect.minY - 3), in: nil)
+            group.menuOpen = false
+        } else {
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY - 3), in: sender)
+        }
         openMenu = nil
     }
     /// Fills `rect` with the provider tint, or the model-family palette carried by an Antigravity row.
