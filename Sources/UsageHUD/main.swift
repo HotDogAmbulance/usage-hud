@@ -562,19 +562,10 @@ class HUD: NSObject, NSApplicationDelegate {
             let item = menu.addItem(withTitle: "Sign in to " + panel.name + " again…", action: #selector(runFix(_:)), keyEquivalent: "")
             item.representedObject = [panel.id, fix]; item.target = self
         }
-        if panel.id == "claude", FileManager.default.fileExists(atPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path) {
-            let live = menu.addItem(withTitle: "Claude Code CLI connection", action: #selector(toggleClaudeCode), keyEquivalent: "")
-            live.target = self; live.state = engine.claudeCodeConnected ? .on : .off
-            live.toolTip = "Connects the CLI hooks and statusline. Desktop Code activity alone does not guarantee fresh usage."
-        }
-        if panel.id == "claude", panel.note.contains("credential expired") {
-            let waiting = menu.addItem(withTitle: "Waiting for fresh Claude usage", action: nil, keyEquivalent: "")
-            waiting.toolTip = "Refresh cannot renew this sign-in. A fresh CLI statusline or a renewed Claude Code credential can supply usage."
-        } else {
-            let refresh = menu.addItem(withTitle: panel.id == "claude" ? "Check Claude usage" : "Refresh " + panel.name,
-                                       action: #selector(refreshProvider(_:)), keyEquivalent: "r")
+        // Claude's connection/refresh controls stay hidden while Desktop quota delivery is unresolved.
+        if panel.id != "claude" {
+            let refresh = menu.addItem(withTitle: "Refresh " + panel.name, action: #selector(refreshProvider(_:)), keyEquivalent: "r")
             refresh.representedObject = panel.id; refresh.target = self
-            if panel.id == "claude" { refresh.toolTip = "Retries the existing reader; does not renew a sign-in or start a chat." }
         }
         if panel.id == "codex" {
             let credits = menu.addItem(withTitle: "Refresh OpenAI API credits", action: #selector(refreshProvider(_:)), keyEquivalent: "")
@@ -884,8 +875,10 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(identity.frame.size == NSSize(width: 32, height: 32) && identity.accessibilityLabel() == "Codex")
     let expiredClaude = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 40, stale: true)],
                               note: "Claude Code credential expired; waiting for fresh usage")
-    precondition(delegate.providerMenu(expiredClaude).items.contains { $0.title == "Waiting for fresh Claude usage" && $0.action == nil })
-    precondition(!delegate.providerMenu(expiredClaude).items.contains { $0.title == "Refresh Claude" })
+    for panel in [expiredClaude, Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 20)])] {
+        let controls = ["Live from Claude Code", "Claude Code CLI connection", "Refresh Claude", "Check Claude usage", "Waiting for fresh Claude usage"]
+        precondition(!delegate.providerMenu(panel).items.contains { controls.contains($0.title) })
+    }
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))

@@ -5,7 +5,7 @@
 - Detail batteries follow the originating menu bar’s contrast, including VibrantDark/VibrantLight, rather than the hover panel’s independent appearance. Healthy key/budget cells are white on dark bars and black on light bars; warning colors and cached marks stay consistent.
 - Antigravity rows carry model-family palettes. The recently used pool selects the main palette; Google/Gemini uses Google colors, Claude & GPT uses black/charcoal plus Claude earth tone, and unknown families stay neutral.
 - Model-only hover identifiers now use available installed vendor templates without adding another quota table. Missing templates retain ordinary names/tooltips; aggregator/infra and Antigravity retain detail tables.
-- 5h/7d warnings follow the tighter current window. Claude menu wording names the CLI connection and replaces an expired-credential refresh action with a passive waiting state; collection behavior is unchanged.
+- 5h/7d warnings follow the tighter current window. Claude connection/refresh controls are temporarily hidden while Desktop quota delivery is unresolved; cached status remains visible and collection behavior is unchanged.
 
 - Automatic source notices: new connections and confirmed removals share a quiet native notice that disappears after six seconds. Successful-reader receipts choose the wording; startup, repeat reads, cached data and temporary outages do not generate notices.
 - Codex failure recovery now checks its actual quota cache file.
