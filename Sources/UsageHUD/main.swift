@@ -350,7 +350,8 @@ class HUD: NSObject, NSApplicationDelegate {
     @objc func openCell(_ sender: StatusCellButton) {
         closeHover()
         let cell = sender.sourceID == "overflow" ? overflow : sender.sourceID == "usage-hud" ? brandCell : items[sender.sourceID]
-        guard let menu = cell?.menu else { return }
+        guard let menu = cell?.menu else { ClickLog.write("open \(sender.sourceID) no menu"); return }
+        ClickLog.write("open \(sender.sourceID) menu=\(menu.items.first?.title ?? "-") items=\(menu.items.count)")
         openMenu = menu
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY - 3), in: sender)
         openMenu = nil
