@@ -6,6 +6,8 @@ final class NativeSurface: NSView {
     let materialView: NSView
     let content: NSView
     let usesLiquidGlass: Bool
+    /// The system's own highlight edge: a thin light line just inside the shape, in place of the glass's dark rim.
+    private let rim = RimView()
     init(content: NSView, radius: CGFloat = 12) {
         self.content = content
         if #available(macOS 26, *), let type = NSClassFromString("NSGlassEffectView") as? NSView.Type {
@@ -24,10 +26,28 @@ final class NativeSurface: NSView {
         materialView.autoresizingMask = [.width, .height]
         content.autoresizingMask = [.width, .height]
         addSubview(materialView)
+        rim.radius = radius
+        addSubview(rim)
     }
     required init?(coder: NSCoder) { nil }
     override func layout() {
-        super.layout(); materialView.frame = bounds; content.frame = bounds
+        super.layout(); materialView.frame = bounds; content.frame = bounds; rim.frame = bounds
+    }
+}
+
+final class RimView: NSView {
+    var radius: CGFloat = 12 { didSet { needsDisplay = true } }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override var isFlipped: Bool { false }
+    override func draw(_ dirtyRect: NSRect) {
+        // A white edge with a faint lift at the top, as on the system's selected menu-bar item.
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius - 0.5, yRadius: radius - 0.5)
+        path.lineWidth = 1
+        NSColor(white: 1, alpha: 0.42).setStroke(); path.stroke()
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: NSRect(x: 0, y: bounds.midY, width: bounds.width, height: bounds.height / 2)).addClip()
+        NSColor(white: 1, alpha: 0.18).setStroke(); path.stroke()
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
