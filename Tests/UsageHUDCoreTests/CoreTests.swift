@@ -994,12 +994,12 @@ final class CoreTests {
         let engine = Engine(root: root, credentials: credentials, http: http, providers: [
             AlertProvider(id: "a", problem: "a needs sign-in", attention: true, right: "$9.00 left")])
         expectNil(engine.panels(refresh: "automatic")[0].fix)
-        // An old token only means Claude Code sat idle: no sign-in, no red battery.
+        // Expiry alone does not prove sign-out: keep cached data without a sign-in action or red battery.
         credentials.text = "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"expiresAt\":1000}}"
         try? cache.write("claude.json", ["captured_at": 1])
         let claude = { (refresh: String?) in Engine(root: self.root, credentials: self.credentials, http: self.http).panels(refresh: refresh).first { $0.id == "claude" } }
-        let idle = claude("claude")
-        expectTrue(idle?.fix == nil && idle?.alert == nil && idle?.note.contains("terminal") == true)
+        let expired = claude("claude")
+        expectTrue(expired?.fix == nil && expired?.alert == nil && expired?.note.contains("credential expired") == true)
         // A rejected token is a real sign-out, and the menu offers the sign-in.
         credentials.text = "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"expiresAt\":99999999999999}}"
         http.error = HTTPFailure(status: 401)

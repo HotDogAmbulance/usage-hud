@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Claude: the expired-token message now says to run Claude Code in a terminal, and the README says plainly that the app's Code tab and Chat do not renew the sign-in the HUD reads (hours in the Code tab left it expired until the CLI ran). The README also explains why Claude has no "Limit resets" row.
+- Claude: an expired credential now says the HUD is waiting for fresh usage. Documentation distinguishes activity hooks from statusline quota data, bounds the reported Desktop/CLI renewal observation, and explains the missing reset-grant indicator and current hybrid OAuth/statusline collection.
 - Round 3: bound HTTP bodies while receiving and reject redirects; keep LiteLLM addresses and keys paired by source; preserve negative balance digits; tolerate extreme numeric fields; keep Keychain prompt pauses until manual refresh; suppress new low-balance warnings from failed/cached readings; create self-test output folders.
 
 - Review fixes: the test list compiles again; xAI teams billed afterwards no longer error on the missing prepaid ledger; Fireworks accounts may contain `_`; a LiteLLM gateway that is down is left alone for an hour instead of costing 30 s at every refresh; plain `http` is accepted only for localhost and local-network proxies; Kimi's TOML may use single quotes; `--help` lists every provider; battery digits drop any currency symbol, not just `$`.
