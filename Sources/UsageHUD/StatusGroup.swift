@@ -95,12 +95,12 @@ final class StatusGroup {
     let content = GroupView(frame: NSRect(x: 0, y: 0, width: 100, height: 22))
     let surface: NativeSurface
     private(set) var order: [String] = []
-    var dark = false
+    var dark = false { didSet { surface.dark = dark } }
     /// The rounded edge belongs to hover and press only, like the system's own highlight; at rest the batteries sit on the bar.
     private(set) var pointerInside = false
     var menuOpen = false { didSet { setEmphasis(pointerInside || menuOpen) } }
     init() {
-        surface = NativeSurface(content: NSView(), radius: 11)
+        surface = NativeSurface(content: NSView(), radius: 11, flat: true)
         item.autosaveName = "Usage HUD group"
         item.button?.title = ""; item.button?.image = nil
         surface.alphaValue = 0

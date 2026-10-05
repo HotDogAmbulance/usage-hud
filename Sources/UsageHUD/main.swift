@@ -871,7 +871,7 @@ if CommandLine.arguments.contains("--self-test") {
         precondition(delegate.group.cellButton(atScreen: window.convertPoint(toScreen: inWindow))?.sourceID == cell.sourceID)
     }
     precondition(delegate.items["codex"]?.button?.acceptsFirstMouse(for: nil) == true)
-    if #available(macOS 26, *) { precondition(delegate.group.surface.usesLiquidGlass) }
+    if #available(macOS 26, *) { precondition(delegate.group.surface.usesFlatTint) }
     // A hover identifier is nonactivating and cannot intercept a subsequent battery click.
     let hover = HoverSurface(), controller = NSViewController()
     controller.view = ModelIdentityView(glyph: NSImage(size: NSSize(width: 18, height: 18)), name: "Codex")

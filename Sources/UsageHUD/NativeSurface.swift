@@ -1,53 +1,71 @@
 import Cocoa
 
-/// One native material for the group, hover details, identifiers and notices.
-/// Runtime lookup uses the documented public API so an older SDK can still build the app.
+/// One surface for the group, hover details, identifiers and notices.
+/// The group is a flat tint of the menu-bar ink, like the system's own highlight on a menu-bar item; panels are a
+/// popover blur. Neither carries the glass rim, whose dark edge looked foreign next to the system's.
 final class NativeSurface: NSView {
     let materialView: NSView
     let content: NSView
-    let usesLiquidGlass: Bool
-    /// The system's own highlight edge: a thin light line just inside the shape, in place of the glass's dark rim.
+    /// True for the group's tint-only background, whose fill follows `dark`.
+    let usesFlatTint: Bool
+    var dark = true { didSet { if dark != oldValue { needsDisplay = true; materialView.needsDisplay = true; rim.needsDisplay = true } } }
     private let rim = RimView()
-    init(content: NSView, radius: CGFloat = 12) {
+    init(content: NSView, radius: CGFloat = 12, flat: Bool = false) {
         self.content = content
-        if #available(macOS 26, *), let type = NSClassFromString("NSGlassEffectView") as? NSView.Type {
-            let glass = type.init(frame: content.bounds)
-            glass.setValue(content, forKey: "contentView")
-            glass.setValue(radius, forKey: "cornerRadius")
-            materialView = glass; usesLiquidGlass = true
+        usesFlatTint = flat
+        if flat {
+            materialView = FlatTintView(radius: radius)
         } else {
             let blur = NSVisualEffectView(frame: content.bounds)
             blur.material = .popover; blur.state = .active; blur.blendingMode = .behindWindow
             blur.wantsLayer = true; blur.layer?.cornerRadius = radius; blur.layer?.masksToBounds = true
             blur.addSubview(content)
-            materialView = blur; usesLiquidGlass = false
+            materialView = blur
         }
         super.init(frame: content.bounds)
         materialView.autoresizingMask = [.width, .height]
         content.autoresizingMask = [.width, .height]
         addSubview(materialView)
-        rim.radius = radius
+        if flat { addSubview(content) }
+        rim.radius = radius; rim.isHidden = flat
         addSubview(rim)
     }
     required init?(coder: NSCoder) { nil }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if !usesFlatTint { dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+    }
     override func layout() {
         super.layout(); materialView.frame = bounds; content.frame = bounds; rim.frame = bounds
     }
+    override func draw(_ dirtyRect: NSRect) {
+        (materialView as? FlatTintView)?.dark = dark
+        rim.dark = dark
+    }
 }
 
+/// The group's fill: the bar's ink at low strength, measured to match the system's pill (light grey on light bars, lifted grey on dark).
+final class FlatTintView: NSView {
+    let radius: CGFloat
+    var dark = true { didSet { if dark != oldValue { needsDisplay = true } } }
+    init(radius: CGFloat) { self.radius = radius; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        (dark ? NSColor(white: 1, alpha: 0.18) : NSColor(white: 0, alpha: 0.12)).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
+    }
+}
+
+/// A hairline in the ink colour, as on the system's popovers.
 final class RimView: NSView {
     var radius: CGFloat = 12 { didSet { needsDisplay = true } }
+    var dark = true { didSet { if dark != oldValue { needsDisplay = true } } }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override var isFlipped: Bool { false }
     override func draw(_ dirtyRect: NSRect) {
-        // A white edge with a faint lift at the top, as on the system's selected menu-bar item.
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius - 0.5, yRadius: radius - 0.5)
         path.lineWidth = 1
-        NSColor(white: 1, alpha: 0.42).setStroke(); path.stroke()
-        NSGraphicsContext.saveGraphicsState()
-        NSBezierPath(rect: NSRect(x: 0, y: bounds.midY, width: bounds.width, height: bounds.height / 2)).addClip()
-        NSColor(white: 1, alpha: 0.18).setStroke(); path.stroke()
-        NSGraphicsContext.restoreGraphicsState()
+        (dark ? NSColor(white: 1, alpha: 0.16) : NSColor(white: 0, alpha: 0.12)).setStroke(); path.stroke()
     }
 }
 
