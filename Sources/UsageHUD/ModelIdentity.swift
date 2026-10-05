@@ -19,11 +19,10 @@ enum ModelIdentity {
         return nil
     }
 }
-final class ModelIdentityView: NSVisualEffectView {
+final class ModelIdentityView: NSView {
+    override var allowsVibrancy: Bool { true }
     init(glyph: NSImage, name: String) {
         super.init(frame: NSRect(x: 0, y: 0, width: 32, height: 32))
-        material = .popover; state = .active; blendingMode = .behindWindow
-        wantsLayer = true; layer?.cornerRadius = 8; layer?.masksToBounds = true
         let image = NSImageView(frame: NSRect(x: 7, y: 7, width: 18, height: 18))
         image.image = glyph; image.imageScaling = .scaleProportionallyUpOrDown
         addSubview(image)

@@ -2,7 +2,8 @@ import Cocoa
 import UsageHUDCore
 
 /// An in-app notice: no notification permission, focus change, sound or required action.
-final class SourceNoticeView: NSVisualEffectView {
+final class SourceNoticeView: NSView {
+    override var allowsVibrancy: Bool { true }
     init(_ notice: SourceNotice) {
         let width: CGFloat = 340
         let shown = Array(notice.lines.prefix(3)) + (notice.lines.count > 3 ? ["\(notice.lines.count - 3) more sources updated"] : [])
@@ -11,8 +12,6 @@ final class SourceNoticeView: NSVisualEffectView {
         let bodyWidth = width - 28
         let size = body.sizeThatFits(NSSize(width: bodyWidth, height: 1000))
         super.init(frame: NSRect(x: 0, y: 0, width: width, height: 56 + ceil(size.height) + 14))
-        material = .popover; blendingMode = .behindWindow; state = .active
-        wantsLayer = true; layer?.cornerRadius = 12; layer?.masksToBounds = true
         let app = NSTextField(labelWithString: "Usage HUD")
         app.font = .systemFont(ofSize: 10); app.textColor = .secondaryLabelColor
         app.frame = NSRect(x: 14, y: frame.height - 26, width: bodyWidth, height: 14)
@@ -51,7 +50,7 @@ final class SourceNoticePresenter {
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = true
         window.level = .statusBar; window.hidesOnDeactivate = false; window.ignoresMouseEvents = true
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        window.contentView = view
+        window.contentView = NativeSurface(content: view)
         let visible = screen.visibleFrame.insetBy(dx: 8, dy: 8)
         let x = min(max(anchor.midX - view.frame.width / 2, visible.minX), visible.maxX - view.frame.width)
         let y = max(visible.minY, min(anchor.minY - 8 - view.frame.height, visible.maxY - view.frame.height))

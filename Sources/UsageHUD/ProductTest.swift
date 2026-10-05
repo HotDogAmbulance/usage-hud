@@ -5,6 +5,8 @@ import UsageHUDCore
 /// Refresh is intercepted here, so this mode never reads credentials or contacts a provider.
 final class FixtureHUD: HUD {
     var recovered: () -> Void = {}
+    var hoverAnchors: [String: NSView] = [:]
+    override func hoverButton(_ id: String) -> NSView? { hoverAnchors[id] ?? super.hoverButton(id) }
     override func load(_ refresh: String?, also: Set<String> = []) { recovered() }
 }
 final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -14,6 +16,7 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let provider = NSPopUpButton(frame: NSRect(x: 20, y: 419, width: 250, height: 28))
     let summary = NSTextField(wrappingLabelWithString: "")
     var preview: NSView?
+    var groupPreview: NativeSurface?
     var state = "Fresh"
     let names = [("codex", "Codex"), ("claude", "Claude"), ("antigravity", "Antigravity"), ("openrouter", "OpenRouter"),
                  ("grok", "Grok"), ("xai", "xAI"), ("vercel", "Vercel"), ("deepseek", "DeepSeek"), ("kimi", "Kimi"),
@@ -42,7 +45,10 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
             button.frame = NSRect(x: 20 + CGFloat(index) * 186, y: 18, width: 178, height: 30)
             window.contentView?.addSubview(button)
         }
+        let follow = NSButton(title: "Follow actual bar", target: self, action: #selector(followActualBar))
+        follow.frame = NSRect(x: 390, y: 219, width: 178, height: 28); window.contentView?.addSubview(follow)
         hud.recovered = { [weak self] in self?.state = "Recovered"; self?.show() }
+        hud.contrastTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.hud.updateContrast() }
         show(); window.center(); window.makeKeyAndOrderFront(nil)
     }
     @objc func sourceChanged(_ sender: NSButton) {
@@ -74,11 +80,12 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             hud.showSourceNotice(notice)
             preview?.removeFromSuperview()
-            let view = SourceNoticeView(notice)
+            let view = NativeSurface(content: SourceNoticeView(notice))
             view.frame.origin = NSPoint(x: 20, y: max(53, 210 - view.frame.height))
             window.contentView?.addSubview(view); preview = view
         }
     }
+    @objc func followActualBar() { hud.forcedDarkBar = nil; hud.updateContrast(); show() }
     @objc func providerChanged() { show() }
     @objc func scenario(_ sender: NSButton) {
         if sender.title == "Dark bar" || sender.title == "Light bar" { hud.forcedDarkBar = sender.title == "Dark bar" }
@@ -143,12 +150,31 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let panels = names.map { fixture($0.0, $0.1) }
         panels.forEach { hud.render($0) }
         hud.shelf = Shelf(); hud.arrange([selected.0] + names.map { $0.0 }.filter { $0 != selected.0 })
+        groupPreview?.removeFromSuperview(); hud.hoverAnchors.removeAll()
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 8, height: 22))
+        var x: CGFloat = 4
+        for id in hud.group.order {
+            let cell = id == "overflow" ? hud.overflow : id == "usage-hud" ? hud.brandCell : hud.items[id]
+            guard let cell = cell, let original = cell.button else { continue }
+            let button = StatusCellButton(id: id)
+            button.frame = NSRect(x: x, y: 0, width: cell.length, height: 22); button.image = original.image
+            button.setAccessibilityLabel(original.accessibilityLabel()); button.setAccessibilityValue(original.accessibilityValue())
+            button.beforeClick = { [weak self] in self?.hud.closeHover() }; button.target = hud; button.action = #selector(HUD.openCell(_:))
+            content.addSubview(button); hud.hoverAnchors[id] = button; x += cell.length
+        }
+        content.frame.size.width = x + 4
+        let group = NativeSurface(content: content, radius: 11)
+        group.appearance = NSAppearance(named: hud.darkMenuBar ? .darkAqua : .aqua)
+        group.frame.origin = NSPoint(x: 20, y: 222); window.contentView?.addSubview(group); groupPreview = group
         let panel = panels.first { $0.id == selected.0 }!
-        summary.stringValue = selected.1 + " · " + state + "\nClick its battery above, or use the buttons below to open its real menu/hover panel."
+        summary.stringValue = selected.1 + " · " + state + " · " + (hud.forcedDarkBar == nil ? "actual native bar" : "simulated bar") +
+            (hud.darkMenuBar ? " · light ink" : " · dark ink") + "\nClick a battery in the group, or show its hover before clicking it."
         preview?.removeFromSuperview()
         let view = panel.cells.isEmpty ? CellsView(title: panel.name, lines: panel.note.isEmpty ? [] : [panel.note],
                                                     rows: Array(panel.windows.prefix(5)), darkBar: hud.darkMenuBar, providerID: panel.id) : hud.cellsView(panel)
-        view.frame.origin = NSPoint(x: 20, y: max(53, 210 - view.frame.height)); window.contentView?.addSubview(view); preview = view
+        view.appearance = NSAppearance(named: hud.darkMenuBar ? .darkAqua : .aqua)
+        let surface = NativeSurface(content: view); surface.appearance = view.appearance
+        surface.frame.origin = NSPoint(x: 20, y: max(53, 210 - surface.frame.height)); window.contentView?.addSubview(surface); preview = surface
     }
     @objc func open(_ sender: NSButton) {
         let id = names[max(0, provider.indexOfSelectedItem)].0
@@ -157,12 +183,12 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
             hud.hovered = id; hud.drawIcon(id); hud.showHover(id)
             if let glyph = ModelIdentity.glyph(id) {
                 preview?.removeFromSuperview()
-                let view = ModelIdentityView(glyph: glyph, name: names[max(0, provider.indexOfSelectedItem)].1)
+                let view = NativeSurface(content: ModelIdentityView(glyph: glyph, name: names[max(0, provider.indexOfSelectedItem)].1), radius: 8)
                 view.frame.origin = NSPoint(x: 20, y: 160); window.contentView?.addSubview(view); preview = view
                 summary.stringValue = "Model-only hover identifier · existing 7d battery view retained"
             }
         }
-        else { hud.items[id]?.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY), in: sender) }
+        else { if let button = hud.hoverAnchors[id] as? StatusCellButton { hud.openCell(button) } }
     }
     func windowWillClose(_ notification: Notification) { NSApp.terminate(nil) }
 }
