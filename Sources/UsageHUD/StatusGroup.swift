@@ -15,8 +15,8 @@ enum ClickLog {
 final class StatusCellButton: NSButton {
     let sourceID: String
     var beforeClick: () -> Void = {}
-    /// The cell under the pointer according to the group's own layout. A click that lands on a different button is handed over.
-    var route: (NSEvent) -> StatusCellButton? = { _ in nil }
+    /// macOS reports every click on a status item at one fixed point, so the cell is found from where the pointer really is.
+    var route: () -> StatusCellButton? = { nil }
     init(id: String) {
         sourceID = id
         super.init(frame: NSRect(x: 0, y: 0, width: 32, height: 22))
@@ -26,20 +26,17 @@ final class StatusCellButton: NSButton {
     }
     required init?(coder: NSCoder) { nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    private func handOver(_ event: NSEvent) -> StatusCellButton? {
-        let inside = bounds.contains(convert(event.locationInWindow, from: nil))
-        let owner = route(event)
-        ClickLog.write("click \(sourceID) at \(event.locationInWindow) frame \(frame) inside=\(inside) owner=\(owner?.sourceID ?? "none")")
-        guard let owner = owner, owner !== self else { return nil }
-        return owner
+    /// The cell the pointer is over now, or this one when the layout cannot say.
+    private func target(_ event: NSEvent) -> StatusCellButton {
+        let owner = route()
+        ClickLog.write("click received by \(sourceID) at \(event.locationInWindow), pointer over \(owner?.sourceID ?? "none")")
+        return owner ?? self
     }
     override func mouseDown(with event: NSEvent) {
-        if let owner = handOver(event) { owner.mouseDown(with: event); return }
-        beforeClick(); super.mouseDown(with: event)
+        let cell = target(event); cell.beforeClick(); cell.performClick(nil)
     }
     override func rightMouseDown(with event: NSEvent) {
-        if let owner = handOver(event) { owner.rightMouseDown(with: event); return }
-        beforeClick(); performClick(nil)
+        let cell = target(event); cell.beforeClick(); cell.performClick(nil)
     }
 }
 
@@ -101,9 +98,11 @@ final class StatusGroup {
     }
     /// Space inside the rounded edge, and between neighbouring batteries (each side of a battery gets half of `gap`).
     static let pad: CGFloat = 7, gap: CGFloat = 6
-    /// The button under the pointer by horizontal position alone, so a slightly different bar height cannot change the answer.
-    func cellButton(for event: NSEvent) -> StatusCellButton? {
-        let x = content.convert(event.locationInWindow, from: nil).x
+    /// The button under a point on the screen, by horizontal position alone so a slightly different bar height cannot change
+    /// the answer. The default is the pointer now: a status item's click event carries one fixed point whatever was pressed.
+    func cellButton(atScreen point: NSPoint = NSEvent.mouseLocation) -> StatusCellButton? {
+        guard let window = content.window else { return nil }
+        let x = content.convert(window.convertPoint(fromScreen: point), from: nil).x
         return content.subviews.compactMap { $0 as? StatusCellButton }.first { x >= $0.frame.minX && x < $0.frame.maxX }
     }
     func install(_ cells: [StatusCell]) {
@@ -120,7 +119,7 @@ final class StatusGroup {
             guard let child = cell.button else { continue }
             child.frame = NSRect(x: x, y: (height - 22) / 2, width: cell.length, height: 22)
             if child.superview !== content { content.addSubview(child) }
-            child.route = { [weak self] in self?.cellButton(for: $0) }
+            child.route = { [weak self] in self?.cellButton() }
             child.isHidden = false; x += cell.length
         }
         order = cells.compactMap { $0.button?.sourceID }

@@ -12,6 +12,8 @@ enum SystemBattery {
     static let stackedWidth: CGFloat = 32
     static func stacked(dark: Bool) -> NSImage {
         let image = NSImage(size: NSSize(width: stackedWidth, height: 22))
+        // Coloured here rather than left to a template tint, which did not reach this button: the logo came out black on a dark bar.
+        let ink: NSColor = dark ? .white : .black
         image.lockFocus()
         func paint(_ mask: CGImage?, in rect: NSRect, ink: NSColor, operation: CGBlendMode = .normal) {
             guard let mask = mask, let context = NSGraphicsContext.current?.cgContext else { return }
@@ -26,15 +28,15 @@ enum SystemBattery {
                 paint(cap, in: capRect, ink: .black, operation: .destinationOut)
             }
             if outline != nil {
-                paint(outline, in: rect, ink: .black.withAlphaComponent(front ? 1 : BatteryText.trackAlpha(dark: dark)))
+                paint(outline, in: rect, ink: ink.withAlphaComponent(front ? 1 : BatteryText.trackAlpha(dark: dark)))
             } else {
-                NSColor.black.withAlphaComponent(front ? 1 : BatteryText.trackAlpha(dark: dark)).setStroke()
+                ink.withAlphaComponent(front ? 1 : BatteryText.trackAlpha(dark: dark)).setStroke()
                 let fallback = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 3.5, yRadius: 3.5)
                 fallback.lineWidth = 1; fallback.stroke()
             }
-            paint(cap, in: capRect, ink: .black.withAlphaComponent(front ? 0.5 : 0.35))
+            paint(cap, in: capRect, ink: ink.withAlphaComponent(front ? 0.5 : 0.35))
         }
-        image.unlockFocus(); image.isTemplate = true
+        image.unlockFocus(); image.isTemplate = false
         return image
     }
 

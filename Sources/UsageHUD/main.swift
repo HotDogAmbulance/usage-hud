@@ -107,7 +107,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var group: StatusGroup = {
         let group = StatusGroup()
         group.item.button?.target = self; group.item.button?.action = #selector(groupClicked(_:))
-        group.item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        group.item.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        (group.item.button?.cell as? NSButtonCell)?.highlightsBy = []
         group.content.appearanceChanged = { [weak self] in DispatchQueue.main.async { self?.updateContrast() } }
         return group
     }()
@@ -347,10 +348,9 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     /// A click the status item itself received instead of one of its cells goes to the cell under the pointer.
     @objc func groupClicked(_ sender: NSStatusBarButton) {
-        guard let event = NSApp.currentEvent else { return }
-        let cell = group.cellButton(for: event)
-        ClickLog.write("group click at \(event.locationInWindow) cell=\(cell?.sourceID ?? "none")")
-        cell?.performClick(nil)
+        let cell = group.cellButton()
+        ClickLog.write("status item click, pointer over \(cell?.sourceID ?? "none")")
+        cell?.beforeClick(); cell?.performClick(nil)
     }
     @objc func openCell(_ sender: StatusCellButton) {
         closeHover()
@@ -856,14 +856,11 @@ if CommandLine.arguments.contains("--self-test") {
     // All visible cells share one native surface, with separate accessible buttons and menus.
     precondition(delegate.group.order == ["usage-hud", "codex", "claude"])
     precondition(delegate.group.content.subviews.count == 3)
-    // Wherever a click lands in the group, the cell under that x position takes it, whichever button AppKit chose.
+    // Whatever point AppKit reports for a click, the cell the pointer is over takes it.
     for cell in delegate.group.content.subviews.compactMap({ $0 as? StatusCellButton }) {
-        let inContent = NSPoint(x: cell.frame.midX, y: cell.frame.midY)
-        let inWindow = delegate.group.content.convert(inContent, to: nil)
-        if let event = NSEvent.mouseEvent(with: .leftMouseDown, location: inWindow, modifierFlags: [], timestamp: 0,
-                                          windowNumber: cell.window?.windowNumber ?? 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
-            precondition(delegate.group.cellButton(for: event)?.sourceID == cell.sourceID)
-        }
+        guard let window = cell.window else { continue }
+        let inWindow = delegate.group.content.convert(NSPoint(x: cell.frame.midX, y: cell.frame.midY), to: nil)
+        precondition(delegate.group.cellButton(atScreen: window.convertPoint(toScreen: inWindow))?.sourceID == cell.sourceID)
     }
     precondition(delegate.items["codex"]?.button?.acceptsFirstMouse(for: nil) == true)
     if #available(macOS 26, *) { precondition(delegate.group.surface.usesLiquidGlass) }
