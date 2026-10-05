@@ -84,6 +84,8 @@ The core suite covers quiet startup, placeholders that have never connected, rep
 
 ## Menu-bar contrast and family palettes — 2026-10-05
 
-Computer Use operated the native disposable product-test app with simulated readings. It selected Antigravity and inspected Gemini 16% / Claude & GPT 76%; selected OpenRouter and switched its originating bar between dark and light while the test window stayed light, confirming white versus black key fills; and opened Claude’s model-only installed glyph and expired-credential menu. That menu exposed the CLI connection and a disabled waiting row. The overflow menu exposed production detail views for Antigravity, xAI, Fireworks and LiteLLM.
+Computer Use operated the native disposable product-test app with simulated readings. It selected Antigravity and inspected Gemini 16% / Claude & GPT 76%; selected OpenRouter and switched its originating bar between dark and light while the test window stayed light, confirming white versus black key fills; and opened Claude’s model-only installed glyph and expired-credential menu. At that stage the menu exposed the CLI connection and a disabled waiting row; the follow-up hides both connection and refresh controls, including that waiting row. The overflow menu exposed production detail views for Antigravity, xAI, Fireworks and LiteLLM.
 
 This verifies the native fixture UI, not provider account collection or an actual wallpaper change. No account or API call occurs in that mode. The core suite adds a model-removal/last-used-palette check; the AppKit checks cover both bar shades, distinct AG palettes, tighter-window warnings and the expired-Claude menu. `native-family-contrast.png` is a renderer comparison, not a screen capture.
+
+The follow-up AppKit checks assert that both fresh and expired Claude menus omit the connection and refresh controls, while other providers retain their refresh actions. Collection behavior is unchanged.
