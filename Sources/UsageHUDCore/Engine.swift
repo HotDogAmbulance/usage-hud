@@ -64,7 +64,7 @@ public final class Engine {
             let status = cache.read(statusFile)
             // A provider not yet read stays hidden, unless it needs the user (a prompt or a rejected key) to get there.
             guard provider.shown() || status["attention"] as? Bool == true else { return nil }
-            // Claude Code's statusline and hooks deliver readings too; one newer than the failure means it healed by itself.
+            // A statusline reading newer than the failed request clears that failure; hooks only announce activity.
             let failing = status["error"] is String && number(cache.read(provider.id + ".json")["captured_at"]) ?? 0 <= number(status["checked_at"]) ?? 0
             // A battery whose source left the Mac goes with it, as does one without a good read for a week; the background
             // keeps trying, so either comes back with its next good read.

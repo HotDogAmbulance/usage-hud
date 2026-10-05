@@ -25,9 +25,9 @@ final class ClaudeProvider: UsageProvider {
         }
         let oauth = (object["claudeAiOauth"] as? JSON) ?? object
         guard let token = oauth["accessToken"] as? String, !token.isEmpty else { throw HUDProblem("Claude token missing") }
-        // Claude Code renews its token while in use, in the CLI or the Claude app's Code tab; an old one only means it sat
-        // idle. Chat alone doesn't renew it. Nothing needs signing in.
-        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Updates when you next use Claude Code (CLI or the app's Code tab)") }
+        // Expiry does not establish sign-out or which credential store Desktop uses. The HUD leaves renewal to Claude
+        // Code; a newer statusline reading can also clear the cached failure without this token changing.
+        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Claude Code credential expired; waiting for fresh usage") }
         return token
     }
     func refresh() throws {
@@ -59,7 +59,7 @@ final class ClaudeProvider: UsageProvider {
         try cache.quota("claude.json", windows: windows, extra: extra)
     }
     /// The prepaid balance changes rarely, so it is read hourly, the way Claude Code reads it; a failure just leaves the row out.
-    /// (Claude's free resets are not read: the server only answers them for Claude Code's own client identity.)
+    /// Reset grants are not read: the experimental request was removed rather than emulate another client's identity.
     func extras(_ token: String) -> JSON {
         var extras: JSON = ["extras_at": Date().timeIntervalSince1970]
         if let organization = organization(),
