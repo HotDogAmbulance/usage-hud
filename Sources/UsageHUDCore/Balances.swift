@@ -66,10 +66,12 @@ final class KeyProvider: UsageProvider {
                 notHere[host] = Date().addingTimeInterval(3600); lastProblem = error
                 continue
             }
+            let receipt = (id == "litellm" ? ReadingSource.liteLLMProxy : .providerAPI).receipt()
+            let metadata = receipt.merging(["host": host]) { _, new in new }
             if let windows = blob["rate_limits"] as? JSON {
-                try cache.quota(id + ".json", windows: windows, extra: blob.filter { $0.key != "rate_limits" }.merging(["host": host]) { _, new in new })
+                try cache.quota(id + ".json", windows: windows, extra: blob.filter { $0.key != "rate_limits" }.merging(metadata) { _, new in new })
             } else {
-                try cache.write(id + ".json", blob.merging(["host": host, "captured_at": Date().timeIntervalSince1970]) { _, new in new })
+                try cache.write(id + ".json", blob.merging(metadata.merging(["captured_at": Date().timeIntervalSince1970]) { _, new in new }) { _, new in new })
             }
             return
         }

@@ -22,8 +22,11 @@ final class CellsView: NSView {
     let nameWidth: CGFloat, titleWidth: CGFloat
     let allCached: Bool, more: Int
     let moreHint: String
+    let darkBar: Bool?
+    let providerID: String?
     func detail(_ row: Window) -> String { (row.right ?? "") + (row.isCached && !allCached ? " · cached" : "") }
-    init(title: String, subtitle: String? = nil, lines: [String] = [], rows: [Window], more: Int = 0, allReadingsCached: Bool? = nil, moreHint: String = "click battery for all") {
+    init(title: String, subtitle: String? = nil, lines: [String] = [], rows: [Window], more: Int = 0, allReadingsCached: Bool? = nil, moreHint: String = "click battery for all", darkBar: Bool? = nil, providerID: String? = nil) {
+        self.darkBar = darkBar; self.providerID = providerID
         self.title = title; self.lines = lines; self.rows = rows; self.more = more; self.moreHint = moreHint
         let allOld = allReadingsCached ?? (!rows.isEmpty && rows.allSatisfy(\.isCached))
         allCached = allOld
@@ -51,11 +54,12 @@ final class CellsView: NSView {
     }
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
-    static func color(left: Double) -> NSColor { left <= 0.1 ? .systemRed : left <= 0.3 ? .systemYellow : .labelColor }
+    static func color(left: Double, dark: Bool) -> NSColor { left <= 0.1 ? .systemRed : left <= 0.3 ? .systemYellow : dark ? .white : .black }
     
     override func draw(_ dirtyRect: NSRect) {
         let clip = NSMutableParagraphStyle(); clip.lineBreakMode = .byTruncatingTail
         var head = Self.head, body = Self.body; head[.paragraphStyle] = clip; body[.paragraphStyle] = clip
+        let dark = darkBar ?? (effectiveAppearance.bestMatch(from: [.darkAqua, .vibrantDark, .aqua, .vibrantLight]).map { $0 == .darkAqua || $0 == .vibrantDark } ?? false)
         let width = bounds.width - 24
         var y: CGFloat = 8
         (title as NSString).draw(in: NSRect(x: 12, y: y, width: width, height: 16), withAttributes: head)
@@ -66,20 +70,24 @@ final class CellsView: NSView {
             (row.label as NSString).draw(in: NSRect(x: 12, y: y + 2, width: nameWidth, height: 16), withAttributes: body)
             let x = 12 + nameWidth + 8
             if let used = row.pct {
-                // A battery like the menu bar's: the share of the cap left, with its digits cut out of the fill.
+                // Match the originating bar's contrast; inverse digits stay legible inside a differently shaded panel.
                 let left = max(0, min(1, (100 - used) / 100)), shell = NSRect(x: x, y: y + 3, width: 36, height: 13)
                 let image = NSImage(size: shell.size, flipped: false) { rect in
                     let outline = NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 33, height: 13), xRadius: 3.5, yRadius: 3.5)
                     NSGraphicsContext.saveGraphicsState(); outline.addClip()
-                    NSColor.tertiaryLabelColor.withAlphaComponent(0.35).setFill(); rect.fill()
-                    Self.color(left: left).setFill(); NSRect(x: 0, y: 0, width: 33 * left, height: 13).fill()
+                    let ink: NSColor = dark ? .white : .black
+                    ink.withAlphaComponent(0.28).setFill(); rect.fill()
+                    let fill = NSRect(x: 0, y: 0, width: 33 * left, height: 13)
+                    let palette = self.providerID == "antigravity" ? row.palette ?? QuotaPalette.families([row.label]) : nil
+                    if left <= 0.3 { Self.color(left: left, dark: dark).setFill(); fill.fill() }
+                    else { BatteryPaint.fill(fill, body: NSRect(x: 0, y: 0, width: 33, height: 13), palette: palette, dark: dark) }
                     NSGraphicsContext.restoreGraphicsState()
-                    NSColor.tertiaryLabelColor.setFill()
+                    (dark ? NSColor.white : NSColor.black).withAlphaComponent(0.45).setFill()
                     NSBezierPath(roundedRect: NSRect(x: 34, y: 4, width: 2, height: 5), xRadius: 1, yRadius: 1).fill()
                     let digits = String(Int((left * 100).rounded())) as NSString
-                    let style: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold), .foregroundColor: NSColor.black]
+                    let digitsColor: NSColor = left <= 0.3 || palette == nil && dark ? .black : .white
+                    let style: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold), .foregroundColor: digitsColor]
                     let size = digits.size(withAttributes: style)
-                    NSGraphicsContext.current?.cgContext.setBlendMode(.destinationOut)
                     digits.draw(at: NSPoint(x: 16.5 - size.width / 2, y: 6.5 - size.height / 2), withAttributes: style)
                     return true
                 }
@@ -110,9 +118,17 @@ class HUD: NSObject, NSApplicationDelegate {
     var acknowledged: [String: String] = [:]
     var pulse: Timer?
     let popover = NSPopover()
+    let modelPopover = NSPopover()
     /// A newer release, offered at the foot of every battery menu.
     var update: (tag: String, page: URL)?
     var busy = false
+    var pendingCacheRead = false
+    var pendingAlso: Set<String> = []
+    var pendingAutomaticRead = false
+    var sourceChanges = SourceChanges()
+    var sourceNoticesReady = false
+    let sourceNotice = SourceNoticePresenter()
+    var lastNoticeAnchor: (rect: NSRect, screen: NSScreen)?
     /// A Refresh chosen while a background pass is running; it runs as soon as that pass ends.
     var pending: String?
     var lockDescriptor: Int32 = -1
@@ -151,7 +167,9 @@ class HUD: NSObject, NSApplicationDelegate {
         Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
                                                             object: nil, queue: .main) { [weak self] _ in
-            self?.items.keys.forEach { self?.drawIcon($0) }
+            guard let self = self else { return }
+            Array(self.panels.values).forEach { self.render($0) }
+            if let id = self.hovered { self.showHover(id) }
         }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -203,10 +221,16 @@ class HUD: NSObject, NSApplicationDelegate {
     }
     @objc func openUpdate() { if let page = update?.page { NSWorkspace.shared.open(page) } }
     func load(_ refresh: String?, also: Set<String> = []) {
-        guard !busy else { if let refresh = refresh, refresh != "automatic" { pending = refresh }; return }
+        guard !busy else {
+            if refresh == "automatic" { pendingAutomaticRead = true }
+            else if let refresh = refresh { pending = refresh }
+            else { pendingCacheRead = true; pendingAlso.formUnion(also) }
+            return
+        }
         busy = true
         DispatchQueue.global(qos: .utility).async {
             let panels = self.engine.panels(refresh: refresh, also: also)
+            let gone = self.engine.goneSources
             DispatchQueue.main.async {
                 self.busy = false
                 // Batteries are placed as they first appear, so the most used one takes the first spot, then the next.
@@ -218,10 +242,33 @@ class HUD: NSObject, NSApplicationDelegate {
                 UserDefaults.standard.set(self.shelf.lastUsed, forKey: "shelfLastUsed")
                 UserDefaults.standard.set(self.shelf.scores, forKey: "shelfScores")
                 UserDefaults.standard.set(self.shelf.scoredAt, forKey: "shelfScoredAt")
+                self.rememberSourceNoticeAnchor()
                 self.arrange(panels.map { $0.id })
+                let notice = self.sourceChanges.update(panels: panels, gone: gone, announce: self.sourceNoticesReady)
+                if refresh == "automatic" { self.sourceNoticesReady = true }
+                if let notice = notice { self.showSourceNotice(notice) }
                 if let next = self.pending { self.pending = nil; self.load(next) }
+                else if self.pendingAutomaticRead { self.pendingAutomaticRead = false; self.load("automatic") }
+                else if self.pendingCacheRead {
+                    self.pendingCacheRead = false
+                    let also = self.pendingAlso; self.pendingAlso = []
+                    self.load(nil, also: also)
+                }
             }
         }
+    }
+    func rememberSourceNoticeAnchor() {
+        // The overflow belongs to this app too; never anchor a notice to another app’s menu item.
+        let button = overflow?.isVisible == true ? overflow?.button :
+            items.sorted(by: { $0.key < $1.key }).first(where: { $0.value.isVisible })?.value.button
+        guard let button = button, let window = button.window, let screen = window.screen else { return }
+        let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+        lastNoticeAnchor = (anchor, screen)
+    }
+    func showSourceNotice(_ notice: SourceNotice) {
+        rememberSourceNoticeAnchor()
+        guard let anchor = lastNoticeAnchor else { return }
+        sourceNotice.show(notice, below: anchor.rect, screen: anchor.screen)
     }
     /// The 7d layer's colour where a brand has a second one; the others tone their main colour down.
     static let side: [String: NSColor] = [
@@ -258,13 +305,14 @@ class HUD: NSObject, NSApplicationDelegate {
     var forcedDarkBar: Bool?
     var darkMenuBar: Bool {
         if let forced = forcedDarkBar { return forced }
-        return (items.values.first?.button?.effectiveAppearance ?? NSApp.effectiveAppearance).bestMatch(from: [.darkAqua, .aqua]) != .aqua
+        let match = (items.values.first?.button?.effectiveAppearance ?? NSApp.effectiveAppearance).bestMatch(from: [.darkAqua, .vibrantDark, .aqua, .vibrantLight])
+        return match == .darkAqua || match == .vibrantDark
     }
-    /// Fills `rect` with the provider's tint. Antigravity uses its four-colour mark, spread across the whole body.
+    /// Fills `rect` with the provider tint, or the model-family palette carried by an Antigravity row.
     /// On a light menu bar, pale tints are deepened and the weekly shade is softened less, so white and silver stay visible.
     /// `muted` is the 7d layer behind 5h: on a dark bar it sinks toward grey instead of toward white, so it reads as the
     /// same colour further away rather than as a white battery.
-    func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, muted: Bool = false, alpha: CGFloat, dark: Bool = true) {
+    func paint(_ rect: NSRect, body: NSRect, id: String, light: Bool, muted: Bool = false, alpha: CGFloat, dark: Bool = true, palette: QuotaPalette? = nil) {
         let shade = { (color: NSColor) -> NSColor in
             var color = color
             if !dark, let rgb = color.usingColorSpace(.sRGB),
@@ -281,8 +329,11 @@ class HUD: NSObject, NSApplicationDelegate {
         }
         // The battery warning yellow stays the Mac's own on a light bar too; deepening it would turn it to mud.
         if id == "caution" || id == "critical" { tint(id).withAlphaComponent(alpha).setFill(); rect.fill(); return }
-        guard id == "antigravity" || id == "litellm" else { shade(tint(id)).setFill(); rect.fill(); return }
-        let marks: [(CGFloat, CGFloat, CGFloat)] = id == "litellm" ? [(1.0 / 255, 23.0 / 255, 190.0 / 255), (91.0 / 255, 63.0 / 255, 209.0 / 255)] : [(0.19, 0.53, 1.00), (0.19, 0.53, 1.00), (0.98, 0.27, 0.26), (0.98, 0.74, 0.07), (0.03, 0.73, 0.38)]
+        if id == "antigravity" {
+            BatteryPaint.fill(rect, body: body, palette: palette, dark: dark, alpha: alpha); return
+        }
+        guard id == "litellm" else { shade(tint(id)).setFill(); rect.fill(); return }
+        let marks: [(CGFloat, CGFloat, CGFloat)] = [(1.0 / 255, 23.0 / 255, 190.0 / 255), (91.0 / 255, 63.0 / 255, 209.0 / 255)]
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: rect).addClip()
         NSGradient(colors: marks.map { shade(NSColor(srgbRed: $0.0, green: $0.1, blue: $0.2, alpha: 1)) })?.draw(in: body, angle: 0)
@@ -356,13 +407,14 @@ class HUD: NSObject, NSApplicationDelegate {
         // Antigravity's pools are separate quotas: red, like the Mac's battery under 20%, only once every one is nearly spent.
         let pools = panel.windows.compactMap { $0.pct }
         var critical = panel.id == "antigravity" && !pools.isEmpty && pools.allSatisfy { 100 - $0 <= 20 }
-        // Everything else keeps its own colour until what is left of the 5h and 7d windows (the freer of the two) is 15%, then 10%.
+        // Everything else keeps its own colour until what is left of the 5h and 7d windows (the tighter of the two) is 15%, then 10%.
         var caution = panel.caution != nil
         if let shown = quota, panel.id != "antigravity", shown.stale != true, shown.expired != true {
             let spans = panel.windows.filter { ($0.label == "5h" || $0.label == "7d") && $0.pct != nil && $0.stale != true && $0.expired != true }
-            let free = (spans.isEmpty ? [shown] : spans).map { 100 - ($0.pct ?? 0) }.max() ?? 100
+            let free = (spans.isEmpty ? [shown] : spans).map { 100 - ($0.pct ?? 0) }.min() ?? 100
             if free <= 10 { critical = true } else if free <= 15 { caution = true }
         }
+        let palette = panel.id == "antigravity" ? quota?.palette ?? QuotaPalette.families([quota?.label ?? ""]) : nil
         let warning = critical ? "critical" : caution ? "caution" : panel.id
         let moneyWindow = quota == nil ? panel.windows.first(where: {$0.label == panel.name}) : nil
         let cached = quota?.isCached == true || moneyWindow?.isCached == true
@@ -405,9 +457,9 @@ class HUD: NSObject, NSApplicationDelegate {
         let trackStart = fillAlpha < 1 ? 0 : weeklyAlpha < 1 ? fillEnd : weeklyEnd
         ink.withAlphaComponent(dark ? 0.36 : 0.22).setFill(); span(trackStart, bodyWidth).fill()
         if weeklyEnd > fillEnd {
-            paint(span(fillEnd, weeklyEnd), body: bodyRect, id: warning, light: false, muted: true, alpha: weeklyAlpha, dark: dark)
+            paint(span(fillEnd, weeklyEnd), body: bodyRect, id: warning, light: false, muted: true, alpha: weeklyAlpha, dark: dark, palette: palette)
         }
-        paint(span(0, fillEnd), body: bodyRect, id: warning, light: money != nil && panel.caution == nil && panel.id != "litellm", muted: weeklyShade, alpha: fillAlpha, dark: dark)
+        paint(span(0, fillEnd), body: bodyRect, id: warning, light: money != nil && panel.caution == nil && panel.id != "litellm", muted: weeklyShade, alpha: fillAlpha, dark: dark, palette: palette)
         if glow > 0 { HUD.red.withAlphaComponent(glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
@@ -449,10 +501,11 @@ class HUD: NSObject, NSApplicationDelegate {
                 if inside {
                     self.hovered = id; self.acknowledged[id] = self.panels[id]?.alert
                     // Just long enough to ignore a pointer passing over on its way elsewhere.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.showCells(id) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.showHover(id) }
                 } else {
                     if self.hovered == id { self.hovered = nil }
                     if self.popover.isShown { self.popover.close() }
+                    self.modelPopover.close()
                 }
                 self.updatePulse()
                 self.drawIcon(id)
@@ -510,11 +563,19 @@ class HUD: NSObject, NSApplicationDelegate {
             item.representedObject = [panel.id, fix]; item.target = self
         }
         if panel.id == "claude", FileManager.default.fileExists(atPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path) {
-            let live = menu.addItem(withTitle: "Live from Claude Code", action: #selector(toggleClaudeCode), keyEquivalent: "")
+            let live = menu.addItem(withTitle: "Claude Code CLI connection", action: #selector(toggleClaudeCode), keyEquivalent: "")
             live.target = self; live.state = engine.claudeCodeConnected ? .on : .off
+            live.toolTip = "Connects the CLI hooks and statusline. Desktop Code activity alone does not guarantee fresh usage."
         }
-        let refresh = menu.addItem(withTitle: "Refresh " + panel.name, action: #selector(refreshProvider(_:)), keyEquivalent: "r")
-        refresh.representedObject = panel.id; refresh.target = self
+        if panel.id == "claude", panel.note.contains("credential expired") {
+            let waiting = menu.addItem(withTitle: "Waiting for fresh Claude usage", action: nil, keyEquivalent: "")
+            waiting.toolTip = "Refresh cannot renew this sign-in. A fresh CLI statusline or a renewed Claude Code credential can supply usage."
+        } else {
+            let refresh = menu.addItem(withTitle: panel.id == "claude" ? "Check Claude usage" : "Refresh " + panel.name,
+                                       action: #selector(refreshProvider(_:)), keyEquivalent: "r")
+            refresh.representedObject = panel.id; refresh.target = self
+            if panel.id == "claude" { refresh.toolTip = "Retries the existing reader; does not renew a sign-in or start a chat." }
+        }
         if panel.id == "codex" {
             let credits = menu.addItem(withTitle: "Refresh OpenAI API credits", action: #selector(refreshProvider(_:)), keyEquivalent: "")
             credits.representedObject = "openai-credits"; credits.target = self
@@ -619,7 +680,18 @@ class HUD: NSObject, NSApplicationDelegate {
         let balanceCached = balance?.isCached == true && !allOld ? " · cached" : ""
         return CellsView(title: panel.name + (balance?.right.map { "  " + $0 + balanceCached } ?? ""), subtitle: panel.cellsTitle, lines: lines,
                          rows: Array(panel.cells.prefix(8)), more: max(0, panel.cells.count - 8), allReadingsCached: allOld,
-                         moreHint: inMenu ? (panel.id == "openrouter" ? "All keys below" : "All budgets below") : "click battery for all")
+                         moreHint: inMenu ? (panel.id == "openrouter" ? "All keys below" : "All budgets below") : "click battery for all",
+                         darkBar: darkMenuBar, providerID: panel.id)
+    }
+    func showHover(_ id: String) {
+        guard hovered == id, let panel = panels[id] else { return }
+        if !panel.cells.isEmpty { modelPopover.close(); showCells(id); return }
+        guard ["claude", "codex", "glm", "grok", "kimi-code"].contains(id),
+              let glyph = ModelIdentity.glyph(id), let button = items[id]?.button, button.window != nil else { return }
+        let controller = NSViewController(); controller.view = ModelIdentityView(glyph: glyph, name: panel.name)
+        modelPopover.contentViewController = controller; modelPopover.contentSize = controller.view.frame.size
+        modelPopover.animates = false; modelPopover.behavior = .transient
+        modelPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
     /// Opens the per-key panel under a battery that is still hovered.
     func showCells(_ id: String) {
@@ -672,6 +744,23 @@ do {
 let app = NSApplication.shared
 let delegate = HUD()
 if CommandLine.arguments.contains("--self-test") {
+    let noticeView = SourceNoticeView(SourceNotice(title: "Tracking Claude", lines: [ReadingSource.claudeStatusline.description(provider: "Claude")]))
+    precondition(noticeView.frame.width == 340 && noticeView.frame.height > 60)
+    let noticePanel = SourceNoticePanel(contentRect: noticeView.bounds, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    precondition(!noticePanel.canBecomeKey && !noticePanel.canBecomeMain)
+    if let screen = NSScreen.main {
+        let presenter = SourceNoticePresenter()
+        var visibility: [Bool] = []
+        presenter.visibilityChanged = { visibility.append($0) }
+        let began = Date()
+        presenter.show(SourceNotice(title: "Source notice self-test", lines: ["Disposable fixture · automatically dismissed"]),
+                       below: NSRect(x: screen.visibleFrame.midX, y: screen.visibleFrame.maxY, width: 30, height: 20), screen: screen)
+        precondition(presenter.panel?.isVisible == true && presenter.panel?.ignoresMouseEvents == true)
+        precondition(presenter.panel?.canBecomeKey == false)
+        RunLoop.main.run(until: began.addingTimeInterval(SourceNotice.duration + 0.25))
+        precondition(presenter.panel?.isVisible == false && visibility == [true, false])
+    }
+
     do { try FileManager.default.createDirectory(at: delegate.home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
     catch { fputs("Self-test output directory unavailable\n", stderr); exit(1) }
     if let body = SystemBattery.body, let cap = SystemBattery.cap {
@@ -782,7 +871,21 @@ if CommandLine.arguments.contains("--self-test") {
         let chroma = max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) - min(rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
         precondition(0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] <= 0.5 || chroma >= 0.3, id + " is too close to white")
     }
-    precondition(CellsView.color(left: 0.05) == .systemRed && CellsView.color(left: 0.2) == .systemYellow && CellsView.color(left: 0.9) == .labelColor)
+    precondition(CellsView.color(left: 0.05, dark: true) == .systemRed && CellsView.color(left: 0.2, dark: false) == .systemYellow)
+    precondition(CellsView.color(left: 0.9, dark: true) == .white && CellsView.color(left: 0.9, dark: false) == .black)
+    let nearCap = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 95), Window(label: "7d", pct: 20)])
+    let redReference = Panel(id: "critical", name: "Reference", windows: nearCap.windows)
+    precondition(delegate.icon(nearCap).tiffRepresentation == delegate.icon(redReference).tiffRepresentation)
+    let google = Panel(id: "antigravity", name: "Antigravity", windows: [Window(label: "Gemini", pct: 24, palette: .google)])
+    let combined = Panel(id: "antigravity", name: "Antigravity", windows: [Window(label: "Claude & GPT", pct: 24, palette: .claudeOpenAI)])
+    precondition(delegate.icon(google).tiffRepresentation != delegate.icon(combined).tiffRepresentation)
+    precondition(ModelIdentity.glyph("openrouter") == nil && ModelIdentity.glyph("antigravity") == nil)
+    let identity = ModelIdentityView(glyph: NSImage(size: NSSize(width: 18, height: 18)), name: "Codex")
+    precondition(identity.frame.size == NSSize(width: 32, height: 32) && identity.accessibilityLabel() == "Codex")
+    let expiredClaude = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 40, stale: true)],
+                              note: "Claude Code credential expired; waiting for fresh usage")
+    precondition(delegate.providerMenu(expiredClaude).items.contains { $0.title == "Waiting for fresh Claude usage" && $0.action == nil })
+    precondition(!delegate.providerMenu(expiredClaude).items.contains { $0.title == "Refresh Claude" })
     // Balances stretch with their digits; a whole amount keeps the standard battery size.
     func balance(_ right: String) -> NSImage {
         delegate.icon(Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", pct: nil, right: right, resets_at: nil, expired: false, stale: false)], note: ""))

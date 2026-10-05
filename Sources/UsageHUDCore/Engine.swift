@@ -65,11 +65,21 @@ public final class Engine {
             // A provider not yet read stays hidden, unless it needs the user (a prompt or a rejected key) to get there.
             guard provider.shown() || status["attention"] as? Bool == true else { return nil }
             // A statusline reading newer than the failed request clears that failure; hooks only announce activity.
-            let failing = status["error"] is String && number(cache.read(provider.id + ".json")["captured_at"]) ?? 0 <= number(status["checked_at"]) ?? 0
+            let failing = status["error"] is String && number(cache.read(provider.cacheFile)["captured_at"]) ?? 0 <= number(status["checked_at"]) ?? 0
             // A battery whose source left the Mac goes with it, as does one without a good read for a week; the background
             // keeps trying, so either comes back with its next good read.
             if failing, status["gone"] as? Bool == true || Date().timeIntervalSince1970 - (number(status["ok_at"]) ?? .infinity) > 604_800 { return nil }
             var panel = provider.panel()
+            let blob = cache.read(provider.cacheFile)
+            panel.readingSource = (blob["reading_source"] as? String).flatMap(ReadingSource.init(rawValue:))
+            panel.sourceReadAt = number(blob["source_read_at"])
+            if provider.id == "claude" {
+                let legacy: ReadingSource? = blob["source"] as? String == "statusline" ? .claudeStatusline :
+                    blob["source"] as? String == "oauth-usage-get" ? .claudeOAuth : nil
+                let usable = quotaWindows(blob).contains { !$0.isCached && ($0.label == "5h" || $0.label.hasPrefix("7d")) }
+                panel.readingSource = usable ? legacy : nil
+                panel.sourceReadAt = usable ? number(blob["captured_at"]) : nil
+            }
             if failing, let message = status["error"] as? String {
                 panel.note = message; panel.fix = status["fix"] as? String
                 for index in panel.windows.indices { panel.windows[index].stale = true }
@@ -86,6 +96,15 @@ public final class Engine {
             }
             return panel
         }
+    }
+    /// An outage or a battery hidden after a week is not proof that a source was removed.
+    public var goneSources: Set<String> {
+        Set(providers.compactMap { provider in
+            let status = cache.read(provider.id + "-status.json")
+            guard status["error"] is String, status["gone"] as? Bool == true,
+                  (number(cache.read(provider.cacheFile)["captured_at"]) ?? 0) <= (number(status["checked_at"]) ?? 0) else { return nil }
+            return provider.id
+        })
     }
     public func statusline(_ data: Data) throws -> String {
         guard let payload = try? JSONSerialization.jsonObject(with: data) as? JSON else { return "" }
@@ -104,7 +123,7 @@ public final class Engine {
         }
         return bits.joined(separator: " | ")
     }
-    /// Claude Code's hooks call this when it starts, takes a prompt and finishes a turn, in the CLI or the app's Code tab.
+    /// Claude Code's hooks call this when it starts, takes a prompt and finishes a turn.
     public static let claudeCodeRan = Notification.Name("local.usage-hud.claude-code-ran")
     /// Our own hook and statusline commands, in exactly the form we write; one someone wrapped in a script of theirs stays theirs.
     static let ownCommand = #"^(python3? )?'?[^']*/(usagehud|usage_hud\.py)'? (--probe-if-stale|--claude-statusline)( 2>/dev/null)?( \|\| true)?$"#
@@ -144,7 +163,7 @@ public final class Engine {
             if !groups.isEmpty { hooks[event] = groups } else if !before.isEmpty { hooks[event] = nil }
         }
         value["hooks"] = hooks.isEmpty && original["hooks"] == nil ? nil : hooks
-        // Someone else's statusline stays; the hooks alone keep the battery current.
+        // Someone else's statusline stays; hooks can request a read but do not carry quota data.
         if original["statusLine"] == nil || (original["statusLine"] as? JSON).map({ ours($0) }) == true {
             var line = original["statusLine"] as? JSON ?? ["type": "command"]
             line["command"] = executable + " --claude-statusline 2>/dev/null"

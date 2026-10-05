@@ -9,9 +9,9 @@ final class FixtureHUD: HUD {
 }
 final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let hud = FixtureHUD()
-    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 440),
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 510),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-    let provider = NSPopUpButton(frame: NSRect(x: 20, y: 349, width: 250, height: 28))
+    let provider = NSPopUpButton(frame: NSRect(x: 20, y: 419, width: 250, height: 28))
     let summary = NSTextField(wrappingLabelWithString: "")
     var preview: NSView?
     var state = "Fresh"
@@ -22,15 +22,21 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)
         window.title = "Usage HUD — Product Test"; window.delegate = self
         let info = NSTextField(wrappingLabelWithString: "Usage HUD · simulated provider readings\nThe batteries and menus use the app's normal rendering. Refresh recovers the fixture. No account or API calls.")
-        info.frame = NSRect(x: 20, y: 386, width: 560, height: 44); window.contentView?.addSubview(info)
+        info.frame = NSRect(x: 20, y: 456, width: 560, height: 44); window.contentView?.addSubview(info)
         provider.addItems(withTitles: names.map { $0.1 }); provider.target = self; provider.action = #selector(providerChanged)
         window.contentView?.addSubview(provider)
-        for (index, title) in ["Fresh", "Cached", "Partial", "Recovered", "11 models", "Many keys", "Cycles", "Low quota"].enumerated() {
+        for (index, title) in ["Fresh", "Cached", "Partial", "Recovered", "11 models", "Many keys", "Cycles", "Low quota", "Dark bar", "Light bar", "Claude & GPT", "Expired Claude"].enumerated() {
             let button = NSButton(title: title, target: self, action: #selector(scenario(_:)))
-            button.frame = NSRect(x: 20 + CGFloat(index % 4) * 140, y: 306 - CGFloat(index / 4) * 35, width: 132, height: 28)
+            button.frame = NSRect(x: 20 + CGFloat(index % 4) * 140, y: 376 - CGFloat(index / 4) * 35, width: 132, height: 28)
             window.contentView?.addSubview(button)
         }
-        summary.frame = NSRect(x: 20, y: 220, width: 560, height: 40); window.contentView?.addSubview(summary)
+        for (index, title) in ["Source added", "Sources grouped", "Source removed"].enumerated() {
+            let button = NSButton(title: title, target: self, action: #selector(sourceChanged(_:)))
+            button.font = .systemFont(ofSize: 11)
+            button.frame = NSRect(x: 285 + CGFloat(index) * 98, y: 419, width: 95, height: 28)
+            window.contentView?.addSubview(button)
+        }
+        summary.frame = NSRect(x: 20, y: 255, width: 560, height: 40); window.contentView?.addSubview(summary)
         for (index, title) in ["Open provider menu", "Show hover panel", "Open overflow menu"].enumerated() {
             let button = NSButton(title: title, target: self, action: #selector(open(_:)))
             button.frame = NSRect(x: 20 + CGFloat(index) * 186, y: 18, width: 178, height: 30)
@@ -39,8 +45,46 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
         hud.recovered = { [weak self] in self?.state = "Recovered"; self?.show() }
         show(); window.center(); window.makeKeyAndOrderFront(nil)
     }
+    @objc func sourceChanged(_ sender: NSButton) {
+        var changes = SourceChanges()
+        let selected = names[max(0, provider.indexOfSelectedItem)]
+        func connected(_ id: String, _ name: String) -> Panel {
+            var panel = fixture(id, name); panel.note = ""
+            for index in panel.windows.indices { panel.windows[index].stale = false }
+            for index in panel.cells.indices { panel.cells[index].stale = false }
+            panel.sourceReadAt = Date().timeIntervalSince1970
+            panel.readingSource = id == "claude" ? .claudeStatusline : id == "codex" ? .codexCLI :
+                id == "antigravity" ? .antigravityLocal : id == "litellm" ? .liteLLMProxy : id == "grok" ? .grokCLI : .providerAPI
+            return panel
+        }
+        let current = connected(selected.0, selected.1)
+        let notice: SourceNotice?
+        if sender.title == "Source removed" {
+            _ = changes.update(panels: [current], announce: false)
+            notice = changes.update(panels: [], gone: [current.id])
+        } else {
+            notice = changes.update(panels: sender.title == "Sources grouped" ? names.map { connected($0.0, $0.1) } : [current])
+        }
+        if let notice = notice {
+            hud.sourceNotice.dismiss()
+            hud.sourceNotice.visibilityChanged = { [weak self] visible in
+                self?.summary.stringValue = visible ? "Native source notice visible · disappears after 6 seconds" :
+                    "Notice dismissed automatically · no action needed"
+                if !visible { self?.preview?.removeFromSuperview(); self?.preview = nil }
+            }
+            hud.showSourceNotice(notice)
+            preview?.removeFromSuperview()
+            let view = SourceNoticeView(notice)
+            view.frame.origin = NSPoint(x: 20, y: max(53, 210 - view.frame.height))
+            window.contentView?.addSubview(view); preview = view
+        }
+    }
     @objc func providerChanged() { show() }
-    @objc func scenario(_ sender: NSButton) { state = sender.title; show() }
+    @objc func scenario(_ sender: NSButton) {
+        if sender.title == "Dark bar" || sender.title == "Light bar" { hud.forcedDarkBar = sender.title == "Dark bar" }
+        else { state = sender.title }
+        show()
+    }
     func fixture(_ id: String, _ name: String) -> Panel {
         let cached = state == "Cached", partial = state == "Partial", low = state == "Low quota"
         let reset = Date().timeIntervalSince1970 + 21600
@@ -74,18 +118,27 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         } else {
             let rows = id == "antigravity" ? [Window(label: "Gemini", pct: low ? 99 : 84, right: "↻ 6h", resets_at: reset, stale: cached || partial),
-                Window(label: "Claude & GPT", pct: low ? 99 : 7, right: "↻ 6h", resets_at: reset, stale: cached)] :
+                Window(label: "Claude & GPT", pct: low ? 99 : 24, right: "↻ 6h", resets_at: reset, stale: cached)] :
                 [Window(label: "5h", pct: low ? 99 : 18, resets_at: reset, stale: cached || partial), Window(label: "7d", pct: low ? 99 : 30, resets_at: reset + 86400 * 6, stale: cached)]
             panel = Panel(id: id, name: name, windows: rows, cells: id == "antigravity" ? rows : [],
                           cellsTitle: id == "antigravity" ? (state == "11 models" ? "11 models" : "14 models") : nil)
             if id == "grok" { panel.windows = [Window(label: "7d", pct: low ? 99 : 30, resets_at: reset + 86400 * 6, stale: cached || partial)] }
             if id == "codex" { panel.windows.append(Window(label: "OpenAI API", right: "$40.47 · estimate", stale: cached || partial)) }
         }
+        if id == "antigravity" {
+            for index in panel.windows.indices { panel.windows[index].palette = QuotaPalette.families([panel.windows[index].label]) }
+            panel.cells = panel.windows
+            panel.lead = state == "Claude & GPT" ? "Claude & GPT" : "Gemini"
+        }
         if cached || partial { panel.note = "Source unavailable; last reading retained" }
+        if id == "claude", state == "Expired Claude" {
+            panel.note = "Claude Code credential expired; waiting for fresh usage"
+            for index in panel.windows.indices { panel.windows[index].stale = true }
+        }
         return panel
     }
     func show() {
-        hud.popover.close(); hud.hovered = nil
+        hud.popover.close(); hud.modelPopover.close(); hud.hovered = nil
         let selected = names[max(0, provider.indexOfSelectedItem)]
         let panels = names.map { fixture($0.0, $0.1) }
         panels.forEach { hud.render($0) }
@@ -93,15 +146,22 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let panel = panels.first { $0.id == selected.0 }!
         summary.stringValue = selected.1 + " · " + state + "\nClick its battery above, or use the buttons below to open its real menu/hover panel."
         preview?.removeFromSuperview()
-        let view = CellsView(title: panel.name, subtitle: panel.cellsTitle, lines: panel.note.isEmpty ? [] : [panel.note],
-                             rows: Array((panel.cells.isEmpty ? panel.windows : panel.cells).prefix(5)),
-                             more: max(0, panel.cells.count - 5))
+        let view = panel.cells.isEmpty ? CellsView(title: panel.name, lines: panel.note.isEmpty ? [] : [panel.note],
+                                                    rows: Array(panel.windows.prefix(5)), darkBar: hud.darkMenuBar, providerID: panel.id) : hud.cellsView(panel)
         view.frame.origin = NSPoint(x: 20, y: max(53, 210 - view.frame.height)); window.contentView?.addSubview(view); preview = view
     }
     @objc func open(_ sender: NSButton) {
         let id = names[max(0, provider.indexOfSelectedItem)].0
         if sender.title == "Open overflow menu" { hud.overflow?.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY), in: sender) }
-        else if sender.title == "Show hover panel" { hud.hovered = id; hud.showCells(id) }
+        else if sender.title == "Show hover panel" {
+            hud.hovered = id; hud.drawIcon(id); hud.showHover(id)
+            if let glyph = ModelIdentity.glyph(id) {
+                preview?.removeFromSuperview()
+                let view = ModelIdentityView(glyph: glyph, name: names[max(0, provider.indexOfSelectedItem)].1)
+                view.frame.origin = NSPoint(x: 20, y: 160); window.contentView?.addSubview(view); preview = view
+                summary.stringValue = "Model-only hover identifier · existing 7d battery view retained"
+            }
+        }
         else { hud.items[id]?.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY), in: sender) }
     }
     func windowWillClose(_ notification: Notification) { NSApp.terminate(nil) }

@@ -51,7 +51,7 @@ final class GLMProvider: UsageProvider {
                 continue
             }
             // One host refusing the key (success: false) still leaves the other to try.
-            do { try cache.quota("glm.json", windows: Self.windows(data), extra: ["host": host, "plan": dict(data["data"])["level"] ?? NSNull()]) }
+            do { try cache.quota("glm.json", windows: Self.windows(data), extra: ["reading_source": ReadingSource.providerAPI.rawValue, "source_read_at": Date().timeIntervalSince1970, "host": host, "plan": dict(data["data"])["level"] ?? NSNull()]) }
             catch let problem as HUDProblem { lastProblem = problem; continue }
             return
         }
@@ -114,7 +114,7 @@ final class GrokProvider: UsageProvider {
             billing = try http.get(URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!, token: token.key,
                                    headers: ["x-xai-token-auth": "xai-grok-cli"], limit: 1024 * 1024)
         } catch let error as HTTPFailure where error.status == 401 || error.status == 403 { throw idle }
-        try cache.quota("grok.json", windows: Self.windows(billing), extra: ["plan": Self.plan(billing) as Any? ?? NSNull()])
+        try cache.quota("grok.json", windows: Self.windows(billing), extra: ["reading_source": ReadingSource.grokCLI.rawValue, "source_read_at": Date().timeIntervalSince1970, "plan": Self.plan(billing) as Any? ?? NSNull()])
     }
     func panel() -> Panel {
         let blob = cache.read("grok.json"), rows = quotaWindows(blob)

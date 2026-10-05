@@ -83,10 +83,11 @@ public struct Window: Codable {
         if expired == true { parts.append("waiting for its reset") }
         return parts.joined(separator: ", ")
     }
+    public var palette: QuotaPalette?
     public init(label: String, pct: Double? = nil, right: String? = nil, resets_at: Double? = nil,
-                expired: Bool? = false, stale: Bool? = false) {
+                expired: Bool? = false, stale: Bool? = false, palette: QuotaPalette? = nil) {
         self.label = label; self.pct = pct; self.right = right; self.resets_at = resets_at
-        self.expired = expired; self.stale = stale
+        self.expired = expired; self.stale = stale; self.palette = palette
     }
 }
 public struct Panel: Codable {
@@ -108,6 +109,8 @@ public struct Panel: Codable {
     public var gauge: Double?
     /// A command that fixes the current problem, from the provider; the menu can run it in Terminal.
     public var fix: String?
+    public var readingSource: ReadingSource?
+    public var sourceReadAt: Double?
     public init(id: String, name: String, windows: [Window] = [], note: String = "", alert: String? = nil,
                 cells: [Window] = [], cellsTitle: String? = nil, lead: String? = nil) {
         self.id = id; self.name = name; self.windows = windows; self.note = note; self.alert = alert
@@ -165,7 +168,9 @@ final class Cache {
                 saved[key] = window
             }
             for (key, raw) in windows {
-                var window = dict(raw); window["stale"] = false; window["captured_at"] = now; saved[key] = window
+                var window = dict(raw); window["stale"] = false; window["captured_at"] = now
+                if let source = extra["reading_source"] { window["reading_source"] = source }
+                saved[key] = window
             }
             blob.merge(extra) { _, new in new }
             blob["rate_limits"] = saved; blob["captured_at"] = now; blob["error"] = NSNull()
