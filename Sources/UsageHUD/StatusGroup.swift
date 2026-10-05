@@ -1,8 +1,22 @@
 import Cocoa
 
+/// With `~/.usage-hud/click-debug` present, record where each click landed and which cell took it (no account data).
+enum ClickLog {
+    static func write(_ line: String) {
+        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".usage-hud")
+        guard FileManager.default.fileExists(atPath: root.appendingPathComponent("click-debug").path),
+              let data = (ISO8601DateFormatter().string(from: Date()) + " " + line + "\n").data(using: .utf8) else { return }
+        let log = root.appendingPathComponent("click-log.txt")
+        if let handle = try? FileHandle(forWritingTo: log) { handle.seekToEndOfFile(); handle.write(data); try? handle.close() }
+        else { try? data.write(to: log) }
+    }
+}
+
 final class StatusCellButton: NSButton {
     let sourceID: String
     var beforeClick: () -> Void = {}
+    /// The cell under the pointer according to the group's own layout. A click that lands on a different button is handed over.
+    var route: (NSEvent) -> StatusCellButton? = { _ in nil }
     init(id: String) {
         sourceID = id
         super.init(frame: NSRect(x: 0, y: 0, width: 32, height: 22))
@@ -12,8 +26,21 @@ final class StatusCellButton: NSButton {
     }
     required init?(coder: NSCoder) { nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) { beforeClick(); super.mouseDown(with: event) }
-    override func rightMouseDown(with event: NSEvent) { beforeClick(); performClick(nil) }
+    private func handOver(_ event: NSEvent) -> StatusCellButton? {
+        let inside = bounds.contains(convert(event.locationInWindow, from: nil))
+        let owner = route(event)
+        ClickLog.write("click \(sourceID) at \(event.locationInWindow) frame \(frame) inside=\(inside) owner=\(owner?.sourceID ?? "none")")
+        guard let owner = owner, owner !== self else { return nil }
+        return owner
+    }
+    override func mouseDown(with event: NSEvent) {
+        if let owner = handOver(event) { owner.mouseDown(with: event); return }
+        beforeClick(); super.mouseDown(with: event)
+    }
+    override func rightMouseDown(with event: NSEvent) {
+        if let owner = handOver(event) { owner.rightMouseDown(with: event); return }
+        beforeClick(); performClick(nil)
+    }
 }
 
 /// A logical provider cell, not a separate system status item. Its menu and accessibility stay independent.
@@ -72,20 +99,28 @@ final class StatusGroup {
         item.button?.setAccessibilityElement(false)
         content.setAccessibilityElement(false)
     }
+    /// Space inside the rounded edge, and between neighbouring batteries (each side of a battery gets half of `gap`).
+    static let pad: CGFloat = 7, gap: CGFloat = 6
+    /// The button under the pointer by horizontal position alone, so a slightly different bar height cannot change the answer.
+    func cellButton(for event: NSEvent) -> StatusCellButton? {
+        let x = content.convert(event.locationInWindow, from: nil).x
+        return content.subviews.compactMap { $0 as? StatusCellButton }.first { x >= $0.frame.minX && x < $0.frame.maxX }
+    }
     func install(_ cells: [StatusCell]) {
-        let width = cells.reduce(CGFloat(8)) { $0 + $1.length }
+        let width = cells.reduce(2 * Self.pad) { $0 + $1.length }
         item.length = width; item.isVisible = !cells.isEmpty
         guard let button = item.button else { return }
         let height = max(22, button.bounds.height - 2)
         surface.frame = NSRect(x: 1, y: (button.bounds.height - height) / 2, width: width - 2, height: height)
         surface.layoutSubtreeIfNeeded()
-        var x: CGFloat = 3
+        var x = Self.pad
         let retained = Set(cells.compactMap { $0.button.map(ObjectIdentifier.init) })
         for view in content.subviews where !retained.contains(ObjectIdentifier(view)) { view.removeFromSuperview() }
         for cell in cells {
             guard let child = cell.button else { continue }
             child.frame = NSRect(x: x, y: (height - 22) / 2, width: cell.length, height: 22)
             if child.superview !== content { content.addSubview(child) }
+            child.route = { [weak self] in self?.cellButton(for: $0) }
             child.isHidden = false; x += cell.length
         }
         order = cells.compactMap { $0.button?.sourceID }

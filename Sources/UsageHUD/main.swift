@@ -106,10 +106,12 @@ class HUD: NSObject, NSApplicationDelegate {
     var items: [String: StatusCell] = [:]
     lazy var group: StatusGroup = {
         let group = StatusGroup()
+        group.item.button?.target = self; group.item.button?.action = #selector(groupClicked(_:))
+        group.item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         group.content.appearanceChanged = { [weak self] in DispatchQueue.main.async { self?.updateContrast() } }
         return group
     }()
-    let brandCell = StatusCell(id: "usage-hud", length: 32)
+    let brandCell = StatusCell(id: "usage-hud", length: SystemBattery.stackedWidth + StatusGroup.gap)
     var contrastTimer: Timer?
     var openMenu: NSMenu?
     var panels: [String: Panel] = [:]
@@ -324,6 +326,7 @@ class HUD: NSObject, NSApplicationDelegate {
         group.dark = dark
         brandCell.button?.contentTintColor = dark ? .white : .black
         overflow?.button?.contentTintColor = dark ? .white : .black
+        brandCell.button?.image = SystemBattery.stacked(dark: dark); overflow?.button?.image = SystemBattery.stacked(dark: dark)
         fades.removeAll()
         for panel in Array(panels.values) { render(panel) }
         if let id = hovered { showHover(id) }
@@ -336,6 +339,13 @@ class HUD: NSObject, NSApplicationDelegate {
         cell.button?.target = self; cell.button?.action = #selector(openCell(_:))
         cell.button?.contentTintColor = darkMenuBar ? .white : .black
         cell.button?.beforeClick = { [weak self] in self?.closeHover() }
+    }
+    /// A click the status item itself received instead of one of its cells goes to the cell under the pointer.
+    @objc func groupClicked(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else { return }
+        let cell = group.cellButton(for: event)
+        ClickLog.write("group click at \(event.locationInWindow) cell=\(cell?.sourceID ?? "none")")
+        cell?.performClick(nil)
     }
     @objc func openCell(_ sender: StatusCellButton) {
         closeHover()
@@ -546,7 +556,7 @@ class HUD: NSObject, NSApplicationDelegate {
             trackers[panel.id] = tracker
         }
         drawIcon(panel.id)
-        item.length = (item.button?.image?.size.width ?? 28) + 4
+        item.length = (item.button?.image?.size.width ?? 28) + StatusGroup.gap
         let displayed = displayedQuota(panel)
         let mainBalance = panel.windows.first { $0.label == panel.name }
         let cached = displayed?.isCached == true || mainBalance?.isCached == true
@@ -663,7 +673,7 @@ class HUD: NSObject, NSApplicationDelegate {
             brandCell.button?.setAccessibilityLabel("Usage HUD, all usage batteries")
             brandCell.button?.toolTip = "Usage HUD · all providers"
         } else {
-            let item = overflow ?? StatusCell(id: "overflow", length: 32)
+            let item = overflow ?? StatusCell(id: "overflow", length: SystemBattery.stackedWidth + StatusGroup.gap)
             overflow = item; item.isVisible = true; leading = item
             item.button?.toolTip = "Usage HUD · \(hidden.count) more: " + hidden.compactMap { panels[$0]?.name }.joined(separator: ", ")
             item.button?.setAccessibilityLabel("Usage HUD, \(hidden.count) more usage batteries")
@@ -680,7 +690,7 @@ class HUD: NSObject, NSApplicationDelegate {
             }
             button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: overflowTracker))
         }
-        leading.button?.image = SystemBattery.stacked()
+        leading.button?.image = SystemBattery.stacked(dark: darkMenuBar)
         let menu = NSMenu()
         for id in hidden.isEmpty ? ids : hidden {
             guard let panel = panels[id] else { continue }
@@ -827,7 +837,7 @@ if CommandLine.arguments.contains("--self-test") {
         precondition(delegate.items[id]?.menu?.items.allSatisfy{!$0.title.contains("note")} == true)
         let battery = delegate.icon(panel)
         precondition(battery.size.height == 22 && (id == "openrouter" ? battery.size.width > 28 : battery.size.width == 28))
-        precondition(delegate.items[id]?.length == battery.size.width + 4)
+        precondition(delegate.items[id]?.length == battery.size.width + StatusGroup.gap)
         battery.draw(in: NSRect(x: CGFloat(index*48), y: 11, width: battery.size.width, height: 22))
     }
     image.unlockFocus()
@@ -843,6 +853,15 @@ if CommandLine.arguments.contains("--self-test") {
     // All visible cells share one native surface, with separate accessible buttons and menus.
     precondition(delegate.group.order == ["usage-hud", "codex", "claude"])
     precondition(delegate.group.content.subviews.count == 3)
+    // Wherever a click lands in the group, the cell under that x position takes it, whichever button AppKit chose.
+    for cell in delegate.group.content.subviews.compactMap({ $0 as? StatusCellButton }) {
+        let inContent = NSPoint(x: cell.frame.midX, y: cell.frame.midY)
+        let inWindow = delegate.group.content.convert(inContent, to: nil)
+        if let event = NSEvent.mouseEvent(with: .leftMouseDown, location: inWindow, modifierFlags: [], timestamp: 0,
+                                          windowNumber: cell.window?.windowNumber ?? 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+            precondition(delegate.group.cellButton(for: event)?.sourceID == cell.sourceID)
+        }
+    }
     precondition(delegate.items["codex"]?.button?.acceptsFirstMouse(for: nil) == true)
     if #available(macOS 26, *) { precondition(delegate.group.surface.usesLiquidGlass) }
     // A hover identifier is nonactivating and cannot intercept a subsequent battery click.
@@ -994,6 +1013,58 @@ if CommandLine.arguments.contains("--self-test") {
         try! rep.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent(light ? "palette-light.png" : "palette-dark.png"))
     }
     delegate.forcedDarkBar = nil
+    // The empty part against grey bars: the old fixed greys, the ink-strength model, and what the native battery measured.
+    do {
+        let grays: [(Int, Int?)] = [(0, 201), (84, 161), (115, nil), (149, nil), (231, 133), (255, 116)]
+        let scale: CGFloat = 3, rowHeight: CGFloat = 34 * scale, width: CGFloat = 330 * scale
+        let sheet = NSImage(size: NSSize(width: width, height: rowHeight * CGFloat(grays.count) + 20 * scale))
+        sheet.lockFocus()
+        NSColor(white: 0.5, alpha: 1).setFill(); NSRect(origin: .zero, size: sheet.size).fill()
+        let head: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 7 * scale), .foregroundColor: NSColor.white]
+        for (column, title) in [(60, "native"), (86, "before"), (112, "now"), (150, "batteries now")] {
+            (title as NSString).draw(at: NSPoint(x: CGFloat(column) * scale, y: sheet.size.height - 12 * scale), withAttributes: head)
+        }
+        for (index, entry) in grays.enumerated() {
+            let (level, native) = entry
+            let bar = NSColor(white: CGFloat(level) / 255, alpha: 1), dark = level < 128
+            let y = sheet.size.height - 20 * scale - rowHeight * CGFloat(index + 1)
+            bar.setFill(); NSRect(x: 0, y: y, width: width, height: rowHeight).fill()
+            let ink: NSColor = dark ? .white : .black
+            (("bar " + String(format: "#%02X", level)) as NSString).draw(at: NSPoint(x: 4 * scale, y: y + 12 * scale),
+                withAttributes: [.font: NSFont.systemFont(ofSize: 8 * scale), .foregroundColor: ink])
+            func swatch(_ x: CGFloat, _ color: NSColor?) {
+                guard let color = color else { return }
+                color.setFill(); NSRect(x: x * scale, y: y + 8 * scale, width: 22 * scale, height: 18 * scale).fill()
+            }
+            swatch(60, native.map { NSColor(white: CGFloat($0) / 255, alpha: 1) })
+            swatch(86, NSColor(white: dark ? 0.45 : 0.58, alpha: 1))
+            let model = BatteryText.track(dark: dark)
+            bar.setFill(); NSRect(x: 112 * scale, y: y + 8 * scale, width: 22 * scale, height: 18 * scale).fill(); swatch(112, model)
+            delegate.forcedDarkBar = dark
+            let samples = [Panel(id: "codex", name: "Codex", windows: [Window(label: "5h", pct: 78), Window(label: "7d", pct: 40)]),
+                           Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 2)]),
+                           Panel(id: "kimi", name: "Kimi", windows: [Window(label: "5h", pct: 89)])]
+            // The group as laid out in the menu bar, using the same spacing constants.
+            let widths = [SystemBattery.stackedWidth + StatusGroup.gap] + samples.map { delegate.icon($0).size.width + StatusGroup.gap }
+            let pillWidth = widths.reduce(2 * StatusGroup.pad, +)
+            let pill = NSRect(x: 150 * scale, y: y + 6 * scale, width: pillWidth * scale, height: 22 * scale)
+            ink.withAlphaComponent(0.14).setFill(); NSBezierPath(roundedRect: pill, xRadius: 11 * scale, yRadius: 11 * scale).fill()
+            var x = 150 + StatusGroup.pad
+            let stack = SystemBattery.stacked(dark: dark); stack.isTemplate = false
+            let tinted = NSImage(size: stack.size); tinted.lockFocus()
+            stack.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1); ink.setFill(); NSRect(origin: .zero, size: stack.size).fill(using: .sourceIn); tinted.unlockFocus()
+            tinted.draw(in: NSRect(x: (x + StatusGroup.gap / 2) * scale, y: y + 6 * scale, width: stack.size.width * scale, height: 22 * scale))
+            x += widths[0]
+            for (slot, panel) in samples.enumerated() {
+                let icon = delegate.icon(panel)
+                icon.draw(in: NSRect(x: (x + StatusGroup.gap / 2) * scale, y: y + 6 * scale, width: icon.size.width * scale, height: 22 * scale))
+                x += widths[slot + 1]
+            }
+        }
+        sheet.unlockFocus()
+        delegate.forcedDarkBar = nil
+        try! NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("track-contrast.png"))
+    }
     // Candidate digit fonts, numbered, to compare against the system battery beside them in the menu bar.
     // Tabular SF Pro around Regular 10pt, measured from macOS 27's own battery; 6 is the previous default.
     let candidates: [(String, (CGFloat) -> NSFont)] = [

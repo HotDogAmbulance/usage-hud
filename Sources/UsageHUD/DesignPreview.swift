@@ -35,7 +35,7 @@ enum DesignPreview {
         try save("native-stack-litellm.png", size: NSSize(width: 660, height: 220)) {
             text("Native macOS artwork · overflow + LiteLLM", 18, 190, strong: true)
             text("Kích thước thật trên menu bar", 18, 154)
-            let stack = SystemBattery.stacked()
+            let stack = SystemBattery.stacked(dark: true)
             stack.isTemplate = false
             // Tint a copy for the dark bar using source-in, retaining the installed artwork's alpha.
             let white = NSImage(size: stack.size); white.lockFocus()
@@ -164,7 +164,7 @@ enum DesignPreview {
             NSColor(srgbRed: 0.20, green: 0.23, blue: 0.29, alpha: 1).setFill()
             NSBezierPath(roundedRect: NSRect(x: 90, y: 297, width: 580, height: 54), xRadius: 8, yRadius: 8).fill()
             text("Usage HUD", 106, 315, strong: true)
-            let stack = SystemBattery.stacked(); stack.isTemplate = false
+            let stack = SystemBattery.stacked(dark: true); stack.isTemplate = false
             let tint = NSImage(size: stack.size); tint.lockFocus()
             stack.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
             NSColor.white.setFill(); NSRect(origin: .zero, size: stack.size).fill(using: .sourceIn); tint.unlockFocus()

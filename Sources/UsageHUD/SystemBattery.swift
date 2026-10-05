@@ -9,8 +9,9 @@ enum SystemBattery {
     static let outline = mask("battery-outline", fillInterior: false)
 
     /// Two copies of the installed Mac battery artwork; the front copy masks the rear one.
-    static func stacked() -> NSImage {
-        let image = NSImage(size: NSSize(width: 32, height: 22))
+    static let stackedWidth: CGFloat = 32
+    static func stacked(dark: Bool) -> NSImage {
+        let image = NSImage(size: NSSize(width: stackedWidth, height: 22))
         image.lockFocus()
         func paint(_ mask: CGImage?, in rect: NSRect, ink: NSColor, operation: CGBlendMode = .normal) {
             guard let mask = mask, let context = NSGraphicsContext.current?.cgContext else { return }
@@ -25,9 +26,9 @@ enum SystemBattery {
                 paint(cap, in: capRect, ink: .black, operation: .destinationOut)
             }
             if outline != nil {
-                paint(outline, in: rect, ink: .black.withAlphaComponent(front ? 1 : 0.55))
+                paint(outline, in: rect, ink: .black.withAlphaComponent(front ? 1 : BatteryText.trackAlpha(dark: dark)))
             } else {
-                NSColor.black.withAlphaComponent(front ? 1 : 0.55).setStroke()
+                NSColor.black.withAlphaComponent(front ? 1 : BatteryText.trackAlpha(dark: dark)).setStroke()
                 let fallback = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 3.5, yRadius: 3.5)
                 fallback.lineWidth = 1; fallback.stroke()
             }

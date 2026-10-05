@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Menu-bar group: more room inside the rounded edge (7 pt) and between batteries (6 pt each pair), and the stack logo follows the same ink strength as the empty part of a battery. The empty part is now the bar's own ink (white or black, 68% / 49%) instead of one grey, so no wallpaper can match it; `--self-test` writes `track-contrast.png` comparing it with four measured native batteries. A click that lands on the wrong button is handed to the cell under the pointer, and a status-item click goes to that cell; with a file `~/.usage-hud/click-debug` present, clicks are logged to `click-log.txt` (positions and cell names only).
+
 - Detail batteries follow the originating menu bar’s contrast, including VibrantDark/VibrantLight, rather than the hover panel’s independent appearance. Healthy key/budget cells are white on dark bars and black on light bars; warning colors and cached marks stay consistent.
 - Antigravity rows carry model-family palettes. The recently used pool selects the main palette; Google/Gemini uses Google colors, Claude & GPT uses black/charcoal plus Claude earth tone, and unknown families stay neutral.
 - Model-only hover identifiers now use available installed vendor templates without adding another quota table. Missing templates retain ordinary names/tooltips; aggregator/infra and Antigravity retain detail tables.
