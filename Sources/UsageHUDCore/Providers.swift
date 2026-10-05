@@ -4,12 +4,16 @@ protocol UsageProvider {
     var id: String { get }
     var name: String { get }
     var automatic: Bool { get }
+    var cacheFile: String { get }
     func refresh() throws
     func panel() -> Panel
     /// Optional providers stay out of the menu bar until they have read a quota once.
     func shown() -> Bool
 }
-extension UsageProvider { func shown() -> Bool { true } }
+extension UsageProvider {
+    func shown() -> Bool { true }
+    var cacheFile: String { id + ".json" }
+}
 final class ClaudeProvider: UsageProvider {
     let id = "claude", name = "Claude", automatic = true
     /// Hidden until a first read or a Claude Code status line, so Codex-only people don't carry an empty battery.
@@ -103,6 +107,7 @@ final class ClaudeProvider: UsageProvider {
 }
 final class CodexProvider: UsageProvider {
     let id = "codex", name = "Codex", automatic = true
+    var cacheFile: String { "codex-quota.json" }
     /// Hidden until a first read, so Claude-only people don't carry an empty battery.
     func shown() -> Bool { FileManager.default.fileExists(atPath: cache.root.appendingPathComponent("codex-quota.json").path) }
     let cache: Cache
@@ -141,7 +146,7 @@ final class CodexProvider: UsageProvider {
         try rpc.send(["method": "initialized", "params": JSON()])
         try rpc.send(["id": 2, "method": "account/rateLimits/read"])
         let response = try rpc.receive(2), bucket = try Self.bucket(response)
-        try cache.quota("codex-quota.json", windows: Self.windows(response), extra: ["source": "standalone-cli",
+        try cache.quota("codex-quota.json", windows: Self.windows(response), extra: ["reading_source": ReadingSource.codexCLI.rawValue, "source_read_at": Date().timeIntervalSince1970, "source": "standalone-cli",
             "plan": bucket["planType"] ?? NSNull(), "subscription_credits": bucket["credits"] ?? NSNull(),
             "free_resets": Self.freeResets(response) as Any? ?? NSNull()])
     }
@@ -355,7 +360,9 @@ final class OpenRouterProvider: UsageProvider {
         if !fresh && previous.isEmpty { throw teamProblem ?? HUDProblem("No working OpenRouter key found") }
         try cache.write("openrouter.json", ["captured_at": fresh ? now : number(previous["captured_at"]) ?? 0,
                                            "checked_at": now, "balance_captured_at": balanceCaptured, "balances": balances, "rows": rows,
-                                           "team": teamRows as Any? ?? NSNull()])
+                                           "team": teamRows as Any? ?? NSNull(),
+                                           "reading_source": fresh ? ReadingSource.providerAPI.rawValue : previous["reading_source"] ?? NSNull(),
+                                           "source_read_at": fresh ? now : previous["source_read_at"] ?? NSNull()])
         if let problem = teamProblem { throw problem }
         if !failures.isEmpty { throw HUDProblem("OpenRouter failed slots: " + failures.joined(separator: ", ")) }
     }

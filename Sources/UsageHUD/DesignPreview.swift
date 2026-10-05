@@ -23,6 +23,15 @@ enum DesignPreview {
             view.cacheDisplay(in: view.bounds, to: bitmap)
             NSImage(cgImage: bitmap.cgImage!, size: view.frame.size).draw(in: NSRect(origin: point, size: view.frame.size))
         }
+        let notice = SourceNotice(title: "Tracking Claude", lines: ["Usage from Claude Code’s statusline"])
+        let noticeView = SourceNoticeView(notice)
+        try save("native-source-notice.png", size: NSSize(width: 380, height: noticeView.frame.height + 58)) {
+            text("Native notice · disappears after 6 seconds", 20, noticeView.frame.height + 34, strong: true)
+            noticeView.appearance = appearance
+            let bitmap = noticeView.bitmapImageRepForCachingDisplay(in: noticeView.bounds)!
+            noticeView.cacheDisplay(in: noticeView.bounds, to: bitmap)
+            NSImage(cgImage: bitmap.cgImage!, size: noticeView.frame.size).draw(at: NSPoint(x: 20, y: 16), from: .zero, operation: .sourceOver, fraction: 1)
+        }
         try save("native-stack-litellm.png", size: NSSize(width: 660, height: 220)) {
             text("Native macOS artwork · overflow + LiteLLM", 18, 190, strong: true)
             text("Kích thước thật trên menu bar", 18, 154)
@@ -57,7 +66,26 @@ enum DesignPreview {
             }
             preview(hud.cellsView(router, inMenu: true), at: NSPoint(x: 24, y: 81))
             preview(hud.cellsView(gravity), at: NSPoint(x: 451, y: 81))
-            text("Native neutral fill · yellow/red warnings retained · simulated readings", 24, 24, size: 12)
+            text("Native neutral key fill · AG family palettes · warning colours retained · simulated readings", 24, 24, size: 12)
+        }
+        try save("native-family-contrast.png", size: NSSize(width: 880, height: 370)) {
+            text("Menu-bar contrast and model-family colours", 24, 330, size: 20, strong: true)
+            let rows = [Window(label: "Gemini", pct: 84, right: "↻ 5d 8h", palette: .google),
+                        Window(label: "Claude & GPT", pct: 24, right: "↻ 5d 8h", palette: .claudeOpenAI)]
+            for (i, dark) in [true, false].enumerated() {
+                let x: CGFloat = 24 + CGFloat(i) * 440
+                text(dark ? "Dark bar → white API cells" : "Light bar → black API cells", x, 290, strong: true)
+                hud.forcedDarkBar = dark
+                (dark ? NSColor.black : NSColor.lightGray).setFill()
+                NSBezierPath(roundedRect: NSRect(x: x, y: 227, width: 205, height: 63), xRadius: 8, yRadius: 8).fill()
+                for (j, row) in rows.enumerated() {
+                    hud.icon(Panel(id: "antigravity", name: "Antigravity", windows: rows, lead: row.label))
+                        .draw(in: NSRect(x: x + CGFloat(j) * 105, y: 232, width: 84, height: 66))
+                }
+                preview(CellsView(title: "Antigravity", subtitle: "14 models", rows: rows, darkBar: dark, providerID: "antigravity"), at: NSPoint(x: x, y: 131))
+                preview(CellsView(title: "OpenRouter", rows: [Window(label: "Guy1", pct: 0, right: "$0 / $5")], darkBar: dark, providerID: "openrouter"), at: NSPoint(x: x, y: 62))
+            }
+            text("Same dark panel for comparison; battery contrast follows its originating bar.", 24, 20, size: 12)
         }
         // Read existing menu-bar glyphs, never substitute a square application icon.
         func glyph(_ path: String, at point: NSPoint, size: CGFloat = 18) {
@@ -92,7 +120,7 @@ enum DesignPreview {
             text("Logo mở rộng bên dưới; không thêm cell hoặc đổi chỗ các pin.", 30, 96, size: 14)
             glyph(claudeGlyph, at: NSPoint(x: 32, y: 44), size: 24)
             glyph(openaiGlyph, at: NSPoint(x: 78, y: 44), size: 24)
-            text("Asset menu bar thật từ Claude / OpenAI đang cài · mẫu vị trí, chưa áp dụng vào app", 120, 47, size: 12)
+            text("Asset menu bar thật từ Claude / OpenAI đang cài · hover đã được áp dụng", 120, 47, size: 12)
         }
         // Optional audit folder contains extracted assets from read-only official installers.
         let audit = ProcessInfo.processInfo.environment["USAGE_HUD_LOGO_AUDIT_DIR"]
@@ -148,7 +176,7 @@ enum DesignPreview {
             text("Hover for weekly usage. Click for all details.", 90, 187, size: 14)
             text("Details when you need them", 770, 418, size: 24, strong: true)
             text("Per-model quotas and reset times, close to the battery.", 770, 387, size: 15)
-            preview(CellsView(title: "Antigravity", subtitle: "14 models", rows: [Window(label: "Gemini", pct: 16, right: "↻ 6d 1h"), Window(label: "Claude & GPT", pct: 7, right: "↻ 6d 1h")]), at: NSPoint(x: 785, y: 269))
+            preview(hud.cellsView(Panel(id: "antigravity", name: "Antigravity", cells: [Window(label: "Gemini", pct: 84, right: "↻ 6d 1h", palette: .google), Window(label: "Claude & GPT", pct: 24, right: "↻ 6d 1h", palette: .claudeOpenAI)], cellsTitle: "14 models")), at: NSPoint(x: 785, y: 269))
             text("Full names and refresh controls are a click away.", 770, 222, size: 14)
             text("Keeps the last reading when a source is unavailable.", 770, 191, size: 14)
             text("Open source · Native Swift + AppKit · macOS 12+", 64, 99, size: 15)

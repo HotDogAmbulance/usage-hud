@@ -102,7 +102,16 @@ let cases: [(String, () throws -> Void)] = [
     ("testKeychainAsksForASecretOnlyWhenItChanges", test.testKeychainAsksForASecretOnlyWhenItChanges),
     ("testClaudeLeavesTheKeychainAloneWhileItsStatuslineReports", test.testClaudeLeavesTheKeychainAloneWhileItsStatuslineReports),
     ("testProvidersInUseRefreshBetweenPasses", test.testProvidersInUseRefreshBetweenPasses),
-    ("testBatteriesLeaveWithTheirSource", test.testBatteriesLeaveWithTheirSource)
+    ("testBatteriesLeaveWithTheirSource", test.testBatteriesLeaveWithTheirSource),
+    ("testSourceNoticesStartQuietAndDeduplicate", test.testSourceNoticesStartQuietAndDeduplicate),
+    ("testSourceNoticeNeedsFreshSuccessfulData", test.testSourceNoticeNeedsFreshSuccessfulData),
+    ("testOutagesAndOverflowAreNotSourceRemovals", test.testOutagesAndOverflowAreNotSourceRemovals),
+    ("testSourceChangesGroupAndDescribeActualRoutes", test.testSourceChangesGroupAndDescribeActualRoutes),
+    ("testStatuslineReceiptsIgnoreContextAndMalformedQuota", test.testStatuslineReceiptsIgnoreContextAndMalformedQuota),
+    ("testGoneEvidenceUsesProviderCacheAndExpiresOnFreshRead", test.testGoneEvidenceUsesProviderCacheAndExpiresOnFreshRead),
+    ("testSourceReceiptsPreservePartialWindowProvenance", test.testSourceReceiptsPreservePartialWindowProvenance),
+    ("testAntigravityPaletteFollowsUsageAndModelRemoval", test.testAntigravityPaletteFollowsUsageAndModelRemoval),
+    ("testQuotaPalettesKeepUnknownAndLegacyRowsNeutral", test.testQuotaPalettesKeepUnknownAndLegacyRowsNeutral)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }
