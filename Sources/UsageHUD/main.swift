@@ -102,7 +102,7 @@ final class CellsView: NSView {
     }
 }
 
-class HUD: NSObject, NSApplicationDelegate {
+class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var items: [String: StatusCell] = [:]
     lazy var group: StatusGroup = {
         let group = StatusGroup()
@@ -339,6 +339,11 @@ class HUD: NSObject, NSApplicationDelegate {
         cell.button?.target = self; cell.button?.action = #selector(openCell(_:))
         cell.button?.contentTintColor = darkMenuBar ? .white : .black
         cell.button?.beforeClick = { [weak self] in self?.closeHover() }
+    }
+    /// With the click log on, say which menu or submenu really appears and which entry it hangs from.
+    func menuWillOpen(_ menu: NSMenu) {
+        let parent = menu.supermenu?.items.first { $0.submenu === menu }?.title ?? "-"
+        ClickLog.write("menu opens first=\(menu.items.first?.title ?? "-") parent=\(parent)")
     }
     /// A click the status item itself received instead of one of its cells goes to the cell under the pointer.
     @objc func groupClicked(_ sender: NSStatusBarButton) {
@@ -577,7 +582,7 @@ class HUD: NSObject, NSApplicationDelegate {
         let displayed = displayedQuota(panel)
         let balance = panel.windows.first { $0.label == panel.name }
         let cached = displayed?.isCached == true || balance?.isCached == true
-        let menu = NSMenu()
+        let menu = NSMenu(); menu.delegate = self
         if !panel.cells.isEmpty {
             let detail = NSMenuItem(title: panel.name + " usage", action: nil, keyEquivalent: "")
             detail.view = cellsView(panel, inMenu: true)
@@ -697,6 +702,7 @@ class HUD: NSObject, NSApplicationDelegate {
         }
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
+        menu.delegate = self
         leading.menu = menu
         group.install([leading] + arrangement.shown.compactMap { items[$0] })
         updateContrast()
