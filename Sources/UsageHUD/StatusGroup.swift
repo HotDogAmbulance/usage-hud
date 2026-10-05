@@ -117,7 +117,7 @@ final class StatusGroup {
         NSAnimationContext.runAnimationGroup { context in context.duration = 0.15; surface.animator().alphaValue = on ? 1 : 0 }
     }
     /// Space inside the rounded edge, and between neighbouring batteries (each side of a battery gets half of `gap`).
-    static let pad: CGFloat = 7, gap: CGFloat = 6
+    static let pad: CGFloat = 15, gap: CGFloat = 6
     /// The button under a point on the screen, by horizontal position alone so a slightly different bar height cannot change
     /// the answer. The default is the pointer now: a status item's click event carries one fixed point whatever was pressed.
     func cellButton(atScreen point: NSPoint = NSEvent.mouseLocation) -> StatusCellButton? {
@@ -129,7 +129,7 @@ final class StatusGroup {
         let width = cells.reduce(2 * Self.pad) { $0 + $1.length }
         item.length = width; item.isVisible = !cells.isEmpty
         guard let button = item.button else { return }
-        let height = max(22, button.bounds.height - 2)
+        let height = max(22, button.bounds.height)
         // Half a point above centre: that is where the system's own battery sits, measured on a real bar.
         surface.frame = NSRect(x: 1, y: (button.bounds.height - height) / 2 + 0.5, width: width - 2, height: height)
         content.frame = surface.frame
