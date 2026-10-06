@@ -41,7 +41,7 @@ final class ClaudeProvider: UsageProvider {
         // The usage endpoint is undocumented and answers 429 when read too often: after one, stay away for a growing while,
         // and otherwise read it at most every five minutes, whoever asks (timers, hooks, restarts).
         let backoff = cache.read("claude-backoff.json")
-        if blob["source"] as? String == "statusline",
+        if ["statusline", "claude-run"].contains(blob["source"] as? String),
            ["five_hour", "seven_day"].contains(where: { key in
                let window = dict(dict(blob["rate_limits"])[key])
                return number(window["used_percentage"]) != nil && window["stale"] as? Bool != true &&
