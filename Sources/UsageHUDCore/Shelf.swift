@@ -9,8 +9,14 @@ public struct Shelf {
     /// and a switch of main tools shows within days. Every tool is counted the same, however often it reports.
     public var scores: [String: Double]
     public var scoredAt: Double
-    public init(levels: [String: Double] = [:], lastUsed: [String: Double] = [:], scores: [String: Double] = [:], scoredAt: Double = 0) {
-        self.levels = levels; self.lastUsed = lastUsed; self.scores = scores; self.scoredAt = scoredAt
+    /// Batteries the person chose to keep in the bar, oldest first; a new choice takes a place from the least recent one.
+    public var pins: [String]
+    public init(levels: [String: Double] = [:], lastUsed: [String: Double] = [:], scores: [String: Double] = [:], scoredAt: Double = 0, pins: [String] = []) {
+        self.levels = levels; self.lastUsed = lastUsed; self.scores = scores; self.scoredAt = scoredAt; self.pins = pins
+    }
+    /// Pins `id`, or lets it go if it was already pinned.
+    public mutating func togglePin(_ id: String) {
+        if let index = pins.firstIndex(of: id) { pins.remove(at: index) } else { pins.append(id) }
     }
     /// One number that grows with use: the sum of used percentages, or the negated balance.
     public static func level(_ panel: Panel) -> Double? {
@@ -35,9 +41,10 @@ public struct Shelf {
         }
         levels[panel.id] = level
     }
-    /// Most used first: batteries asking for attention, then by score, then by last use; ties keep the engine's order.
+    /// Batteries asking for attention first, then the ones chosen by hand (latest choice first), then by score and last use;
+    /// ties keep the engine's order.
     public func ranked(_ ids: [String], urgent: Set<String> = []) -> [String] {
-        let key = { (id: String) in (urgent.contains(id) ? 1 : 0, self.scores[id] ?? 0, self.lastUsed[id] ?? 0) }
+        let key = { (id: String) in (urgent.contains(id) ? 1 : 0, (self.pins.lastIndex(of: id)).map { $0 + 1 } ?? 0, self.scores[id] ?? 0, self.lastUsed[id] ?? 0) }
         return ids.enumerated().sorted { key($0.element) != key($1.element) ? key($0.element) > key($1.element) : $0.offset < $1.offset }.map { $0.element }
     }
     /// Splits `ids` into those shown and those moved to the overflow item, both in their original order.

@@ -26,9 +26,30 @@ enum KeyFinder {
         }
         return found.sorted { $0.path < $1.path }
     }
+    /// Files and folders the person pointed Usage HUD at, one path each in `~/.usage-hud/key-sources.json`. A folder is read
+    /// to four levels, hidden folders included, since the person chose it.
+    static func chosen(home: URL) -> [URL] {
+        guard let data = try? Data(contentsOf: home.appendingPathComponent(".usage-hud/key-sources.json")),
+              let paths = (try? JSONSerialization.jsonObject(with: data)) as? [String] else { return [] }
+        let kinds: Set<String> = ["sh", "zsh", "bash", "env", "json", "jsonc", "yaml", "yml", "toml", "conf", "txt", "fish", ""]
+        var found: [URL] = []
+        for path in paths {
+            let root = URL(fileURLWithPath: path)
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isFolder) else { continue }
+            guard isFolder.boolValue else { found.append(root); continue }
+            guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil, options: [.skipsPackageDescendants]) else { continue }
+            while let url = walk.nextObject() as? URL, found.count < 2000 {
+                if ["node_modules", ".git", "build", "dist", "venv", ".build"].contains(url.lastPathComponent) || walk.level > 4 { walk.skipDescendants(); continue }
+                var file: ObjCBool = false
+                if FileManager.default.fileExists(atPath: url.path, isDirectory: &file), !file.boolValue, kinds.contains(url.pathExtension.lowercased()) { found.append(url) }
+            }
+        }
+        return found
+    }
     /// Shell profiles, AI tool configs, then personal scripts, which people tend to name after a person or a job.
     static func places(home: URL) -> [URL] {
-        [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".env", ".config/fish/config.fish",
+        chosen(home: home) + [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".env", ".config/fish/config.fish",
                      ".local/share/opencode/auth.json", ".aider.conf.yml", ".config/crush/crush.json", ".continue/config.yaml",
                      ".continue/config.json", ".config/zed/settings.json"].map { home.appendingPathComponent($0) } + scripts(home: home)
     }

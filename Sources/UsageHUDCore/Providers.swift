@@ -211,7 +211,8 @@ final class OpenRouterProvider: UsageProvider {
         guard let service = env["USAGE_HUD_OPENROUTER_SERVICE"], let pairs = env["USAGE_HUD_OPENROUTER_KEYS"] else {
             // Nothing configured: use the keys already on this Mac. The search runs at most hourly; keys stay in memory only.
             let now = Date().timeIntervalSince1970
-            if now - found.at > 3600 {
+            let edited = ((try? FileManager.default.attributesOfItem(atPath: home.appendingPathComponent(".usage-hud/key-sources.json").path))?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            if now - found.at > 3600 || edited > found.at {
                 found = (now, KeyFinder.find(in: KeyFinder.places(home: home), environment: env).map {
                     RouterSlot(id: "found-" + $0.label, label: $0.label, sources: [["provider": "openrouter", "found": $0.key]])
                 })

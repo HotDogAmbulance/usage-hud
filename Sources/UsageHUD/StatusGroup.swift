@@ -17,12 +17,20 @@ final class StatusCellButton: NSButton {
     var beforeClick: () -> Void = {}
     /// macOS reports every click on a status item at one fixed point, so the cell is found from where the pointer really is.
     var route: () -> StatusCellButton? = { nil }
+    /// Files or folders dropped on this cell.
+    var onDrop: ([URL]) -> Void = { _ in }
     init(id: String) {
         sourceID = id
         super.init(frame: NSRect(x: 0, y: 0, width: 32, height: 22))
         title = ""; isBordered = false; bezelStyle = .regularSquare
         imagePosition = .imageOnly; imageScaling = .scaleNone; focusRingType = .none
         setButtonType(.momentaryChange)
+        registerForDraggedTypes([.fileURL])
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = (sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        onDrop(urls); return !urls.isEmpty
     }
     required init?(coder: NSCoder) { nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

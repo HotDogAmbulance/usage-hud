@@ -1010,6 +1010,33 @@ final class CoreTests {
         let healed = claude(nil)
         expectTrue(healed?.fix == nil && healed?.alert == nil && healed?.note == "")
     }
+    func testPinnedBatteriesTakeAPlaceInTheBar() {
+        var shelf = Shelf()
+        let ids = ["codex", "claude", "openrouter", "glm", "kimi"]
+        shelf.togglePin("kimi")
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "claude", "kimi"])
+        shelf.togglePin("glm")
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "glm", "kimi"])
+        // A battery asking for attention is never pushed out by a choice.
+        expectEqual(shelf.arrange(ids, limit: 3, urgent: ["openrouter"]).shown, ["openrouter", "glm", "kimi"])
+        shelf.togglePin("kimi")
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "claude", "glm"])
+    }
+    func testChosenFoldersAreReadEvenWhenHiddenAndKeepNoKeys() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("hud-sources-" + UUID().uuidString)
+        let folder = root.appendingPathComponent(".tools/launchers")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let key = "sk-or-v1-" + String(repeating: "ab", count: 32)
+        try ("export OX1_OPENROUTER_KEY=" + key + "\n").write(to: folder.appendingPathComponent("ox1.sh"), atomically: true, encoding: .utf8)
+        expectEqual(KeyFinder.find(in: KeyFinder.places(home: root), environment: [:]).count, 0)
+        expectEqual(KeySources.add([root.appendingPathComponent(".tools")], home: root), 1)
+        expectEqual(KeyFinder.find(in: KeyFinder.places(home: root), environment: [:]).map { $0.label }, ["ox1"])
+        let saved = try String(contentsOf: root.appendingPathComponent(".usage-hud/key-sources.json"), encoding: .utf8)
+        expectTrue(!saved.contains(key))
+        expectEqual(KeySources.add([root.appendingPathComponent(".tools")], home: root), 1)
+        expectEqual(KeySources.list(home: root).count, 1)
+        try? FileManager.default.removeItem(at: root)
+    }
     func testShelfLearnsEachPersonsMainTools() {
         func quota(_ id: String, _ pct: Double) -> Panel { Panel(id: id, name: id, windows: [Window(label: "5h", pct: pct)]) }
         func balance(_ id: String, _ amount: Double) -> Panel { Panel(id: id, name: id, windows: [Window(label: id, right: String(format: "$%.2f left", amount))]) }

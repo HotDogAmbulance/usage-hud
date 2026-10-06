@@ -50,7 +50,6 @@ final class CellsView: NSView {
         }
         setAccessibilityChildren(children)
         setAccessibilityHelp("Click the menu bar battery for all usage details.")
-        toolTip = rows.map(\.accessibilityReading).joined(separator: "\n")
     }
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
@@ -120,11 +119,13 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var hovered: String?
     /// Batteries past `visibleLimit` move into this item; hovering it opens their menu.
     var overflow: StatusCell?
-    let overflowTracker = HoverTracker()
+    let tray = TrayPresenter()
+    var arrangedIDs: [String] = []
     var shelf = Shelf(levels: UserDefaults.standard.dictionary(forKey: "shelfLevels") as? [String: Double] ?? [:],
                       lastUsed: UserDefaults.standard.dictionary(forKey: "shelfLastUsed") as? [String: Double] ?? [:],
                       scores: UserDefaults.standard.dictionary(forKey: "shelfScores") as? [String: Double] ?? [:],
-                      scoredAt: UserDefaults.standard.double(forKey: "shelfScoredAt"))
+                      scoredAt: UserDefaults.standard.double(forKey: "shelfScoredAt"),
+                      pins: UserDefaults.standard.stringArray(forKey: "shelfPins") ?? [])
     /// Change with `defaults write local.usage-hud visibleBatteries 4`.
     var visibleLimit: Int { UserDefaults.standard.integer(forKey: "visibleBatteries") > 0 ? UserDefaults.standard.integer(forKey: "visibleBatteries") : 3 }
     /// Alerts the user has already seen by hovering, by provider; those batteries stop pulsing until the alert changes.
@@ -340,6 +341,58 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cell.button?.target = self; cell.button?.action = #selector(openCell(_:))
         cell.button?.contentTintColor = darkMenuBar ? .white : .black
         cell.button?.beforeClick = { [weak self] in self?.closeHover() }
+        cell.button?.onDrop = { [weak self] urls in self?.addSources(urls) }
+    }
+    /// Files or folders dropped on the bar, or chosen from the tray: only their paths are kept.
+    func addSources(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let found = KeySources.add(urls)
+        showSourceNotice(SourceNotice(title: found > 0 ? "Looking for your keys" : "No OpenRouter key in what you chose",
+                                      lines: [found > 0 ? "\(found) OpenRouter key\(found == 1 ? "" : "s") found; reading their balances now. Only the paths are remembered."
+                                                        : "Other providers' keys in those files are read too. Only the paths are remembered."]))
+        load("automatic")
+    }
+    func chooseSources() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
+        panel.showsHiddenFiles = true
+        panel.message = "Choose files or folders that hold your API keys. Usage HUD reads them on this Mac and remembers only their paths."
+        panel.prompt = "Add"
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK { addSources(panel.urls) }
+    }
+    func trayEntries() -> [TrayTile.Entry] {
+        let shown = Set(items.filter { $0.value.isVisible }.keys)
+        return shelf.ranked(arrangedIDs).compactMap { id in
+            guard let panel = panels[id] else { return nil }
+            let balance = panel.windows.first { $0.label == panel.name }?.right
+            let reading = balance ?? displayedQuota(panel)?.pct.map { "\(Int((100 - $0).rounded()))% left" } ?? "no reading"
+            return TrayTile.Entry(id: id, name: panel.name, reading: reading, image: icon(panel), state: shelf.pins.contains(id) ? "kept in bar" : shown.contains(id) ? "in bar" : "")
+        }
+    }
+    func showTray(from sender: StatusCellButton) {
+        guard let window = sender.window, let screen = window.screen else { return }
+        tray.onPick = { [weak self] id in
+            guard let self = self else { return }
+            self.shelf.togglePin(id)
+            UserDefaults.standard.set(self.shelf.pins, forKey: "shelfPins")
+            self.arrange(self.arrangedIDs)
+            self.tray.close()
+        }
+        tray.onContext = { [weak self] id, view, event in
+            guard let self = self, let panel = self.panels[id] else { return }
+            NSMenu.popUpContextMenu(self.providerMenu(panel), with: event, for: view)
+        }
+        tray.onAdd = { [weak self] in self?.tray.close(); self?.chooseSources() }
+        tray.onHelp = { [weak self] in
+            self?.tray.close()
+            NSWorkspace.shared.open(URL(string: "https://github.com/HotDogAmbulance/usage-hud/blob/main/PROVIDERS.md")!)
+        }
+        tray.onQuit = { NSApp.terminate(nil) }
+        let logo = window.convertToScreen(sender.convert(sender.bounds, to: nil))
+        group.menuOpen = true
+        tray.closed = { [weak self] in self?.group.menuOpen = false }
+        tray.show(trayEntries(), from: logo, screen: screen, dark: darkMenuBar)
     }
     /// With the click log on, say which menu or submenu really appears and which entry it hangs from.
     func menuWillOpen(_ menu: NSMenu) {
@@ -354,6 +407,12 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func openCell(_ sender: StatusCellButton) {
         closeHover()
+        if sender.sourceID == "overflow" {
+            // A second click on the logo puts the tray away; a click elsewhere in the bar already did.
+            if tray.isShown { tray.close() } else { showTray(from: sender) }
+            return
+        }
+        tray.close()
         let cell = sender.sourceID == "overflow" ? overflow : sender.sourceID == "usage-hud" ? brandCell : items[sender.sourceID]
         guard let menu = cell?.menu else { ClickLog.write("open \(sender.sourceID) no menu"); return }
         ClickLog.write("open \(sender.sourceID) menu=\(menu.items.first?.title ?? "-") items=\(menu.items.count)")
@@ -604,7 +663,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         // Keep complete names available when the compact view truncates labels or limits rows.
-        if panel.cells.contains(where: { cell in !panel.windows.contains { $0.label == cell.label } }) || panel.cells.count > 8 || panel.cells.contains(where: { ($0.label as NSString).size(withAttributes: CellsView.body).width > 140 }) {
+        if panel.cells.contains(where: { cell in !panel.windows.contains { $0.label == cell.label } }) || panel.cells.count > 5 || panel.cells.contains(where: { ($0.label as NSString).size(withAttributes: CellsView.body).width > 140 }) {
             let all = NSMenu()
             for cell in panel.cells { all.addItem(withTitle: cell.label + " · " + (cell.right ?? "") + (cell.isCached ? " · cached" : ""), action: nil, keyEquivalent: "") }
             menu.addItem(withTitle: (panel.id == "openrouter" ? "All keys" : "All budgets") + " (\(panel.cells.count))", action: nil, keyEquivalent: "").submenu = all
@@ -674,6 +733,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     /// Keeps the most recently used batteries in the menu bar, so a crowded bar or the notch never hides them silently.
     func arrange(_ ids: [String]) {
+        arrangedIDs = ids
         let arrangement = shelf.arrange(ids, limit: visibleLimit, urgent: Set(ids.filter { panels[$0]?.alert != nil }))
         let hidden = arrangement.hidden
         for (id, item) in items { item.isVisible = ids.contains(id) && !hidden.contains(id) }
@@ -685,21 +745,11 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             let item = overflow ?? StatusCell(id: "overflow", length: SystemBattery.stackedWidth + StatusGroup.gap)
             overflow = item; item.isVisible = true; leading = item
-            item.button?.toolTip = "Usage HUD · \(hidden.count) more: " + hidden.compactMap { panels[$0]?.name }.joined(separator: ", ")
+            let names = hidden.compactMap { panels[$0]?.name }
+            item.button?.toolTip = "Usage HUD · +\(hidden.count) more: " + names.prefix(5).joined(separator: ", ") + (names.count > 5 ? "…" : "")
             item.button?.setAccessibilityLabel("Usage HUD, \(hidden.count) more usage batteries")
         }
         configure(leading)
-        if !hidden.isEmpty, let button = leading.button, button.trackingAreas.isEmpty {
-            overflowTracker.changed = { [weak self] inside in
-                guard inside else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    guard let self = self, self.openMenu == nil, let button = self.overflow?.button, let window = button.window,
-                          button.bounds.contains(button.convert(window.mouseLocationOutsideOfEventStream, from: nil)) else { return }
-                    button.performClick(nil)
-                }
-            }
-            button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: overflowTracker))
-        }
         leading.button?.image = SystemBattery.stacked(dark: darkMenuBar)
         let menu = NSMenu()
         for id in hidden.isEmpty ? ids : hidden {
@@ -728,7 +778,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let allOld = panel.cells.allSatisfy(\.isCached)
         let balanceCached = balance?.isCached == true && !allOld ? " · cached" : ""
         return CellsView(title: panel.name + (balance?.right.map { "  " + $0 + balanceCached } ?? ""), subtitle: panel.cellsTitle, lines: lines,
-                         rows: Array(panel.cells.prefix(8)), more: max(0, panel.cells.count - 8), allReadingsCached: allOld,
+                         rows: Array(panel.cells.prefix(5)), more: max(0, panel.cells.count - 5), allReadingsCached: allOld,
                          moreHint: inMenu ? (panel.id == "openrouter" ? "All keys below" : "All budgets below") : "click battery for all",
                          darkBar: inMenu ? nil : darkMenuBar, providerID: panel.id)
     }
@@ -859,6 +909,13 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.items["glm"]?.isVisible == false && delegate.items["deepseek"]?.isVisible == false)
     precondition(delegate.items["codex"]?.isVisible == true && delegate.overflow?.button?.image != nil && delegate.overflow?.button?.accessibilityLabel() == "Usage HUD, 2 more usage batteries")
     precondition(delegate.overflow?.menu?.items.first?.submenu?.items.contains { $0.title.hasPrefix("Refresh GLM") } == true)
+    // The tray lists every battery; keeping one in the bar takes a place, and letting it go gives it back.
+    let trayBefore = delegate.trayEntries()
+    precondition(trayBefore.count == delegate.arrangedIDs.count && trayBefore.contains { $0.id == "glm" && $0.state == "" })
+    delegate.shelf.togglePin("glm"); delegate.arrange(delegate.arrangedIDs)
+    precondition(delegate.items["glm"]?.isVisible == true && delegate.trayEntries().contains { $0.id == "glm" && $0.state == "kept in bar" })
+    delegate.shelf.togglePin("glm"); delegate.arrange(delegate.arrangedIDs)
+    precondition(delegate.items["glm"]?.isVisible == false)
     delegate.arrange(["codex", "claude"])
     precondition(delegate.overflow?.isVisible == false)
     // All visible cells share one native surface, with separate accessible buttons and menus.
