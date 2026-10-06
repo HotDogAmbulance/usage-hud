@@ -37,7 +37,7 @@ final class ClaudeProvider: UsageProvider {
     func refresh() throws {
         // While Claude Code runs, its statusline brings the quota, so the Keychain is left alone; credits still update hourly.
         let blob = cache.read("claude.json"), now = Date().timeIntervalSince1970
-        if ["statusline", "claude-run"].contains(blob["source"] as? String), now - (number(blob["captured_at"]) ?? 0) < 600,
+        if blob["source"] as? String == "statusline", now - (number(blob["captured_at"]) ?? 0) < 600,
            now - (number(blob["oauth_at"]) ?? 0) < 3600 { return }
         let token = try Self.accessToken(credentials.password(service: "Claude Code-credentials", account: nil))
         let data: JSON
