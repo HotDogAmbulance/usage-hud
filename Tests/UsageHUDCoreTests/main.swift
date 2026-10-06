@@ -40,6 +40,7 @@ let cases: [(String, () throws -> Void)] = [
     ("testExpiredClaudeNeverMakesHTTPRequestOrChangesCredential", test.testExpiredClaudeNeverMakesHTTPRequestOrChangesCredential),
     ("testClaudeGETPreservesContextAndCredits", test.testClaudeGETPreservesContextAndCredits),
     ("testClaude429DoesNotInventExhaustedQuota", test.testClaude429DoesNotInventExhaustedQuota),
+    ("testClaude429BacksOffInsteadOfAskingAgain", test.testClaude429BacksOffInsteadOfAskingAgain),
     ("testCodexSelectsOnlyCodexBucket", test.testCodexSelectsOnlyCodexBucket),
     ("testWrongCodexBucketFailsClosed", test.testWrongCodexBucketFailsClosed),
     ("testProUsesWeeklyWindowInsteadOfOldFiveHour", test.testProUsesWeeklyWindowInsteadOfOldFiveHour),

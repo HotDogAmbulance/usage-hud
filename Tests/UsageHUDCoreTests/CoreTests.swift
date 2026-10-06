@@ -148,6 +148,15 @@ final class CoreTests {
         expectEqual(http.calls, 1)
         expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("claude.json")), encoding: .utf8)!.contains("fixture"))
     }
+    func testClaude429BacksOffInsteadOfAskingAgain() throws {
+        try seed(); try cache.merge("claude.json", ["oauth_at": 1])
+        credentials.text = "{\"accessToken\":\"fixture\"}"; http.error = HTTPFailure(status: 429)
+        let claude = ClaudeProvider(cache: cache, credentials: credentials, http: http)
+        expectError(try claude.refresh())
+        let calls = http.calls
+        try claude.refresh()
+        expectEqual(http.calls, calls)
+    }
     func testClaude429DoesNotInventExhaustedQuota() throws {
         try seed(); let before = try Data(contentsOf: root.appendingPathComponent("claude.json"))
         credentials.text = "{\"accessToken\":\"fixture\"}"; http.error = HTTPFailure(status: 429)
@@ -268,6 +277,7 @@ final class CoreTests {
         expectNil(panel.windows.first { $0.label == "Free resets" })
         expectFalse(asked.contains { $0.contains("cedar_ember") })
         // Those two are read hourly, not with every quota refresh.
+        try cache.merge("claude.json", ["oauth_at": 1])
         asked = []; try claude.refresh()
         expectEqual(asked.count, 1)
     }

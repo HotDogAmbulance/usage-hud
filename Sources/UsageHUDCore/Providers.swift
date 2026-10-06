@@ -38,6 +38,9 @@ final class ClaudeProvider: UsageProvider {
         // A fresh statusline quota takes precedence, even without a usable OAuth credential.
         // Money rows keep their own age; the OAuth fallback can refresh them when statusline readings stop.
         let blob = cache.read("claude.json"), now = Date().timeIntervalSince1970
+        // The usage endpoint is undocumented and answers 429 when read too often: after one, stay away for a growing while,
+        // and otherwise read it at most every five minutes, whoever asks (timers, hooks, restarts).
+        let backoff = cache.read("claude-backoff.json")
         if blob["source"] as? String == "statusline",
            ["five_hour", "seven_day"].contains(where: { key in
                let window = dict(dict(blob["rate_limits"])[key])
@@ -45,13 +48,18 @@ final class ClaudeProvider: UsageProvider {
                    now - (number(window["captured_at"]) ?? 0) < 600 &&
                    (resetTime(window["resets_at"]) ?? .infinity) > now
            }) { return }
+        if now < (number(backoff["until"]) ?? 0) || now - (number(blob["oauth_at"]) ?? 0) < 300 { return }
         let token = try Self.accessToken(credentials.password(service: "Claude Code-credentials", account: nil))
         let data: JSON
         do {
             data = try http.get(URL(string: "https://api.anthropic.com/api/oauth/usage")!, token: token, headers: Self.headers, limit: 1024 * 1024)
         } catch let error as HTTPFailure {
             if error.status == 401 || error.status == 403 { throw HUDProblem("Claude needs sign-in: claude auth login", attention: true, fix: "claude auth login") }
-            if error.status == 429 { throw HUDProblem("Claude usage endpoint throttled; retry later") }
+            if error.status == 429 {
+                let strikes = min(4, Int(number(backoff["strikes"]) ?? 0) + 1)
+                try? cache.write("claude-backoff.json", ["strikes": strikes, "until": now + Double(900 << (strikes - 1))])
+                throw HUDProblem("Claude usage endpoint throttled; reading again in \(15 << (strikes - 1)) min")
+            }
             throw HUDProblem("Claude usage HTTP \(error.status)")
         }
         var windows: JSON = [:]
@@ -61,6 +69,7 @@ final class ClaudeProvider: UsageProvider {
             windows[key] = ["used_percentage": pct, "resets_at": resetTime(window["resets_at"]) as Any? ?? NSNull()]
         }
         guard !windows.isEmpty else { throw HUDProblem("Claude response has no quota windows") }
+        if !backoff.isEmpty { try? cache.write("claude-backoff.json", [:]) }
         var extra: JSON = ReadingSource.claudeOAuth.receipt(now: now)
         extra.merge(["source": "oauth-usage-get", "oauth_at": now, "depleted": false, "probe_blocked_until": NSNull()]) { _, new in new }
         if var credits = data["extra_usage"] as? JSON {
