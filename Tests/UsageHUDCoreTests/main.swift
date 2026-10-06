@@ -111,6 +111,7 @@ let cases: [(String, () throws -> Void)] = [
     ("testOutagesAndOverflowAreNotSourceRemovals", test.testOutagesAndOverflowAreNotSourceRemovals),
     ("testSourceChangesGroupAndDescribeActualRoutes", test.testSourceChangesGroupAndDescribeActualRoutes),
     ("testStatuslineReceiptsIgnoreContextAndMalformedQuota", test.testStatuslineReceiptsIgnoreContextAndMalformedQuota),
+    ("testClaudeFreshStatuslineClearsFailureWithoutOAuth", test.testClaudeFreshStatuslineClearsFailureWithoutOAuth),
     ("testGoneEvidenceUsesProviderCacheAndExpiresOnFreshRead", test.testGoneEvidenceUsesProviderCacheAndExpiresOnFreshRead),
     ("testSourceReceiptsPreservePartialWindowProvenance", test.testSourceReceiptsPreservePartialWindowProvenance),
     ("testAntigravityPaletteFollowsUsageAndModelRemoval", test.testAntigravityPaletteFollowsUsageAndModelRemoval),

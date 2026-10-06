@@ -1158,6 +1158,13 @@ final class CoreTests {
         try ClaudeProvider(cache: cache, credentials: credentials, http: http).refresh()
         expectEqual(credentials.calls, 0); expectEqual(http.calls, 0)
         try cache.merge("claude.json", ["oauth_at": 0])
+        credentials.text = "{\"accessToken\":\"fixture\",\"expiresAt\":1}"
+        try ClaudeProvider(cache: cache, credentials: credentials, http: http, home: root).refresh()
+        expectEqual(credentials.calls, 0); expectEqual(http.calls, 0)
+        // Once the actual window ages out, the existing read-only OAuth fallback may run.
+        var blob = cache.read("claude.json"), windows = dict(cache.read("claude.json")["rate_limits"])
+        var five = dict(windows["five_hour"]); five["captured_at"] = 1; windows["five_hour"] = five
+        blob["rate_limits"] = windows; try cache.write("claude.json", blob)
         credentials.text = "{\"accessToken\":\"fixture\"}"; http.response = ["five_hour": ["utilization": 12]]
         try ClaudeProvider(cache: cache, credentials: credentials, http: http, home: root).refresh()
         expectEqual(http.calls, 1)

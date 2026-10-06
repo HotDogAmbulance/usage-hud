@@ -168,6 +168,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         connectClaudeCode()
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(claudeCodeRan(_:)), name: Engine.claudeCodeRan,
                                                             object: nil, suspensionBehavior: .deliverImmediately)
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(claudeUsageRead(_:)), name: Engine.claudeUsageRead,
+                                                            object: nil, suspensionBehavior: .deliverImmediately)
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.load("automatic"); self?.connectClaudeCode() }
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.load(nil) }
         // A provider used in the last ten minutes refreshes every minute, so its battery follows a chat as it happens.
@@ -229,6 +231,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard now - claudeNudged > 60 else { return }
         claudeNudged = now; load(nil, also: ["claude"])
     }
+    /// A committed quota write wakes the cache display without asking OAuth.
+    @objc func claudeUsageRead(_ note: Notification) { load(nil) }
     @objc func toggleClaudeCode() {
         engine.claudeCodeConnected.toggle()
         connectClaudeCode()
