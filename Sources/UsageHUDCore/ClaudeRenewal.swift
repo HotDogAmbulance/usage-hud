@@ -58,6 +58,19 @@ public final class ClaudeRenewal {
         try? FileManager.default.removeItem(at: folder)
         return count
     }
+    /// The quota Claude Code reported during the call, stored like a statusline reading but marked as coming from this call, so it
+    /// never counts as someone using Claude Code.
+    func recordQuota(_ event: JSON?) {
+        let windows = dict(dict(event?["rate_limit_info"])["unifiedWindows"])
+        var saved: JSON = [:]
+        for (key, raw) in windows where ["five_hour", "seven_day"].contains(key) {
+            let window = dict(raw)
+            guard let used = number(window["utilization"]) else { continue }
+            saved[key] = ["used_percentage": max(0, min(100, used * 100)), "resets_at": number(window["resetsAt"]) as Any? ?? NSNull()]
+        }
+        guard !saved.isEmpty else { return }
+        try? Cache(home.appendingPathComponent(".usage-hud")).quota("claude.json", windows: saved, extra: ["source": "claude-run", "reading_source": "claude-statusline"], now: now())
+    }
     /// A notice to show when a renewal ran, or nil when nothing was due or it could not be done. `lastRealUse` is when Claude Code
     /// last reported through its statusline (seconds since 1970), which clears the count of renewals made without anyone present.
     public func renewIfDue(lastRealUse: Double) -> SourceNotice? {
@@ -72,9 +85,14 @@ public final class ClaudeRenewal {
         guard let claude = executable() else { note("skipped: no claude command found"); return nil }
         try? FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let result = run(claude, ["-p", "Reply with the single word OK", "--model", "haiku", "--no-session-persistence", "--setting-sources", "local",
-                                  "--tools", "", "--disable-slash-commands", "--output-format", "json"], workDirectory)
+                                  "--tools", "", "--disable-slash-commands", "--output-format", "stream-json", "--verbose"], workDirectory)
         let removed = leftovers()
-        let reply = (try? JSONSerialization.jsonObject(with: result.output)) as? JSON
+        // One JSON object per line: the final `result`, and a `rate_limit_event` with the quota Claude Code itself was told.
+        let events = String(decoding: result.output, as: UTF8.self).split(separator: "\n").compactMap {
+            (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? JSON
+        }
+        let reply = events.last { $0["type"] as? String == "result" }
+        recordQuota(events.last { $0["type"] as? String == "rate_limit_event" })
         guard result.status == 0, reply?["is_error"] as? Bool == false else {
             note("renewal failed (exit \(result.status)); removed \(removed) leftover item(s); trying again in 30 minutes")
             return nil

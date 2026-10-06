@@ -74,7 +74,7 @@ public final class Engine {
             panel.readingSource = (blob["reading_source"] as? String).flatMap(ReadingSource.init(rawValue:))
             panel.sourceReadAt = number(blob["source_read_at"])
             if provider.id == "claude" {
-                let legacy: ReadingSource? = blob["source"] as? String == "statusline" ? .claudeStatusline :
+                let legacy: ReadingSource? = ["statusline", "claude-run"].contains(blob["source"] as? String) ? .claudeStatusline :
                     blob["source"] as? String == "oauth-usage-get" ? .claudeOAuth : nil
                 let usable = quotaWindows(blob).contains { !$0.isCached && ($0.label == "5h" || $0.label.hasPrefix("7d")) }
                 panel.readingSource = usable ? legacy : nil

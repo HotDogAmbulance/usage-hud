@@ -1043,7 +1043,7 @@ final class CoreTests {
         let fake = root.appendingPathComponent(".local/bin/claude")
         try "#!/bin/sh\n".write(to: fake, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
-        var clock = 1_000_000.0, calls: [[String]] = [], reply = "{\"is_error\":false,\"result\":\"OK\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cache_creation_input_tokens\":100}}", status: Int32 = 0
+        var clock = 1_000_000.0, calls: [[String]] = [], reply = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"unifiedWindows\":{\"five_hour\":{\"utilization\":0.23,\"resetsAt\":1791293400},\"seven_day\":{\"utilization\":0.4,\"resetsAt\":1791489600}}}}\n{\"type\":\"result\",\"is_error\":false,\"result\":\"OK\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cache_creation_input_tokens\":100}}", status: Int32 = 0
         let renewal = ClaudeRenewal(home: root, run: { _, arguments, directory in
             calls.append(arguments)
             // Claude Code leaves an empty project folder behind even when nothing is saved.
@@ -1054,6 +1054,9 @@ final class CoreTests {
         let first = renewal.renewIfDue(lastRealUse: 0)
         expectEqual(first?.title, "Claude sign-in renewed")
         expectTrue(first?.lines.first?.contains("115 tokens") == true)
+        let stored = Cache(root.appendingPathComponent(".usage-hud")).read("claude.json")
+        expectEqual(stored["source"] as? String, "claude-run")
+        expectEqual(quotaWindows(stored, now: 1_000_000).map { $0.label + String(Int($0.pct ?? -1)) }.sorted(), ["5h23", "7d40"])
         expectTrue(calls[0].contains("--no-session-persistence") && calls[0].contains("haiku") && calls[0].contains("--tools"))
         expectEqual(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".claude/projects").path).count, 0)
         expectTrue((try String(contentsOf: root.appendingPathComponent(".usage-hud/renewals.log"), encoding: .utf8)).contains("renewed with one Claude Code call"))
