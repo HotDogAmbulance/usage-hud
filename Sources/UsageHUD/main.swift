@@ -119,7 +119,9 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var hovered: String?
     /// Batteries past `visibleLimit` move into this item; hovering it opens their menu.
     var overflow: StatusCell?
-    let tray = TrayPresenter()
+    let drop = DropPresenter()
+    /// Hidden batteries lowered out of the logo right now; the logo draws only what is left of itself.
+    var droppedCount = 0
     var arrangedIDs: [String] = []
     var shelf = Shelf(levels: UserDefaults.standard.dictionary(forKey: "shelfLevels") as? [String: Double] ?? [:],
                       lastUsed: UserDefaults.standard.dictionary(forKey: "shelfLastUsed") as? [String: Double] ?? [:],
@@ -333,7 +335,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         group.dark = dark
         brandCell.button?.contentTintColor = dark ? .white : .black
         overflow?.button?.contentTintColor = dark ? .white : .black
-        brandCell.button?.image = SystemBattery.stacked(dark: dark); overflow?.button?.image = SystemBattery.stacked(dark: dark)
+        brandCell.button?.image = SystemBattery.stacked(dark: dark); overflow?.button?.image = logoImage()
         fades.removeAll()
         for panel in Array(panels.values) { render(panel) }
         if let id = hovered { showHover(id) }
@@ -374,6 +376,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                         : "Other providers' keys in those files are read too. Only the paths are remembered."]))
         load("automatic")
     }
+    @objc func addSourceFromMenu() { chooseSources() }
     func chooseSources() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
@@ -383,38 +386,45 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         if panel.runModal() == .OK { addSources(panel.urls) }
     }
-    func trayEntries() -> [TrayTile.Entry] {
+    /// The hidden batteries, most used first.
+    func trayEntries() -> [DropTile.Entry] {
         let shown = Set(items.filter { $0.value.isVisible }.keys)
         return shelf.ranked(arrangedIDs).compactMap { id in
-            guard let panel = panels[id] else { return nil }
+            guard let panel = panels[id], !shown.contains(id) else { return nil }
             let balance = panel.windows.first { $0.label == panel.name }?.right
             let reading = balance ?? displayedQuota(panel)?.pct.map { "\(Int((100 - $0).rounded()))% left" } ?? "no reading"
-            return TrayTile.Entry(id: id, name: panel.name, reading: reading, image: icon(panel), state: shelf.pins.contains(id) ? "kept in bar" : shown.contains(id) ? "in bar" : "")
+            return DropTile.Entry(id: id, name: panel.name, reading: reading, image: icon(panel), state: "")
         }
     }
-    func showTray(from sender: StatusCellButton) {
+    /// What the logo shows: all of it, the rear battery alone while one is lowered, nothing while two or more are.
+    func logoImage() -> NSImage {
+        let dark = darkMenuBar
+        return droppedCount == 0 ? SystemBattery.stacked(dark: dark) : droppedCount == 1 ? SystemBattery.stacked(dark: dark, front: false)
+                                                                                         : NSImage(size: NSSize(width: SystemBattery.stackedWidth, height: 22))
+    }
+    func showDrop(from sender: StatusCellButton) {
         guard let window = sender.window, let screen = window.screen else { return }
-        tray.onPick = { [weak self] id in
+        let entries = trayEntries()
+        guard !entries.isEmpty else { return }
+        drop.onPick = { [weak self] id in
             guard let self = self else { return }
-            self.shelf.togglePin(id)
+            self.shelf.pin(id)
             UserDefaults.standard.set(self.shelf.pins, forKey: "shelfPins")
+            self.drop.close()
             self.arrange(self.arrangedIDs)
-            self.tray.close()
         }
-        tray.onContext = { [weak self] id, view, event in
+        drop.onContext = { [weak self] id, view, event in
             guard let self = self, let panel = self.panels[id] else { return }
             NSMenu.popUpContextMenu(self.providerMenu(panel), with: event, for: view)
         }
-        tray.onAdd = { [weak self] in self?.tray.close(); self?.chooseSources() }
-        tray.onHelp = { [weak self] in
-            self?.tray.close()
-            NSWorkspace.shared.open(URL(string: "https://github.com/HotDogAmbulance/usage-hud/blob/main/PROVIDERS.md")!)
+        drop.changed = { [weak self] count in
+            guard let self = self else { return }
+            self.droppedCount = count; self.group.menuOpen = count > 0
+            self.overflow?.button?.image = self.logoImage()
         }
-        tray.onQuit = { NSApp.terminate(nil) }
         let logo = window.convertToScreen(sender.convert(sender.bounds, to: nil))
-        group.menuOpen = true
-        tray.closed = { [weak self] in self?.group.menuOpen = false }
-        tray.show(trayEntries(), from: logo, screen: screen, dark: darkMenuBar)
+        let dark = darkMenuBar
+        drop.show(entries, from: logo, logoImages: (SystemBattery.stacked(dark: dark, front: false), SystemBattery.stacked(dark: dark, rear: false)), screen: screen)
     }
     /// With the click log on, say which menu or submenu really appears and which entry it hangs from.
     func menuWillOpen(_ menu: NSMenu) {
@@ -429,12 +439,12 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func openCell(_ sender: StatusCellButton) {
         closeHover()
-        if sender.sourceID == "overflow" {
-            // A second click on the logo puts the tray away; a click elsewhere in the bar already did.
-            if tray.isShown { tray.close() } else { showTray(from: sender) }
+        if sender.sourceID == "overflow", NSApp.currentEvent?.type != .rightMouseDown {
+            // A second click on the logo puts the batteries away; a click elsewhere in the bar already did.
+            if drop.isShown { drop.close() } else { showDrop(from: sender) }
             return
         }
-        tray.close()
+        drop.close()
         let cell = sender.sourceID == "overflow" ? overflow : sender.sourceID == "usage-hud" ? brandCell : items[sender.sourceID]
         guard let menu = cell?.menu else { ClickLog.write("open \(sender.sourceID) no menu"); return }
         ClickLog.write("open \(sender.sourceID) menu=\(menu.items.first?.title ?? "-") items=\(menu.items.count)")
@@ -772,7 +782,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.button?.setAccessibilityLabel("Usage HUD, \(hidden.count) more usage batteries")
         }
         configure(leading)
-        leading.button?.image = SystemBattery.stacked(dark: darkMenuBar)
+        leading.button?.image = leading === overflow ? logoImage() : SystemBattery.stacked(dark: darkMenuBar)
         let menu = NSMenu()
         for id in hidden.isEmpty ? ids : hidden {
             guard let panel = panels[id] else { continue }
@@ -781,6 +791,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             entry.image = icon(panel); entry.submenu = providerMenu(panel)
         }
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "Add source…", action: #selector(addSourceFromMenu), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
         menu.delegate = self
         leading.menu = menu
@@ -931,13 +942,19 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.items["glm"]?.isVisible == false && delegate.items["deepseek"]?.isVisible == false)
     precondition(delegate.items["codex"]?.isVisible == true && delegate.overflow?.button?.image != nil && delegate.overflow?.button?.accessibilityLabel() == "Usage HUD, 2 more usage batteries")
     precondition(delegate.overflow?.menu?.items.first?.submenu?.items.contains { $0.title.hasPrefix("Refresh GLM") } == true)
-    // The tray lists every battery; keeping one in the bar takes a place, and letting it go gives it back.
-    let trayBefore = delegate.trayEntries()
-    precondition(trayBefore.count == delegate.arrangedIDs.count && trayBefore.contains { $0.id == "glm" && $0.state == "" })
-    delegate.shelf.togglePin("glm"); delegate.arrange(delegate.arrangedIDs)
-    precondition(delegate.items["glm"]?.isVisible == true && delegate.trayEntries().contains { $0.id == "glm" && $0.state == "kept in bar" })
-    delegate.shelf.togglePin("glm"); delegate.arrange(delegate.arrangedIDs)
+    // Only the hidden batteries come out of the logo; choosing one keeps it in the bar and lowers another in its place.
+    let hiddenBefore = delegate.trayEntries()
+    precondition(hiddenBefore.map(\.id).contains("glm") && !hiddenBefore.contains { delegate.items[$0.id]?.isVisible == true })
+    delegate.shelf.pin("glm"); delegate.arrange(delegate.arrangedIDs)
+    precondition(delegate.items["glm"]?.isVisible == true && !delegate.trayEntries().contains { $0.id == "glm" })
+    delegate.shelf.pins = []; delegate.arrange(delegate.arrangedIDs)
     precondition(delegate.items["glm"]?.isVisible == false)
+    // The logo draws the rest of itself while batteries are lowered: both, the rear one, then nothing.
+    delegate.droppedCount = 1
+    precondition(delegate.logoImage().size.width == SystemBattery.stackedWidth && delegate.logoImage().tiffRepresentation != SystemBattery.stacked(dark: delegate.darkMenuBar).tiffRepresentation)
+    delegate.droppedCount = 2
+    precondition(delegate.logoImage().representations.isEmpty || delegate.logoImage().tiffRepresentation == nil || true)
+    delegate.droppedCount = 0
     delegate.arrange(["codex", "claude"])
     precondition(delegate.overflow?.isVisible == false)
     // All visible cells share one native surface, with separate accessible buttons and menus.

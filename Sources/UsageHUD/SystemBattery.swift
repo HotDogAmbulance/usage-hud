@@ -10,7 +10,7 @@ enum SystemBattery {
 
     /// Two copies of the installed Mac battery artwork; the front copy masks the rear one.
     static let stackedWidth: CGFloat = 32
-    static func stacked(dark: Bool) -> NSImage {
+    static func stacked(dark: Bool, front showFront: Bool = true, rear showRear: Bool = true) -> NSImage {
         let image = NSImage(size: NSSize(width: stackedWidth, height: 22))
         // Coloured here rather than left to a template tint, which did not reach this button: the logo came out black on a dark bar.
         let ink: NSColor = dark ? .white : .black
@@ -20,7 +20,7 @@ enum SystemBattery {
             context.saveGState(); context.setBlendMode(operation); context.clip(to: rect, mask: mask)
             ink.setFill(); rect.fill(); context.restoreGState()
         }
-        for (x, y, front) in [(CGFloat(1), CGFloat(6.5), false), (CGFloat(5), CGFloat(2.5), true)] {
+        for (x, y, front) in [(CGFloat(1), CGFloat(6.5), false), (CGFloat(5), CGFloat(2.5), true)] where front ? showFront : showRear {
             let rect = NSRect(x: x, y: y, width: 23, height: 12)
             let capRect = NSRect(x: x + 24, y: y, width: 2, height: 12)
             if front {

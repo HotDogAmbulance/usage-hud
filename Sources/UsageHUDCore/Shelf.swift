@@ -14,6 +14,8 @@ public struct Shelf {
     public init(levels: [String: Double] = [:], lastUsed: [String: Double] = [:], scores: [String: Double] = [:], scoredAt: Double = 0, pins: [String] = []) {
         self.levels = levels; self.lastUsed = lastUsed; self.scores = scores; self.scoredAt = scoredAt; self.pins = pins
     }
+    /// Keeps `id` in the bar as the latest choice.
+    public mutating func pin(_ id: String) { pins.removeAll { $0 == id }; pins.append(id) }
     /// Pins `id`, or lets it go if it was already pinned.
     public mutating func togglePin(_ id: String) {
         if let index = pins.firstIndex(of: id) { pins.remove(at: index) } else { pins.append(id) }

@@ -1025,6 +1025,7 @@ final class CoreTests {
         let ids = ["codex", "claude", "openrouter", "glm", "kimi"]
         shelf.togglePin("kimi")
         expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "claude", "kimi"])
+        shelf.pin("kimi"); expectEqual(shelf.pins, ["kimi"])
         shelf.togglePin("glm")
         expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "glm", "kimi"])
         // A battery asking for attention is never pushed out by a choice.
