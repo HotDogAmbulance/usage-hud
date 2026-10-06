@@ -31,7 +31,7 @@ final class ClaudeProvider: UsageProvider {
         guard let token = oauth["accessToken"] as? String, !token.isEmpty else { throw HUDProblem("Claude token missing") }
         // Expiry does not establish sign-out or which credential store Desktop uses. The HUD leaves renewal to Claude
         // Code; a newer statusline reading can also clear the cached failure without this token changing.
-        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Claude Code credential expired; waiting for fresh usage") }
+        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Claude Code credential expired; it renews with one small Claude Code call, or run claude once in a terminal") }
         return token
     }
     func refresh() throws {

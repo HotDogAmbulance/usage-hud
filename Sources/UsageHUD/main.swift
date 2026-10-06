@@ -262,6 +262,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let notice = self.sourceChanges.update(panels: panels, gone: gone, announce: self.sourceNoticesReady)
                 if refresh == "automatic" { self.sourceNoticesReady = true }
                 if let notice = notice { self.showSourceNotice(notice) }
+                self.renewClaudeIfExpired(panels)
                 if let next = self.pending { self.pending = nil; self.load(next) }
                 else if self.pendingAutomaticRead { self.pendingAutomaticRead = false; self.load("automatic") }
                 else if self.pendingCacheRead {
@@ -342,6 +343,23 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cell.button?.contentTintColor = darkMenuBar ? .white : .black
         cell.button?.beforeClick = { [weak self] in self?.closeHover() }
         cell.button?.onDrop = { [weak self] urls in self?.addSources(urls) }
+    }
+    let renewal = ClaudeRenewal()
+    var renewing = false
+    /// An expired Claude Code credential is renewed by Claude Code itself with one tiny request; see `ClaudeRenewal` for its limits.
+    func renewClaudeIfExpired(_ panels: [Panel]) {
+        guard !renewing, let claude = panels.first(where: { $0.id == "claude" }), claude.note.contains("credential expired") else { return }
+        renewing = true
+        let saved = (try? Data(contentsOf: home.appendingPathComponent("claude.json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        let real = saved["source"] as? String == "statusline" ? (saved["captured_at"] as? NSNumber)?.doubleValue ?? 0 : 0
+        DispatchQueue.global(qos: .utility).async {
+            let notice = self.renewal.renewIfDue(lastRealUse: real)
+            DispatchQueue.main.async {
+                self.renewing = false
+                guard let notice = notice else { return }
+                self.showSourceNotice(notice); self.load("automatic")
+            }
+        }
     }
     /// Files or folders dropped on the bar, or chosen from the tray: only their paths are kept.
     func addSources(_ urls: [URL]) {
@@ -1010,7 +1028,7 @@ if CommandLine.arguments.contains("--self-test") {
     let identity = ModelIdentityView(glyph: NSImage(size: NSSize(width: 18, height: 18)), name: "Codex")
     precondition(identity.frame.size == NSSize(width: 32, height: 32) && identity.accessibilityLabel() == "Codex")
     let expiredClaude = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 40, stale: true)],
-                              note: "Claude Code credential expired; waiting for fresh usage")
+                              note: "Claude Code credential expired; it renews with one small Claude Code call, or run claude once in a terminal")
     for panel in [expiredClaude, Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 20)])] {
         let controls = ["Live from Claude Code", "Claude Code CLI connection", "Refresh Claude", "Check Claude usage", "Waiting for fresh Claude usage"]
         precondition(!delegate.providerMenu(panel).items.contains { controls.contains($0.title) })

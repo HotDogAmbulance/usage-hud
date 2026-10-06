@@ -1037,6 +1037,44 @@ final class CoreTests {
         expectEqual(KeySources.list(home: root).count, 1)
         try? FileManager.default.removeItem(at: root)
     }
+    func testExpiredClaudeSignInRenewsRarelyAndLeavesNothing() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("hud-renew-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".local/bin"), withIntermediateDirectories: true)
+        let fake = root.appendingPathComponent(".local/bin/claude")
+        try "#!/bin/sh\n".write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        var clock = 1_000_000.0, calls: [[String]] = [], reply = "{\"is_error\":false,\"result\":\"OK\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cache_creation_input_tokens\":100}}", status: Int32 = 0, running = false
+        let renewal = ClaudeRenewal(home: root, run: { _, arguments, directory in
+            calls.append(arguments)
+            // Claude Code leaves an empty project folder behind even when nothing is saved.
+            let project = root.appendingPathComponent(".claude/projects/" + directory.path.map { $0 == "/" || $0 == "." ? "-" : String($0) }.joined() + "/memory")
+            try? FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+            return (status, reply.data(using: .utf8)!)
+        }, now: { clock }, isRunning: { running })
+        let first = renewal.renewIfDue(lastRealUse: 0)
+        expectEqual(first?.title, "Claude sign-in renewed")
+        expectTrue(first?.lines.first?.contains("115 tokens") == true)
+        expectTrue(calls[0].contains("--no-session-persistence") && calls[0].contains("haiku") && calls[0].contains("--tools"))
+        expectEqual(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".claude/projects").path).count, 0)
+        expectTrue((try String(contentsOf: root.appendingPathComponent(".usage-hud/renewals.log"), encoding: .utf8)).contains("renewed with one Claude Code call"))
+        // Not again within six hours, nor while Claude Code itself is running.
+        clock += 3600; expectEqual(renewal.renewIfDue(lastRealUse: 0) == nil, true)
+        clock += 6 * 3600; running = true; expectEqual(renewal.renewIfDue(lastRealUse: 0) == nil, true)
+        running = false
+        // Two more with nobody using Claude Code, then it stops until real use is seen again.
+        expectEqual(renewal.renewIfDue(lastRealUse: 0) != nil, true)
+        clock += 7 * 3600; expectEqual(renewal.renewIfDue(lastRealUse: 0) != nil, true)
+        clock += 7 * 3600; expectEqual(renewal.renewIfDue(lastRealUse: 0) == nil, true)
+        expectEqual(calls.count, 3)
+        clock += 7 * 3600; expectEqual(renewal.renewIfDue(lastRealUse: clock - 100) != nil, true)
+        // A failure stays quiet and waits six hours; the opt-out file stops everything.
+        clock += 7 * 3600; status = 1; expectEqual(renewal.renewIfDue(lastRealUse: clock - 100) == nil, true)
+        expectEqual(calls.count, 5)
+        clock += 7 * 3600; status = 0
+        try Data().write(to: root.appendingPathComponent(".usage-hud/no-auto-renew"))
+        expectEqual(renewal.renewIfDue(lastRealUse: clock - 100) == nil && calls.count == 5, true)
+        try? FileManager.default.removeItem(at: root)
+    }
     func testShelfLearnsEachPersonsMainTools() {
         func quota(_ id: String, _ pct: Double) -> Panel { Panel(id: id, name: id, windows: [Window(label: "5h", pct: pct)]) }
         func balance(_ id: String, _ amount: Double) -> Panel { Panel(id: id, name: id, windows: [Window(label: id, right: String(format: "$%.2f left", amount))]) }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Expired Claude sign-in renews itself the way Claude Code always does: when the credential has expired, Usage HUD makes your own `claude` command send one tiny request (haiku, no tools, nothing saved), then removes the empty project folder it leaves in `~/.claude/projects`. At most once per six hours, never while `claude` is running, at most three times in a row without real use, with a notice and a line in `~/.usage-hud/renewals.log`; `touch ~/.usage-hud/no-auto-renew` turns it off. The expired-credential message now says so.
+
 - Many sources: the stacked-batteries logo opens a tray (every battery as a tile, springing out of the logo; Reduce Motion fades instead) in place of a menu that opened on hover. Hover only shows "+n more"; clicking a tile keeps that battery in the bar, or lets it go, and a battery asking for attention is never pushed out; right-click a tile for its menu. Click anywhere else to put the tray away. The key rows in the hover panel no longer repeat as a tooltip, and show five keys, the rest under "All keys (n)".
 - Add a source: drop a file or folder on the bar, or choose "Add source…" in the tray (hidden folders can be chosen). Only the paths are kept, in `~/.usage-hud/key-sources.json`; keys are read when needed and stay in memory.
 - The group's capsule is a flat tint of the bar's ink, shown only on hover and while a menu or the tray is open, with the full bar height and wider padding; panels use a popover blur with a hairline edge.

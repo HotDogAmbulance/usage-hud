@@ -139,7 +139,7 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if cached || partial { panel.note = "Source unavailable; last reading retained" }
         if id == "claude", state == "Expired Claude" {
-            panel.note = "Claude Code credential expired; waiting for fresh usage"
+            panel.note = "Claude Code credential expired; it renews with one small Claude Code call, or run claude once in a terminal"
             for index in panel.windows.indices { panel.windows[index].stale = true }
         }
         return panel
