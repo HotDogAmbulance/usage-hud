@@ -3,20 +3,22 @@ import Foundation
 /// Claude Code renews its own sign-in only when it makes a request, so after about eight hours without a terminal session the
 /// credential Usage HUD reads is expired. When that happens, and only then, the person's own `claude` makes one small request
 /// (the cheapest model, no tools, nothing saved) so it renews itself; Usage HUD never touches the token or the Keychain.
-/// It is rare, announced each time, written to `~/.usage-hud/renewals.log`, and stops after three in a row with no real use.
+/// It does not matter whether `claude` is running: a running Claude Code renews its own credential on every request, and the Desktop app keeps idle `claude` processes open that would otherwise block this. It is rare, announced each time, written to `~/.usage-hud/renewals.log`, and stops after three in a row with no real use.
 /// Opt out with `touch ~/.usage-hud/no-auto-renew`.
 public final class ClaudeRenewal {
     public typealias Runner = (_ executable: URL, _ arguments: [String], _ directory: URL) -> (status: Int32, output: Data)
-    public static let minimumGap: Double = 6 * 3600
+    /// After a renewal the credential lasts about eight hours, so nothing needed is held back; after a failure, try again in half an hour.
+    public static let minimumGap: Double = 6 * 3600, retryGap: Double = 1800
     public static let unattendedLimit = 3
-    let home: URL, run: Runner, now: () -> Double, isRunning: () -> Bool
+    let home: URL, run: Runner, now: () -> Double
     var state: URL { home.appendingPathComponent(".usage-hud/claude-renewal.json") }
     var log: URL { home.appendingPathComponent(".usage-hud/renewals.log") }
     var workDirectory: URL { home.appendingPathComponent(".usage-hud/renew") }
 
     public init(home: URL = FileManager.default.homeDirectoryForCurrentUser, run: @escaping Runner = ClaudeRenewal.process,
-                now: @escaping () -> Double = { Date().timeIntervalSince1970 }, isRunning: @escaping () -> Bool = ClaudeRenewal.claudeIsRunning) {
-        self.home = home; self.run = run; self.now = now; self.isRunning = isRunning
+                now: @escaping () -> Double = { Date().timeIntervalSince1970 }
+) {
+        self.home = home; self.run = run; self.now = now
     }
     public static func process(_ executable: URL, _ arguments: [String], _ directory: URL) -> (status: Int32, output: Data) {
         let task = Process(), pipe = Pipe()
@@ -31,10 +33,6 @@ public final class ClaudeRenewal {
         if task.isRunning { task.terminate(); return (-2, Data()) }
         _ = reading.wait(timeout: .now() + 2)
         return (task.terminationStatus, data)
-    }
-    public static func claudeIsRunning() -> Bool {
-        let (status, _) = process(URL(fileURLWithPath: "/usr/bin/pgrep"), ["-x", "claude"], URL(fileURLWithPath: "/"))
-        return status == 0
     }
     func executable() -> URL? {
         ["/opt/homebrew/bin/claude", "/usr/local/bin/claude", home.path + "/.local/bin/claude", home.path + "/.claude/local/claude"]
@@ -68,7 +66,8 @@ public final class ClaudeRenewal {
         let attempted = (values["last_attempt"] as? NSNumber)?.doubleValue ?? 0, succeeded = (values["last_ok"] as? NSNumber)?.doubleValue ?? 0
         var alone = (values["unattended"] as? NSNumber)?.intValue ?? 0
         if lastRealUse > succeeded { alone = 0 }
-        guard now() - attempted >= Self.minimumGap, alone < Self.unattendedLimit, !isRunning() else { return nil }
+        let gap = attempted > succeeded ? Self.retryGap : Self.minimumGap
+        guard now() - attempted >= gap, alone < Self.unattendedLimit else { return nil }
         values["last_attempt"] = now(); values["unattended"] = alone; save(values)
         guard let claude = executable() else { note("skipped: no claude command found"); return nil }
         try? FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -77,7 +76,7 @@ public final class ClaudeRenewal {
         let removed = leftovers()
         let reply = (try? JSONSerialization.jsonObject(with: result.output)) as? JSON
         guard result.status == 0, reply?["is_error"] as? Bool == false else {
-            note("renewal failed (exit \(result.status)); removed \(removed) leftover item(s); will not try again for 6 hours")
+            note("renewal failed (exit \(result.status)); removed \(removed) leftover item(s); trying again in 30 minutes")
             return nil
         }
         let usage = reply?["usage"] as? JSON ?? [:]
