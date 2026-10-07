@@ -438,6 +438,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.droppedCount = count; self.group.menuOpen = count > 0
         }
         let logo = window.convertToScreen(sender.convert(sender.bounds, to: nil))
+        drop.dark = darkMenuBar
         drop.show(entries, from: logo, screen: screen)
     }
     /// With the click log on, say which menu or submenu really appears and which entry it hangs from.

@@ -50,6 +50,8 @@ final class DropPresenter {
     private var tiles: [DropTile] = []
     private var starts: [CGPoint] = []
     var isShown: Bool { panel?.isVisible == true }
+    /// Whether the bar is dark, which the surface follows like the hover panels.
+    var dark = true
     var onPick: (String) -> Void = { _ in }
     var onContext: (String, NSView, NSEvent) -> Void = { _, _, _ in }
     var onHover: (String, NSView, Bool) -> Void = { _, _, _ in }
@@ -83,7 +85,9 @@ final class DropPresenter {
         let origin = NSPoint(x: logo.midX - width / 2, y: logo.midY + 11 - height)
         let content = DropContent(frame: NSRect(x: 0, y: 0, width: width, height: height))
         content.wantsLayer = true; content.dismiss = { [weak self] in self?.close() }
-        let glass = GlassSurface.make(frame: NSRect(x: 0, y: 0, width: width, height: glassHeight), radius: 16)
+        // The same surface as the hover panels: popover blur and a hairline rim, nothing darker.
+        let glass = NativeSurface(content: NSView(), radius: 16)
+        glass.frame = NSRect(x: 0, y: 0, width: width, height: glassHeight); glass.dark = dark
         content.addSubview(glass)
         func rowCentre(_ row: Int) -> CGPoint { CGPoint(x: width / 2, y: glassHeight - 8 - Self.rowHeight / 2 - CGFloat(row) * pitch) }
         let logoCentre = CGPoint(x: width / 2, y: height - Self.rowHeight / 2)
@@ -104,11 +108,12 @@ final class DropPresenter {
             glass.layer?.add(rise, forKey: "appear")
         }
         let window = panel ?? DropPanel(contentRect: content.bounds, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = true
+        window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
         window.level = .statusBar; window.hidesOnDeactivate = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         window.contentView = content
         window.title = "Usage HUD — Hidden batteries"
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         // The computed size, not content.bounds: assigning contentView already shrank it to a reused panel's old frame,
         // which cut a wider battery (a balance with cents) short on its right.
         window.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: false)
