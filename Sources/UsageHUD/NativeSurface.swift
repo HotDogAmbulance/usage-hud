@@ -1,59 +1,37 @@
 import Cocoa
 
 /// One surface for the group, hover details, identifiers and notices.
-/// The group is a flat tint of the menu-bar ink, like the system's own highlight on a menu-bar item; panels are a
-/// popover blur. Neither carries the glass rim, whose dark edge looked foreign next to the system's.
+/// Panels are a popover blur with a hairline rim.
 final class NativeSurface: NSView {
     let materialView: NSView
     let content: NSView
     /// True for the group's tint-only background, whose fill follows `dark`.
-    let usesFlatTint: Bool
     var dark = true { didSet { if dark != oldValue { needsDisplay = true; materialView.needsDisplay = true; rim.needsDisplay = true } } }
     private let rim = RimView()
-    init(content: NSView, radius: CGFloat = 12, flat: Bool = false) {
+    init(content: NSView, radius: CGFloat = 12) {
         self.content = content
-        usesFlatTint = flat
-        if flat {
-            materialView = FlatTintView(radius: radius)
-        } else {
-            let blur = NSVisualEffectView(frame: content.bounds)
-            blur.material = .popover; blur.state = .active; blur.blendingMode = .behindWindow
-            blur.wantsLayer = true; blur.layer?.cornerRadius = radius; blur.layer?.masksToBounds = true
-            blur.addSubview(content)
-            materialView = blur
-        }
+        let blur = NSVisualEffectView(frame: content.bounds)
+        blur.material = .popover; blur.state = .active; blur.blendingMode = .behindWindow
+        blur.wantsLayer = true; blur.layer?.cornerRadius = radius; blur.layer?.masksToBounds = true
+        blur.addSubview(content)
+        materialView = blur
         super.init(frame: content.bounds)
         materialView.autoresizingMask = [.width, .height]
         content.autoresizingMask = [.width, .height]
         addSubview(materialView)
-        if flat { addSubview(content) }
-        rim.radius = radius; rim.isHidden = flat
+        rim.radius = radius
         addSubview(rim)
     }
     required init?(coder: NSCoder) { nil }
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        if !usesFlatTint { dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+        dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
     override func layout() {
         super.layout(); materialView.frame = bounds; content.frame = bounds; rim.frame = bounds
     }
     override func draw(_ dirtyRect: NSRect) {
-        (materialView as? FlatTintView)?.dark = dark
         rim.dark = dark
-    }
-}
-
-/// The group's fill: the bar's ink at low strength, measured to match the system's pill (light grey on light bars, lifted grey on dark).
-final class FlatTintView: NSView {
-    let radius: CGFloat
-    var dark = true { didSet { if dark != oldValue { needsDisplay = true } } }
-    init(radius: CGFloat) { self.radius = radius; super.init(frame: .zero) }
-    required init?(coder: NSCoder) { nil }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func draw(_ dirtyRect: NSRect) {
-        (dark ? NSColor(white: 1, alpha: 0.18) : NSColor(white: 0, alpha: 0.12)).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
     }
 }
 
@@ -100,18 +78,5 @@ final class HoverSurface {
                        : max(visible.minY, min(anchor.minY - 6 - contentSize.height, visible.maxY - contentSize.height))
         hover.setFrame(NSRect(x: x, y: y, width: contentSize.width, height: contentSize.height), display: false)
         panel = hover; hover.orderFrontRegardless()
-    }
-}
-
-/// What a click opens: the look of the system's own menus (their material, a fine light edge and a shadow), as opposed to the
-/// hover panels' popover blur. Menus themselves are the system's, so this is for the surface drawn by hand next to them.
-enum MenuSurface {
-    static func make(frame: NSRect, radius: CGFloat = 12) -> NSView {
-        let blur = NSVisualEffectView(frame: frame)
-        blur.material = .menu; blur.state = .active; blur.blendingMode = .behindWindow
-        blur.wantsLayer = true; blur.layer?.cornerRadius = radius; blur.layer?.masksToBounds = true
-        blur.layer?.borderWidth = 0.5; blur.layer?.borderColor = NSColor(white: 1, alpha: 0.22).cgColor
-        blur.autoresizingMask = [.width, .height]
-        return blur
     }
 }

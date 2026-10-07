@@ -87,58 +87,23 @@ enum MenuBarInk {
 
 final class GroupView: NSView {
     var appearanceChanged: () -> Void = {}
-    var hover: (Bool) -> Void = { _ in }
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); appearanceChanged() }
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-    }
-    override func mouseEntered(with event: NSEvent) { hover(true) }
-    override func mouseExited(with event: NSEvent) { hover(false) }
 }
 
 final class StatusGroup {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let content = GroupView(frame: NSRect(x: 0, y: 0, width: 100, height: 22))
-    let surface: NativeSurface
     private(set) var order: [String] = []
-    var dark = false { didSet { surface.dark = dark } }
-    /// The rounded edge belongs to hover and press only, like the system's own highlight; at rest the batteries sit on the bar.
-    private(set) var pointerInside = false
-    private var emphasised = false
-    /// The pill is the system's own highlight, for hover as well as for a press or an open menu: one drawing, so ours can never
-    /// overlap it or hand over to it. (Ours is kept, hidden, only as the fallback below.)
-    var menuOpen = false { didSet { refreshEmphasis() } }
-    private(set) var pressed = false
-    func press(_ down: Bool) { pressed = down; refreshEmphasis() }
-    func refreshEmphasis(instant: Bool = false) { setEmphasis(pointerInside || menuOpen || pressed, instant: instant) }
+    var dark = false
     init() {
-        surface = NativeSurface(content: NSView(), radius: StatusGroup.highlightHeight / 2, flat: true)
         item.autosaveName = "Usage HUD group"
         item.button?.title = ""; item.button?.image = nil
-        surface.alphaValue = 0
-        item.button?.addSubview(surface)
         item.button?.addSubview(content)
         item.button?.setAccessibilityElement(false)
         content.setAccessibilityElement(false)
-        // Enter and leave are reported again whenever a battery is redrawn; the pill follows where the pointer is a moment later.
-        content.hover = { [weak self] _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                guard let self = self, let window = self.content.window else { return }
-                let inside = window.frame.contains(NSEvent.mouseLocation)
-                if inside != self.pointerInside { self.pointerInside = inside; self.refreshEmphasis() }
-            }
-        }
     }
-    func setEmphasis(_ on: Bool, instant: Bool = false) {
-        if on == emphasised { return }
-        emphasised = on
-        item.button?.highlight(on)
-    }
-    /// Space inside the rounded edge, and between neighbouring batteries (each side of a battery gets half of `gap`).
+    /// Space at each end of the group, and between neighbouring batteries (each side of a battery gets half of `gap`).
     static let pad: CGFloat = 15, gap: CGFloat = 6
-    static let hug: CGFloat = 6, highlightHeight: CGFloat = 20
     /// The button under a point on the screen, by horizontal position alone so a slightly different bar height cannot change
     /// the answer. The default is the pointer now: a status item's click event carries one fixed point whatever was pressed.
     func cellButton(atScreen point: NSPoint = NSEvent.mouseLocation) -> StatusCellButton? {
@@ -153,12 +118,6 @@ final class StatusGroup {
         let height = max(22, button.bounds.height)
         // Half a point above centre: that is where the system's own battery sits, measured on a real bar.
         content.frame = NSRect(x: 1, y: (button.bounds.height - height) / 2 + 0.5, width: width - 2, height: height)
-        // The pill follows the system's own highlight, measured on macOS 27 from a screenshot of each on the same bar: it hugs the
-        // batteries (about 9 pt beyond the first battery's edge and the last one's nub) and is 20 pt tall on the batteries' centre.
-        // Measured against the item's edges it is not a fixed inset, because the item is wider than what it holds.
-        surface.frame = NSRect(x: content.frame.minX + Self.pad - Self.hug, y: content.frame.midY - Self.highlightHeight / 2,
-                               width: width - 2 * Self.pad + 2 * Self.hug, height: Self.highlightHeight)
-        surface.layoutSubtreeIfNeeded()
         var x = Self.pad
         let retained = Set(cells.compactMap { $0.button.map(ObjectIdentifier.init) })
         for view in content.subviews where !retained.contains(ObjectIdentifier(view)) { view.removeFromSuperview() }
