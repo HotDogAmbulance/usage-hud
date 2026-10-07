@@ -1,0 +1,13 @@
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  core:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the app
+        run: swift build --product usagehud
+      - name: Core checks (readers, situations matrix, recorded answers)
+        run: swift run usagehud-tests
