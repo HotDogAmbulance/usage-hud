@@ -847,7 +847,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
         menu.delegate = self
         logoMenu = menu
-        if drop.isShown { hidden.isEmpty ? drop.close() : showDrop() }
+        // Readings come in every 30 s; an open drop keeps still and only redraws, unless what is hidden changed.
+        if drop.isShown { if hidden.isEmpty { drop.close() } else if !drop.refresh(dropEntries()) { showDrop() } }
         updateContrast()
     }
     /// Chosen from a hidden battery's menu: it takes a place in the bar, as a battery picked from the old drop did.

@@ -3,7 +3,7 @@ import Cocoa
 /// One hidden battery, lowered out of the stacked-batteries logo. Click keeps it in the bar (or lets it go); right-click opens its menu.
 final class DropTile: NSView {
     struct Entry { let id: String, name: String, reading: String, image: NSImage, state: String }
-    let entry: Entry
+    var entry: Entry { didSet { needsDisplay = true; toolTip = entry.name + " · " + entry.reading } }
     var picked: (String) -> Void = { _ in }
     var contextual: (String, NSView, NSEvent) -> Void = { _, _, _ in }
     var hover: (String, NSView, Bool) -> Void = { _, _, _ in }
@@ -65,6 +65,14 @@ final class DropPresenter {
     static let rowHeight: CGFloat = 22, gap: CGFloat = 6
     static var calm: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
+    /// New readings for the same hidden batteries: the tiles are redrawn where they are. Says false when the set or a tile's
+    /// size changed, which needs a fresh opening.
+    func refresh(_ entries: [DropTile.Entry]) -> Bool {
+        guard isShown, entries.map(\.id) == tiles.map(\.entry.id),
+              zip(entries, tiles).allSatisfy({ $0.image.size == $1.entry.image.size }) else { return false }
+        for (entry, tile) in zip(entries, tiles) { tile.entry = entry }
+        return true
+    }
     func close() {
         monitors.forEach(NSEvent.removeMonitor); monitors = []
         guard let panel = panel, panel.isVisible, !closing else { return }
