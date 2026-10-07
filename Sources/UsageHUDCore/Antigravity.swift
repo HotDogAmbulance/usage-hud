@@ -24,7 +24,9 @@ final class AntigravityProvider: UsageProvider {
         return result
     }
     func refresh() throws {
-        let response = try read(), windows = try Self.windows(response)
+        let response = try read(), windows: JSON
+        // An app that is installed but was never signed in answers without quota; that only asks for attention once it has worked.
+        do { windows = try Self.windows(response) } catch let problem as HUDProblem { throw HUDProblem(problem.message, attention: shown()) }
         let previous = cache.read("antigravity.json"), before = dict(previous["rate_limits"]), now = Date().timeIntervalSince1970
         // A model whose used share rose since the last reading is the one being worked in; remember when.
         var active = dict(previous["active"])

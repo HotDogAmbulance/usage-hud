@@ -119,7 +119,13 @@ let cases: [(String, () throws -> Void)] = [
     ("testGoneEvidenceUsesProviderCacheAndExpiresOnFreshRead", test.testGoneEvidenceUsesProviderCacheAndExpiresOnFreshRead),
     ("testSourceReceiptsPreservePartialWindowProvenance", test.testSourceReceiptsPreservePartialWindowProvenance),
     ("testAntigravityPaletteFollowsUsageAndModelRemoval", test.testAntigravityPaletteFollowsUsageAndModelRemoval),
-    ("testQuotaPalettesKeepUnknownAndLegacyRowsNeutral", test.testQuotaPalettesKeepUnknownAndLegacyRowsNeutral)
+    ("testQuotaPalettesKeepUnknownAndLegacyRowsNeutral", test.testQuotaPalettesKeepUnknownAndLegacyRowsNeutral),
+    ("testSituationMatrix", test.testSituationMatrix),
+    ("testNeverWorkedStaysHiddenUnlessTheKeyNeedsYou", test.testNeverWorkedStaysHiddenUnlessTheKeyNeedsYou),
+    ("testVanishedWindowsExpireWithTheirReset", test.testVanishedWindowsExpireWithTheirReset),
+    ("testARevokedKeyThatWorkedIsAnnouncedOnceThenGoes", test.testARevokedKeyThatWorkedIsAnnouncedOnceThenGoes),
+    ("testEmptyBalancesAndFullQuotasAreShownNotHidden", test.testEmptyBalancesAndFullQuotasAreShownNotHidden),
+    ("testAnEarlyResetReadsFreshNotStale", test.testAnEarlyResetReadsFreshNotStale)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }

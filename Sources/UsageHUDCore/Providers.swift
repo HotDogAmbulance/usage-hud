@@ -364,8 +364,13 @@ final class OpenRouterProvider: UsageProvider {
                    let keys = try? teamKeys(found) { team = found; listed = keys; management = true; winner = nil; break }
                 if winner != nil { break }
             }
-            // A revoked key left in an old script is not yours to fix; it simply isn't shown.
-            if management || winner == nil && rejected && slot.sources.allSatisfy({ $0["found"] != nil }) { continue }
+            if management { continue }
+            if winner == nil && rejected && slot.sources.allSatisfy({ $0["found"] != nil }) {
+                // A revoked key left in an old script is not yours to fix; it simply isn't shown. One that was working is announced
+                // once ("refused"), the way a deleted key is, and then goes.
+                if old.isEmpty || dismissed.contains(slot.id) { continue }
+                if old["state"] as? String == "invalid" { dismissed.insert(slot.id); continue }
+            }
             // A key already shown under another name (the same one in a keychain slot and a script) shows once.
             if let (_, result) = winner, let hint = result["key_label"] as? String, !seenKeys.insert(hint).inserted { continue }
             if winner != nil { dismissed.remove(slot.id) }
