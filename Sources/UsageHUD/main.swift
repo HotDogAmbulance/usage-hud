@@ -628,7 +628,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let measuredWidth = (text as NSString).size(withAttributes: [.font: baseFont]).width
         // A balance stretches the body to fit its digits: whole amounts keep the standard size, cents widen it.
         let bodyWidth: CGFloat = money != nil ? max(23, (measuredWidth + 6).rounded(.up)) : 23
-        let bodyHeight: CGFloat = money != nil ? 13 : 12
+        let bodyHeight: CGFloat = 12
         let bodyY = 10.5 - bodyHeight / 2
         let image = NSImage(size: NSSize(width: bodyWidth + 5, height: 22))
         image.lockFocus()
