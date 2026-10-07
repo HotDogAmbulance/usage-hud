@@ -114,7 +114,9 @@ final class DropPresenter {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         window.contentView = content
         window.title = "Usage HUD — Hidden batteries"
-        window.setFrame(NSRect(origin: origin, size: content.bounds.size), display: false)
+        // The computed size, not content.bounds: assigning contentView already shrank it to a reused panel's old frame,
+        // which cut a wider battery (a balance with cents) short on its right.
+        window.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: false)
         panel = window
         changed(count)           // the bar's logo now shows only what stays: the rear battery for one, nothing for two or more
         window.orderFrontRegardless()
