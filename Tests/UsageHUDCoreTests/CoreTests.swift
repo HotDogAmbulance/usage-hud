@@ -941,7 +941,8 @@ final class CoreTests {
         var changes = SourceChanges()
         func panel() -> Panel { var panel = provider.panel(); panel.readingSource = .providerAPI; panel.sourceReadAt = Date().timeIntervalSince1970; return panel }
         try provider.refresh()
-        expectEqual(panel().keys ?? [:], ["Ox1": "ok", "Ox3": "ok"])
+        expectEqual(panel().keys ?? [:], ["guy1": "ok", "guy3": "ok"])
+        expectEqual(panel().keyNames ?? [:], ["guy1": "Ox1", "guy3": "Ox3"])
         _ = changes.update(panels: [panel()], announce: false)
         // The Keychain item is deleted: a notice, and the row says so.
         credentials.deleted = ["svc"]
@@ -965,6 +966,29 @@ final class CoreTests {
         expectEqual(KeyFinder.zen(in: [boot]), ["Ox9"])
         try "OPENROUTER_API_KEY=\(key) run opencode/x-free".write(to: boot, atomically: true, encoding: .utf8)
         expectEqual(KeyFinder.zen(in: [boot]), [])
+    }
+    /// A boot renamed or moved after it was dropped is found again, and its new name shows; a renamed slot announces nothing.
+    func testRenamedBootsAreFollowedAndRenamesStayQuiet() throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let key = "sk-or-v1-" + String(repeating: "c3", count: 32)
+        let old = root.appendingPathComponent("ox4.sh"), new = root.appendingPathComponent("renamed-ox4.sh")
+        try "OPENROUTER_API_KEY=\(key) run".write(to: old, atomically: true, encoding: .utf8)
+        KeySources.add([old], home: root)
+        try FileManager.default.moveItem(at: old, to: new)
+        let chosen = KeyFinder.chosen(home: root)
+        expectEqual(chosen.map { $0.lastPathComponent }, ["renamed-ox4.sh"])
+        expectEqual(KeyFinder.find(in: chosen, chosen: chosen, environment: [:]).map { $0.label }, ["Renamed-ox4"])
+        expectEqual(KeySources.list(home: root).map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }, [new.resolvingSymlinksInPath().path])
+        // A slot given a new label keeps its id, so the key is the same one and no notice is made.
+        var changes = SourceChanges()
+        func panel(_ label: String) -> Panel {
+            var panel = Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$9 left")])
+            panel.keys = ["guy1": "ok"]; panel.keyNames = ["guy1": label]
+            panel.readingSource = .providerAPI; panel.sourceReadAt = Date().timeIntervalSince1970
+            return panel
+        }
+        _ = changes.update(panels: [panel("Ox1")], announce: false)
+        expectNil(changes.update(panels: [panel("Renamed")]))
     }
     /// A Keychain password prompt may follow a click on Refresh, never a background timer.
     func testKeychainPromptNeverReturnsOnItsOwn() throws {

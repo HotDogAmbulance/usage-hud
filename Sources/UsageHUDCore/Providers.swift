@@ -239,7 +239,7 @@ final class OpenRouterProvider: UsageProvider {
         if now - found.at > 3600 || edited > found.at {
             let chosen = KeyFinder.chosen(home: home)
             found = (now, KeyFinder.find(in: KeyFinder.places(home: home), chosen: chosen, environment: environment).map {
-                RouterSlot(id: "found-" + $0.label, label: $0.label, sources: [["provider": "openrouter", "found": $0.key]])
+                RouterSlot(id: "found-" + KeyFinder.fingerprint($0.key), label: $0.label, sources: [["provider": "openrouter", "found": $0.key]])
             } + KeyFinder.zen(in: chosen).map { RouterSlot(id: "zen-" + $0, label: $0, sources: [["provider": "zen"]]) })
         }
         return found.slots
@@ -434,12 +434,13 @@ final class OpenRouterProvider: UsageProvider {
         var panel = Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Add an OpenRouter key; see PROVIDERS.md" : "", alert: alert,
                           cells: (mine + team).map { $0.cell }, cellsTitle: title)
         // The balance is the number; how full the body is says how close your tightest capped key is to its cap.
-        var states: [String: String] = [:]
+        var states: [String: String] = [:], names: [String: String] = [:]
         for row in blob["rows"] as? [JSON] ?? [] {
             guard let label = row["label"] as? String else { continue }
-            states[label] = row["state"] as? String ?? (row["error"] is String ? "unreachable" : "ok")
+            let id = row["slot_id"] as? String ?? label
+            states[id] = row["state"] as? String ?? (row["error"] is String ? "unreachable" : "ok"); names[id] = label
         }
-        panel.keys = states
+        panel.keys = states; panel.keyNames = names
         panel.gauge = mine.filter { $0.cell.pct != nil }.map { $0.left }.min()
         return panel
     }

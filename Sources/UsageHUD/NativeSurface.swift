@@ -102,3 +102,16 @@ final class HoverSurface {
         panel = hover; hover.orderFrontRegardless()
     }
 }
+
+/// What a click opens: the look of the system's own menus (their material, a fine light edge and a shadow), as opposed to the
+/// hover panels' popover blur. Menus themselves are the system's, so this is for the surface drawn by hand next to them.
+enum MenuSurface {
+    static func make(frame: NSRect, radius: CGFloat = 12) -> NSView {
+        let blur = NSVisualEffectView(frame: frame)
+        blur.material = .menu; blur.state = .active; blur.blendingMode = .behindWindow
+        blur.wantsLayer = true; blur.layer?.cornerRadius = radius; blur.layer?.masksToBounds = true
+        blur.layer?.borderWidth = 0.5; blur.layer?.borderColor = NSColor(white: 1, alpha: 0.22).cgColor
+        blur.autoresizingMask = [.width, .height]
+        return blur
+    }
+}

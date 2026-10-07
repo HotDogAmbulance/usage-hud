@@ -143,7 +143,7 @@ final class StatusGroup {
     }
     /// Space inside the rounded edge, and between neighbouring batteries (each side of a battery gets half of `gap`).
     static let pad: CGFloat = 15, gap: CGFloat = 6
-    static let highlightInset: CGFloat = 11, highlightHeight: CGFloat = 22
+    static let hug: CGFloat = 6, highlightHeight: CGFloat = 20
     /// The button under a point on the screen, by horizontal position alone so a slightly different bar height cannot change
     /// the answer. The default is the pointer now: a status item's click event carries one fixed point whatever was pressed.
     func cellButton(atScreen point: NSPoint = NSEvent.mouseLocation) -> StatusCellButton? {
@@ -158,10 +158,11 @@ final class StatusGroup {
         let height = max(22, button.bounds.height)
         // Half a point above centre: that is where the system's own battery sits, measured on a real bar.
         content.frame = NSRect(x: 1, y: (button.bounds.height - height) / 2 + 0.5, width: width - 2, height: height)
-        // The pill is the system's own highlight in size: measured on macOS 27 beside ours, it is 22 pt tall, centred on the bar,
-        // and 11 pt in from each side of the item. (Ours was 24 pt and reached the item's edges, so the two overlapped.)
-        surface.frame = NSRect(x: Self.highlightInset, y: (button.bounds.height - Self.highlightHeight) / 2,
-                               width: width - 2 * Self.highlightInset, height: Self.highlightHeight)
+        // The pill follows the system's own highlight, measured on macOS 27 from a screenshot of each on the same bar: it hugs the
+        // batteries (about 9 pt beyond the first battery's edge and the last one's nub) and is 20 pt tall on the batteries' centre.
+        // Measured against the item's edges it is not a fixed inset, because the item is wider than what it holds.
+        surface.frame = NSRect(x: content.frame.minX + Self.pad - Self.hug, y: content.frame.midY - Self.highlightHeight / 2,
+                               width: width - 2 * Self.pad + 2 * Self.hug, height: Self.highlightHeight)
         surface.layoutSubtreeIfNeeded()
         var x = Self.pad
         let retained = Set(cells.compactMap { $0.button.map(ObjectIdentifier.init) })

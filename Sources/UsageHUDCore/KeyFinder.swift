@@ -16,10 +16,13 @@ enum KeyFinder {
     static func chosen(home: URL) -> [URL] {
         guard let data = try? Data(contentsOf: home.appendingPathComponent(".usage-hud/key-sources.json")),
               let paths = (try? JSONSerialization.jsonObject(with: data)) as? [String] else { return [] }
+        KeySources.ensureMarks(home: home)
         let kinds: Set<String> = ["sh", "zsh", "bash", "env", "json", "jsonc", "yaml", "yml", "toml", "conf", "txt", "fish", ""]
         var found: [URL] = []
         for path in paths {
-            let root = URL(fileURLWithPath: path)
+            var root = URL(fileURLWithPath: path)
+            // Renamed or moved since it was chosen: the bookmark macOS made then finds it, with no search.
+            if !FileManager.default.fileExists(atPath: root.path), let moved = KeySources.resolve(path, home: home) { root = moved }
             var isFolder: ObjCBool = false
             guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isFolder) else { continue }
             guard isFolder.boolValue else { found.append(root); continue }
@@ -43,6 +46,12 @@ enum KeyFinder {
         let stem = file.deletingPathExtension().lastPathComponent
         let name = ["auth", "config", "settings"].contains(stem) ? file.deletingLastPathComponent().lastPathComponent : stem
         return name.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+    }
+    /// A stable id for a found key that does not change when the name does, and says nothing about the key (a short hash).
+    static func fingerprint(_ key: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in key.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+        return String(hash, radix: 16)
     }
     /// A dropped boot is named after its file: "ox3.sh" is "Ox3".
     static func boot(_ file: URL) -> String {

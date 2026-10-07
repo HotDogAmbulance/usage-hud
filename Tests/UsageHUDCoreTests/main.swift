@@ -73,6 +73,7 @@ let cases: [(String, () throws -> Void)] = [
     ("testGrokCreditsFromTheCLISignIn", test.testGrokCreditsFromTheCLISignIn),
     ("testGrokBotUsageFromItsSavedReading", test.testGrokBotUsageFromItsSavedReading),
     ("testKeysAreNamedAfterTheirBootAndChangesAreAnnounced", test.testKeysAreNamedAfterTheirBootAndChangesAreAnnounced),
+    ("testRenamedBootsAreFollowedAndRenamesStayQuiet", test.testRenamedBootsAreFollowedAndRenamesStayQuiet),
     ("testKimiCodeWindowsAndPlan", test.testKimiCodeWindowsAndPlan),
     ("testKimiCodeFindsKimiCLIKey", test.testKimiCodeFindsKimiCLIKey),
     ("testXAIBillingFromAManagementKey", test.testXAIBillingFromAManagementKey),

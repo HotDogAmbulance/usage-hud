@@ -41,6 +41,7 @@ public struct SourceChanges {
     private var known: [String: String] = [:]
     /// The last settled state of every key under each battery. "unreachable" is a hiccup and never replaces it.
     private var keyStates: [String: [String: String]] = [:]
+    private var lastNames: [String: [String: String]] = [:]
     public init() {}
     public mutating func update(panels: [Panel], gone: Set<String> = [], announce: Bool = true,
                                 now: Double = Date().timeIntervalSince1970) -> SourceNotice? {
@@ -93,14 +94,17 @@ public struct SourceChanges {
         for (label, state) in keys where state != "unreachable" { settled[label] = state }
         for label in settled.keys where keys[label] == nil { settled[label] = nil }
         keyStates[panel.id] = settled
+        lastNames[panel.id] = panel.keyNames ?? [:]
     }
     private func keyChanges(_ panel: Panel) -> [(title: String, line: String)] {
         guard let keys = panel.keys else { return [] }
-        let before = keyStates[panel.id] ?? [:]
+        let before = keyStates[panel.id] ?? [:], names = panel.keyNames ?? [:]
+        func name(_ id: String) -> String { names[id] ?? id }
         var events: [(title: String, line: String)] = []
-        for (label, state) in keys.sorted(by: { $0.key < $1.key }) where state != "unreachable" && before[label] != state {
+        for (id, state) in keys.sorted(by: { name($0.key) < name($1.key) }) where state != "unreachable" && before[id] != state {
+            let label = name(id)
             switch state {
-            case "ok": events.append(("Tracking " + label, label + " · added to " + panel.name + (before[label] == nil ? "" : " again")))
+            case "ok": events.append(("Tracking " + label, label + " · added to " + panel.name + (before[id] == nil ? "" : " again")))
             case "removed": events.append(("Stopped tracking " + label, label + " · its key is no longer in Keychain"))
             case "invalid": events.append((label + "’s key was refused", panel.name + " says the key is no longer valid"))
             case "zen": events.append((label + " uses free Zen models",
@@ -108,7 +112,9 @@ public struct SourceChanges {
             default: break
             }
         }
-        for label in before.keys.sorted() where keys[label] == nil && before[label] != "removed" { events.append(("Stopped tracking " + label, label + " · no longer in " + panel.name)) }
+        for id in before.keys.sorted() where keys[id] == nil && before[id] != "removed" {
+            events.append(("Stopped tracking " + (lastNames[panel.id]?[id] ?? id), (lastNames[panel.id]?[id] ?? id) + " · no longer in " + panel.name))
+        }
         return events
     }
 }

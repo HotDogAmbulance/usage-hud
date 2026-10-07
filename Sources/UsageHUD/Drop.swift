@@ -85,9 +85,8 @@ final class DropPresenter {
         let origin = NSPoint(x: logo.midX - width / 2, y: logo.midY + 11 - height)
         let content = DropContent(frame: NSRect(x: 0, y: 0, width: width, height: height))
         content.wantsLayer = true; content.dismiss = { [weak self] in self?.close() }
-        // The same surface as the hover panels: popover blur and a hairline rim, nothing darker.
-        let glass = NativeSurface(content: NSView(), radius: 16)
-        glass.frame = NSRect(x: 0, y: 0, width: width, height: glassHeight); glass.dark = dark
+        // A click's surface, like the system menus next to it; the hover panels have their own.
+        let glass = MenuSurface.make(frame: NSRect(x: 0, y: 0, width: width, height: glassHeight))
         content.addSubview(glass)
         func rowCentre(_ row: Int) -> CGPoint { CGPoint(x: width / 2, y: glassHeight - 8 - Self.rowHeight / 2 - CGFloat(row) * pitch) }
         let logoCentre = CGPoint(x: width / 2, y: height - Self.rowHeight / 2)
@@ -108,7 +107,7 @@ final class DropPresenter {
             glass.layer?.add(rise, forKey: "appear")
         }
         let window = panel ?? DropPanel(contentRect: content.bounds, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
+        window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = true
         window.level = .statusBar; window.hidesOnDeactivate = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         window.contentView = content
