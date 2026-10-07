@@ -122,6 +122,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var hovered: String?
     /// Batteries past `visibleLimit` move into this item; hovering it opens their menu.
     var overflow: StatusCell?
+    let logoPopover = NSPopover()
     /// Hidden batteries lowered out of the logo right now; the logo draws only what is left of itself.
     var arrangedIDs: [String] = []
     var shelf = Shelf(levels: UserDefaults.standard.dictionary(forKey: "shelfLevels") as? [String: Double] ?? [:],
@@ -414,6 +415,11 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func openCell(_ sender: StatusCellButton) {
         closeHover()
+        // A left click on the logo opens the system's popover; the right click keeps the plain menu.
+        if (sender.sourceID == "overflow" || sender.sourceID == "usage-hud"), NSApp.currentEvent?.type != .rightMouseDown {
+            if logoPopover.isShown { logoPopover.close() } else { showLogoPopover(from: sender, hidden: sender.sourceID == "overflow") }
+            return
+        }
         let cell = sender.sourceID == "overflow" ? overflow : sender.sourceID == "usage-hud" ? brandCell : items[sender.sourceID]
         guard let menu = cell?.menu else { ClickLog.write("open \(sender.sourceID) no menu"); return }
         ClickLog.write("open \(sender.sourceID) menu=\(menu.items.first?.title ?? "-") items=\(menu.items.count)")
@@ -766,7 +772,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let entry = menu.addItem(withTitle: panel.name + (balance.map { "  " + $0 } ?? ""), action: nil, keyEquivalent: "")
             let detail = providerMenu(panel)
             if !hidden.isEmpty {
-                let keep = NSMenuItem(title: "Keep in the menu bar", action: #selector(keepInBar(_:)), keyEquivalent: "")
+                let keep = NSMenuItem(title: "Keep in the menu bar", action: #selector(keepInBarItem(_:)), keyEquivalent: "")
                 keep.target = self; keep.representedObject = id
                 detail.insertItem(keep, at: 0); detail.insertItem(NSMenuItem.separator(), at: 1)
             }
@@ -781,8 +787,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateContrast()
     }
     /// Chosen from a hidden battery's menu: it takes a place in the bar, as a battery picked from the old drop did.
-    @objc func keepInBar(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
+    @objc func keepInBarItem(_ sender: NSMenuItem) { if let id = sender.representedObject as? String { keepInBar(id) } }
+    func keepInBar(_ id: String) {
         shelf.pin(id)
         UserDefaults.standard.set(shelf.pins, forKey: "shelfPins"); UserDefaults.standard.set(shelf.pinnedAt, forKey: "shelfPinnedAt")
         arrange(arrangedIDs)
