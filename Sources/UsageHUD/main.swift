@@ -103,27 +103,25 @@ final class CellsView: NSView {
 
 class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var items: [String: StatusCell] = [:]
-    lazy var group: StatusGroup = {
-        let group = StatusGroup()
-        group.item.button?.target = self; group.item.button?.action = #selector(groupClicked(_:))
-        group.item.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
-        (group.item.button?.cell as? NSButtonCell)?.highlightsBy = []
-        group.content.appearanceChanged = { [weak self] in DispatchQueue.main.async { self?.updateContrast() } }
-        return group
-    }()
-    let brandCell = StatusCell(id: "usage-hud", length: SystemBattery.stackedWidth + StatusGroup.gap)
+    /// The stacked-batteries logo, left of the batteries: made after the first batteries, since the system puts a new item
+    /// to the left of the ones already there. A click lowers the hidden batteries out of it; with none hidden, or on a right
+    /// click, it opens its menu (the hidden batteries, Add source…, Quit).
+    var logo: StatusCell?
+    var logoMenu: NSMenu?
+    /// Batteries past `visibleLimit`, most used first; they come out of the logo.
+    var hiddenIDs: [String] = []
+    let drop = DropPresenter()
+    /// While hidden batteries are lowered out of the logo, hovering one anchors its panel to that tile.
+    var droppedAnchors: [String: NSView] = [:]
+    /// Whether the bar's ink is light (a dark bar); it follows the wallpaper, so it can differ from the system appearance.
+    var barDark = false
     var contrastTimer: Timer?
-    var openMenu: NSMenu?
     /// Any menu being tracked: a hover panel must not open under it, and one already open goes away.
     var menuTracking = false
     var hoverMonitor: Any?
     var panels: [String: Panel] = [:]
     var trackers: [String: HoverTracker] = [:]
     var hovered: String?
-    /// Batteries past `visibleLimit` move into this item; hovering it opens their menu.
-    var overflow: StatusCell?
-    let logoPopover = NSPopover()
-    /// Hidden batteries lowered out of the logo right now; the logo draws only what is left of itself.
     var arrangedIDs: [String] = []
     var shelf = Shelf(levels: UserDefaults.standard.dictionary(forKey: "shelfLevels") as? [String: Double] ?? [:],
                       lastUsed: UserDefaults.standard.dictionary(forKey: "shelfLastUsed") as? [String: Double] ?? [:],
@@ -289,9 +287,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     func rememberSourceNoticeAnchor() {
-        // The overflow belongs to this app too; never anchor a notice to another app’s menu item.
-        let button = overflow?.isVisible == true ? overflow?.button :
-            items.sorted(by: { $0.key < $1.key }).first(where: { $0.value.isVisible })?.value.button
+        // The logo belongs to this app too; never anchor a notice to another app’s menu item.
+        let button = logo?.button ?? items.sorted(by: { $0.key < $1.key }).first(where: { $0.value.isVisible })?.value.button
         guard let button = button, let window = button.window, let screen = window.screen else { return }
         let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
         lastNoticeAnchor = (anchor, screen)
@@ -324,7 +321,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
         case "kimi": return NSColor(srgbRed: 0.0667, green: 0.3804, blue: 0.7451, alpha: 1)
         case "kimi-code": return NSColor(srgbRed: 0.0784, green: 0.4902, blue: 0.9529, alpha: 1)
-        case "openrouter": return NSColor(srgbRed: 200.0 / 255, green: 254.0 / 255, blue: 1.0 / 255, alpha: 1)
+        case "openrouter": return NSColor(srgbRed: 211.0 / 255, green: 253.0 / 255, blue: 81.0 / 255, alpha: 1)
         // The same yellow and red everywhere: a balance getting low, every Antigravity pool spent, the small bars in the hover panel.
         case "caution": return HUD.yellow
         case "critical": return HUD.red
@@ -338,15 +335,15 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var forcedDarkBar: Bool?
     var darkMenuBar: Bool {
         if let forced = forcedDarkBar { return forced }
-        return group.dark
+        return barDark
     }
     /// Repaint only when AppKit's actual menu-bar ink changes, including a wallpaper change in the same mode.
     func updateContrast() {
-        guard forcedDarkBar == nil, let button = group.item.button, let dark = MenuBarInk.isDark(button), dark != group.dark else { return }
-        group.dark = dark
-        brandCell.button?.contentTintColor = dark ? .white : .black
-        overflow?.button?.contentTintColor = dark ? .white : .black
-        brandCell.button?.image = SystemBattery.stacked(dark: dark); overflow?.button?.image = logoImage()
+        guard forcedDarkBar == nil, let button = logo?.button ?? items.values.first(where: { $0.isVisible })?.button,
+              let dark = MenuBarInk.isDark(button), dark != barDark else { return }
+        barDark = dark
+        logo?.button?.contentTintColor = dark ? .white : .black
+        logo?.button?.image = logoImage()
         fades.removeAll()
         for panel in Array(panels.values) { render(panel) }
         if let id = hovered { showHover(id) }
@@ -356,10 +353,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let id = id { drawIcon(id) }
     }
     func configure(_ cell: StatusCell) {
-        cell.button?.target = self; cell.button?.action = #selector(openCell(_:))
         cell.button?.contentTintColor = darkMenuBar ? .white : .black
-        cell.button?.beforeClick = { [weak self] in self?.closeHover() }
-        cell.button?.onDrop = { [weak self] urls in self?.addSources(urls) }
+        cell.onDrop = { [weak self] urls in self?.addSources(urls) }
     }
     let renewal = ClaudeRenewal()
     var renewing = false
@@ -397,41 +392,54 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         if panel.runModal() == .OK { addSources(panel.urls) }
     }
-    /// What the logo shows: all of it, the rear battery alone while one is lowered, nothing while two or more are.
-    func logoImage() -> NSImage {
-        let dark = darkMenuBar
-        return SystemBattery.stacked(dark: dark)
-    }
+    func logoImage() -> NSImage { SystemBattery.stacked(dark: darkMenuBar) }
     /// With the click log on, say which menu or submenu really appears and which entry it hangs from.
     func menuWillOpen(_ menu: NSMenu) {
         let parent = menu.supermenu?.items.first { $0.submenu === menu }?.title ?? "-"
         ClickLog.write("menu opens first=\(menu.items.first?.title ?? "-") parent=\(parent)")
     }
-    /// A click the status item itself received instead of one of its cells goes to the cell under the pointer.
-    @objc func groupClicked(_ sender: NSStatusBarButton) {
-        let cell = group.cellButton()
-        ClickLog.write("status item click, pointer over \(cell?.sourceID ?? "none")")
-        cell?.beforeClick(); cell?.performClick(nil)
-    }
-    @objc func openCell(_ sender: StatusCellButton) {
+    /// A left click lowers the hidden batteries out of the logo (a second click puts them back); a right click, or a click with
+    /// nothing hidden, opens the logo's menu the way the system opens any item's menu.
+    @objc func logoClicked(_ sender: NSStatusBarButton) {
         closeHover()
-        // A left click on the logo opens the system's popover; the right click keeps the plain menu.
-        if (sender.sourceID == "overflow" || sender.sourceID == "usage-hud"), NSApp.currentEvent?.type != .rightMouseDown {
-            if logoPopover.isShown { logoPopover.close() } else { showLogoPopover(from: sender, hidden: sender.sourceID == "overflow") }
+        let right = NSApp.currentEvent?.type == .rightMouseDown || NSApp.currentEvent?.modifierFlags.contains(.control) == true
+        ClickLog.write("logo click right=\(right) hidden=\(hiddenIDs.count) dropped=\(drop.isShown)")
+        if drop.isShown { drop.close(); return }
+        if right || hiddenIDs.isEmpty {
+            guard let logo = logo, let menu = logoMenu else { return }
+            logo.menu = menu; sender.performClick(nil); logo.menu = nil
             return
         }
-        let cell = sender.sourceID == "overflow" ? overflow : sender.sourceID == "usage-hud" ? brandCell : items[sender.sourceID]
-        guard let menu = cell?.menu else { ClickLog.write("open \(sender.sourceID) no menu"); return }
-        ClickLog.write("open \(sender.sourceID) menu=\(menu.items.first?.title ?? "-") items=\(menu.items.count)")
-        openMenu = menu
-        // Placed in screen coordinates just under the cell: a point in the cell's own coordinates put the menu above the bar.
-        if let window = sender.window {
-            let rect = window.convertToScreen(sender.convert(sender.bounds, to: nil))
-            menu.popUp(positioning: nil, at: NSPoint(x: rect.minX, y: rect.minY - 9), in: nil)
-        } else {
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY - 3), in: sender)
+        showDrop()
+    }
+    /// The hidden batteries, most used first.
+    func dropEntries() -> [DropTile.Entry] {
+        hiddenIDs.compactMap { id in
+            guard let panel = panels[id] else { return nil }
+            let balance = panel.windows.first { $0.label == panel.name }?.right
+            let reading = balance ?? displayedQuota(panel)?.pct.map { "\(Int((100 - $0).rounded()))% left" } ?? "no reading"
+            return DropTile.Entry(id: id, name: panel.name, reading: reading, image: icon(panel), state: "")
         }
-        openMenu = nil
+    }
+    func showDrop() {
+        guard let button = logo?.button, let window = button.window, let screen = window.screen else { return }
+        let entries = dropEntries()
+        guard !entries.isEmpty else { return }
+        drop.onPick = { [weak self] id in self?.drop.close(); self?.keepInBar(id) }
+        drop.onContext = { [weak self] id, view, event in
+            guard let self = self, let panel = self.panels[id] else { return }
+            NSMenu.popUpContextMenu(self.providerMenu(panel), with: event, for: view)
+        }
+        drop.onHover = { [weak self] id, view, inside in
+            guard let self = self else { return }
+            if inside { self.closeHover(); self.droppedAnchors[id] = view; self.hovered = id; self.showHover(id) }
+            else if self.hovered == id { self.closeHover(); self.droppedAnchors[id] = nil }
+        }
+        // No highlight of our own on the logo while its batteries are out: macOS 27 draws its highlight only for an item whose
+        // own menu is open, and a drawn imitation is what flashed against it before.
+        drop.changed = { [weak self] count in if count == 0 { self?.droppedAnchors.removeAll() } }
+        drop.anchorWindow = window
+        drop.show(entries, from: window.convertToScreen(button.convert(button.bounds, to: nil)), screen: screen)
     }
     /// Fills `rect` with the provider tint, or the model-family palette carried by an Antigravity row.
     /// The 5h colour is always the one chosen for the provider, on any bar. `muted` is the 7d layer behind it: the same colour at
@@ -639,7 +647,6 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             trackers[panel.id] = tracker
         }
         drawIcon(panel.id)
-        item.length = (item.button?.image?.size.width ?? 28) + StatusGroup.gap
         let displayed = displayedQuota(panel)
         let mainBalance = panel.windows.first { $0.label == panel.name }
         let cached = displayed?.isCached == true || mainBalance?.isCached == true
@@ -649,7 +656,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let money = panel.windows.filter { $0.pct == nil && $0.right != nil && $0.label != panel.name }.map { "\n" + $0.label + ": " + ($0.right ?? "") + ($0.isCached ? " · cached" : "") }
         if panel.alert == nil { acknowledged[panel.id] = nil }
         // Providers with per-key cells get the hover panel instead of a tooltip.
-        item.button?.toolTip = !panel.cells.isEmpty ? nil : (panel.alert.map { "⚠︎ " + $0 + "\n" } ?? "") + (panel.fix.map { _ in "Click to sign in again\n" } ?? "") + panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
+        item.toolTip = !panel.cells.isEmpty ? nil : (panel.alert.map { "⚠︎ " + $0 + "\n" } ?? "") + (panel.fix.map { _ in "Click to sign in again\n" } ?? "") + panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
         item.button?.setAccessibilityLabel(panel.name + " usage")
         item.button?.setAccessibilityValue(panel.windows.map(\.accessibilityReading).joined(separator: "; "))
         item.button?.setAccessibilityHelp(([panel.alert, panel.note.isEmpty ? nil : panel.note,
@@ -750,23 +757,26 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         arrangedIDs = ids
         let arrangement = shelf.arrange(ids, limit: visibleLimit, urgent: Set(ids.filter { panels[$0]?.alert != nil }))
         let hidden = arrangement.hidden
+        hiddenIDs = shelf.ranked(ids).filter(hidden.contains)
         for (id, item) in items { item.isVisible = ids.contains(id) && !hidden.contains(id) }
-        let leading: StatusCell
-        if hidden.isEmpty {
-            overflow?.isVisible = false; leading = brandCell
-            brandCell.button?.setAccessibilityLabel("Usage HUD, all usage batteries")
-            brandCell.button?.toolTip = "Usage HUD · all providers"
-        } else {
-            let item = overflow ?? StatusCell(id: "overflow", length: SystemBattery.stackedWidth + StatusGroup.gap)
-            overflow = item; item.isVisible = true; leading = item
-            let names = hidden.compactMap { panels[$0]?.name }
-            item.button?.toolTip = "Usage HUD · +\(hidden.count) more: " + names.prefix(5).joined(separator: ", ") + (names.count > 5 ? "…" : "")
-            item.button?.setAccessibilityLabel("Usage HUD, \(hidden.count) more usage batteries")
+        let logo = self.logo ?? StatusCell(id: "usage-hud")
+        if self.logo == nil {
+            self.logo = logo
+            logo.button?.target = self; logo.button?.action = #selector(logoClicked(_:))
+            logo.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         }
-        configure(leading)
-        leading.button?.image = leading === overflow ? logoImage() : SystemBattery.stacked(dark: darkMenuBar)
+        configure(logo)
+        logo.button?.image = logoImage()
+        if hidden.isEmpty {
+            logo.button?.setAccessibilityLabel("Usage HUD, all usage batteries")
+            logo.toolTip = "Usage HUD · all providers"
+        } else {
+            let names = hiddenIDs.compactMap { panels[$0]?.name }
+            logo.toolTip = "Usage HUD · +\(hidden.count) more: " + names.prefix(5).joined(separator: ", ") + (names.count > 5 ? "…" : "")
+            logo.button?.setAccessibilityLabel("Usage HUD, \(hidden.count) more usage batteries")
+        }
         let menu = NSMenu()
-        for id in hidden.isEmpty ? ids : hidden {
+        for id in hidden.isEmpty ? ids : hiddenIDs {
             guard let panel = panels[id] else { continue }
             let balance = panel.windows.first { $0.label == panel.name }?.right
             let entry = menu.addItem(withTitle: panel.name + (balance.map { "  " + $0 } ?? ""), action: nil, keyEquivalent: "")
@@ -782,8 +792,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Add source…", action: #selector(addSourceFromMenu), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Quit Usage HUD", action: #selector(quit), keyEquivalent: "q").target = self
         menu.delegate = self
-        leading.menu = menu
-        group.install([leading] + arrangement.shown.compactMap { items[$0] })
+        logoMenu = menu
+        if drop.isShown { hidden.isEmpty ? drop.close() : showDrop() }
         updateContrast()
     }
     /// Chosen from a hidden battery's menu: it takes a place in the bar, as a battery picked from the old drop did.
@@ -810,10 +820,11 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
                          moreHint: inMenu ? (panel.id == "openrouter" ? "All keys below" : "All budgets below") : "click battery for all",
                          darkBar: inMenu ? nil : darkMenuBar, providerID: panel.id)
     }
-    func hoverButton(_ id: String) -> NSView? { items[id]?.button }
+    func hoverButton(_ id: String) -> NSView? { droppedAnchors[id] ?? items[id]?.button }
     func showHover(_ id: String) {
-        guard openMenu == nil, !menuTracking, hovered == id, let panel = panels[id] else { return }
-        let edge: NSRectEdge = .minY
+        guard !menuTracking, hovered == id, let panel = panels[id] else { return }
+        // A lowered battery has others under it, so its panel opens beside it.
+        let edge: NSRectEdge = droppedAnchors[id] != nil ? .maxX : .minY
         // Antigravity says which pool its battery is showing; it is two pools, so the table is for the click.
         if id == "antigravity", let button = hoverButton(id), button.window != nil {
             popover.close()
@@ -839,7 +850,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         popover.contentViewController = controller
         popover.contentSize = controller.view.frame.size
         popover.animates = false; popover.dark = darkMenuBar
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: droppedAnchors[id] != nil ? .maxX : .minY)
     }
     @objc func refreshProvider(_ sender: NSMenuItem) { load(sender.representedObject as? String) }
     /// The provider whose sign-in is waiting in the browser.
@@ -938,17 +949,17 @@ if CommandLine.arguments.contains("--self-test") {
         precondition(delegate.items[id]?.menu?.items.allSatisfy{!$0.title.contains("note")} == true)
         let battery = delegate.icon(panel)
         precondition(battery.size.height == 22 && (id == "openrouter" ? battery.size.width > 28 : battery.size.width == 28))
-        precondition(delegate.items[id]?.length == battery.size.width + StatusGroup.gap)
         battery.draw(in: NSRect(x: CGFloat(index*48), y: 11, width: battery.size.width, height: 22))
     }
     image.unlockFocus()
-    // Past the limit, the least recently used batteries move into one overflow item.
+    // Past the limit, the least recently used batteries go into the logo.
     for id in ["glm", "deepseek"] { delegate.render(Panel(id: id, name: id.uppercased(), windows: [Window(label: "5h", pct: 10)])) }
     delegate.shelf = Shelf()
     delegate.arrange(["codex", "claude", "openrouter", "glm", "deepseek"])
     precondition(delegate.items["glm"]?.isVisible == false && delegate.items["deepseek"]?.isVisible == false)
-    precondition(delegate.items["codex"]?.isVisible == true && delegate.overflow?.button?.image != nil && delegate.overflow?.button?.accessibilityLabel() == "Usage HUD, 2 more usage batteries")
-    precondition(delegate.overflow?.menu?.items.first?.submenu?.items.contains { $0.title.hasPrefix("Refresh GLM") } == true)
+    precondition(delegate.items["codex"]?.isVisible == true && delegate.logo?.button?.image != nil && delegate.logo?.button?.accessibilityLabel() == "Usage HUD, 2 more usage batteries")
+    precondition(delegate.hiddenIDs.count == 2 && delegate.dropEntries().map(\.id) == delegate.hiddenIDs)
+    precondition(delegate.logoMenu?.items.first?.submenu?.items.contains { $0.title.hasPrefix("Refresh GLM") } == true)
     // Choosing a hidden battery to keep puts it in the bar and sends another into the logo's menu.
     precondition(delegate.items["glm"]?.isVisible == false)
     delegate.shelf.pin("glm"); delegate.arrange(delegate.arrangedIDs)
@@ -956,17 +967,10 @@ if CommandLine.arguments.contains("--self-test") {
     delegate.shelf.pins = []; delegate.arrange(delegate.arrangedIDs)
     precondition(delegate.items["glm"]?.isVisible == false)
     delegate.arrange(["codex", "claude"])
-    precondition(delegate.overflow?.isVisible == false)
-    // All visible cells share one native surface, with separate accessible buttons and menus.
-    precondition(delegate.group.order == ["usage-hud", "codex", "claude"])
-    precondition(delegate.group.content.subviews.count == 3)
-    // Whatever point AppKit reports for a click, the cell the pointer is over takes it.
-    for cell in delegate.group.content.subviews.compactMap({ $0 as? StatusCellButton }) {
-        guard let window = cell.window else { continue }
-        let inWindow = delegate.group.content.convert(NSPoint(x: cell.frame.midX, y: cell.frame.midY), to: nil)
-        precondition(delegate.group.cellButton(atScreen: window.convertPoint(toScreen: inWindow))?.sourceID == cell.sourceID)
-    }
-    precondition(delegate.items["codex"]?.button?.acceptsFirstMouse(for: nil) == true)
+    precondition(delegate.hiddenIDs.isEmpty && delegate.logo?.isVisible == true)
+    // Each battery is its own status item with its own menu, so the system handles its press, highlight and menu.
+    precondition(delegate.items["codex"]?.item !== delegate.items["claude"]?.item && delegate.items["codex"]?.menu != nil)
+    precondition(delegate.logo?.menu == nil && delegate.logoMenu?.items.contains { $0.title == "Add source…" } == true)
     // A hover identifier is nonactivating and cannot intercept a subsequent battery click.
     let hover = HoverSurface(), controller = NSViewController()
     controller.view = ModelIdentityView(glyph: NSImage(size: NSSize(width: 18, height: 18)), name: "Codex")
@@ -997,7 +1001,7 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(visibleDetail?.rows.count == 2 && visibleDetail?.rows.first?.pct == 96)
     delegate.shelf = Shelf()
     delegate.arrange(["codex", "claude", "glm", "openrouter"])
-    let hiddenMenu = delegate.overflow?.menu?.items.first { $0.title.hasPrefix("OpenRouter") }?.submenu
+    let hiddenMenu = delegate.logoMenu?.items.first { $0.title.hasPrefix("OpenRouter") }?.submenu
     let hiddenDetail = hiddenMenu?.items.compactMap { $0.view as? CellsView }.first
     precondition(hiddenMenu?.items.first?.title == "Keep in the menu bar")
     precondition(hiddenDetail?.rows.count == 2 && hiddenDetail !== visibleDetail)
@@ -1148,20 +1152,21 @@ if CommandLine.arguments.contains("--self-test") {
             let samples = [Panel(id: "codex", name: "Codex", windows: [Window(label: "5h", pct: 78), Window(label: "7d", pct: 40)]),
                            Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 2)]),
                            Panel(id: "kimi", name: "Kimi", windows: [Window(label: "5h", pct: 89)])]
-            // The group as laid out in the menu bar, using the same spacing constants.
-            let widths = [SystemBattery.stackedWidth + StatusGroup.gap] + samples.map { delegate.icon($0).size.width + StatusGroup.gap }
-            let pillWidth = widths.reduce(2 * StatusGroup.pad, +)
+            // The logo and batteries side by side, with about the spacing the system gives status items.
+            let pad: CGFloat = 15, gap: CGFloat = 6
+            let widths = [SystemBattery.stackedWidth + gap] + samples.map { delegate.icon($0).size.width + gap }
+            let pillWidth = widths.reduce(2 * pad, +)
             let pill = NSRect(x: 150 * scale, y: y + 6 * scale, width: pillWidth * scale, height: 22 * scale)
             ink.withAlphaComponent(0.14).setFill(); NSBezierPath(roundedRect: pill, xRadius: 11 * scale, yRadius: 11 * scale).fill()
-            var x = 150 + StatusGroup.pad
+            var x = 150 + pad
             let stack = SystemBattery.stacked(dark: dark); stack.isTemplate = false
             let tinted = NSImage(size: stack.size); tinted.lockFocus()
             stack.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1); ink.setFill(); NSRect(origin: .zero, size: stack.size).fill(using: .sourceIn); tinted.unlockFocus()
-            tinted.draw(in: NSRect(x: (x + StatusGroup.gap / 2) * scale, y: y + 6 * scale, width: stack.size.width * scale, height: 22 * scale))
+            tinted.draw(in: NSRect(x: (x + gap / 2) * scale, y: y + 6 * scale, width: stack.size.width * scale, height: 22 * scale))
             x += widths[0]
             for (slot, panel) in samples.enumerated() {
                 let icon = delegate.icon(panel)
-                icon.draw(in: NSRect(x: (x + StatusGroup.gap / 2) * scale, y: y + 6 * scale, width: icon.size.width * scale, height: 22 * scale))
+                icon.draw(in: NSRect(x: (x + gap / 2) * scale, y: y + 6 * scale, width: icon.size.width * scale, height: 22 * scale))
                 x += widths[slot + 1]
             }
         }

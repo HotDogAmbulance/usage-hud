@@ -153,14 +153,14 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
         groupPreview?.removeFromSuperview(); hud.hoverAnchors.removeAll()
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 8, height: 22))
         var x: CGFloat = 4
-        for id in hud.group.order {
-            let cell = id == "overflow" ? hud.overflow : id == "usage-hud" ? hud.brandCell : hud.items[id]
-            guard let cell = cell, let original = cell.button else { continue }
-            let button = StatusCellButton(id: id)
-            button.frame = NSRect(x: x, y: 0, width: cell.length, height: 22); button.image = original.image
+        let shown = [hud.logo].compactMap { $0 } + hud.shelf.ranked(hud.arrangedIDs).compactMap { hud.items[$0] }.filter(\.isVisible)
+        for cell in shown {
+            guard let original = cell.button, let image = original.image else { continue }
+            let button = NSButton(image: image, target: self, action: #selector(openPreview(_:)))
+            button.isBordered = false; button.identifier = NSUserInterfaceItemIdentifier(cell.id)
+            button.frame = NSRect(x: x, y: 0, width: image.size.width + 6, height: 22)
             button.setAccessibilityLabel(original.accessibilityLabel()); button.setAccessibilityValue(original.accessibilityValue())
-            button.beforeClick = { [weak self] in self?.hud.closeHover() }; button.target = hud; button.action = #selector(HUD.openCell(_:))
-            content.addSubview(button); hud.hoverAnchors[id] = button; x += cell.length
+            content.addSubview(button); hud.hoverAnchors[cell.id] = button; x += button.frame.width
         }
         content.frame.size.width = x + 4
         let group = NativeSurface(content: content, radius: 11)
@@ -178,7 +178,7 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func open(_ sender: NSButton) {
         let id = names[max(0, provider.indexOfSelectedItem)].0
-        if sender.title == "Open overflow menu" { hud.overflow?.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY), in: sender) }
+        if sender.title == "Open overflow menu" { hud.logoMenu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY), in: sender) }
         else if sender.title == "Show hover panel" {
             hud.hovered = id; hud.drawIcon(id); hud.showHover(id)
             if let glyph = ModelIdentity.glyph(id) {
@@ -188,7 +188,14 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 summary.stringValue = "Model-only hover identifier · existing 7d battery view retained"
             }
         }
-        else { if let button = hud.hoverAnchors[id] as? StatusCellButton { hud.openCell(button) } }
+        else if let button = hud.hoverAnchors[id] as? NSButton { openPreview(button) }
+    }
+    /// The preview's copy of a battery opens the same menu the bar's does.
+    @objc func openPreview(_ sender: NSButton) {
+        hud.closeHover()
+        let id = sender.identifier?.rawValue ?? ""
+        let menu = id == "usage-hud" ? hud.logoMenu : hud.items[id]?.menu
+        menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY - 3), in: sender)
     }
     func windowWillClose(_ notification: Notification) { NSApp.terminate(nil) }
 }
