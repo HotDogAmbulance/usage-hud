@@ -93,8 +93,11 @@ final class HoverSurface {
         hover.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         hover.contentView = NativeSurface(content: content, radius: contentSize.width <= 40 ? 8 : 12)
         let visible = screen.visibleFrame.insetBy(dx: 6, dy: 6)
-        let x = min(max(anchor.midX - contentSize.width / 2, visible.minX), visible.maxX - contentSize.width)
-        let y = max(visible.minY, min(anchor.minY - 6 - contentSize.height, visible.maxY - contentSize.height))
+        // Beside the anchor when asked (a lowered battery has others under it), else below it.
+        let beside = preferredEdge == .maxX
+        let x = beside ? min(anchor.maxX + 8, visible.maxX - contentSize.width) : min(max(anchor.midX - contentSize.width / 2, visible.minX), visible.maxX - contentSize.width)
+        let y = beside ? max(visible.minY, min(anchor.midY - contentSize.height / 2, visible.maxY - contentSize.height))
+                       : max(visible.minY, min(anchor.minY - 6 - contentSize.height, visible.maxY - contentSize.height))
         hover.setFrame(NSRect(x: x, y: y, width: contentSize.width, height: contentSize.height), display: false)
         panel = hover; hover.orderFrontRegardless()
     }

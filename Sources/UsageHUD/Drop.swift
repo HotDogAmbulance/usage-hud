@@ -6,6 +6,7 @@ final class DropTile: NSView {
     let entry: Entry
     var picked: (String) -> Void = { _ in }
     var contextual: (String, NSView, NSEvent) -> Void = { _, _, _ in }
+    var hover: (String, NSView, Bool) -> Void = { _, _, _ in }
     init(_ entry: Entry) {
         self.entry = entry
         super.init(frame: NSRect(origin: .zero, size: entry.image.size))
@@ -16,6 +17,13 @@ final class DropTile: NSView {
         setAccessibilityHelp("Click to keep this battery in the menu bar, or let it go. Right-click for its menu.")
     }
     required init?(coder: NSCoder) { nil }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { hover(entry.id, self, true) }
+    override func mouseExited(with event: NSEvent) { hover(entry.id, self, false) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { picked(entry.id) }
     override func rightMouseDown(with event: NSEvent) { contextual(entry.id, self, event) }
@@ -45,6 +53,7 @@ final class DropPresenter {
     var isShown: Bool { panel?.isVisible == true }
     var onPick: (String) -> Void = { _ in }
     var onContext: (String, NSView, NSEvent) -> Void = { _, _, _ in }
+    var onHover: (String, NSView, Bool) -> Void = { _, _, _ in }
     /// Called with the number of hidden batteries now out of the logo (0 when put away), so the bar can draw the rest of the logo.
     var changed: (Int) -> Void = { _ in }
     static let rowHeight: CGFloat = 22, gap: CGFloat = 6
@@ -82,6 +91,7 @@ final class DropPresenter {
             let tile = DropTile(entry)
             tile.picked = { [weak self] id in self?.onPick(id) }
             tile.contextual = { [weak self] id, view, event in self?.onContext(id, view, event) }
+            tile.hover = { [weak self] id, view, inside in self?.onHover(id, view, inside) }
             let row = count == 1 ? 1 : index
             tile.frame = NSRect(x: width / 2 - entry.image.size.width / 2, y: rowCentre(row).y - entry.image.size.height / 2,
                                 width: entry.image.size.width, height: entry.image.size.height)

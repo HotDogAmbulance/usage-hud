@@ -417,6 +417,11 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self = self, let panel = self.panels[id] else { return }
             NSMenu.popUpContextMenu(self.providerMenu(panel), with: event, for: view)
         }
+        drop.onHover = { [weak self] id, view, inside in
+            guard let self = self else { return }
+            if inside { self.closeHover(); self.droppedAnchors[id] = view; self.hovered = id; self.showHover(id) }
+            else if self.hovered == id { self.closeHover(); self.droppedAnchors[id] = nil }
+        }
         drop.changed = { [weak self] count in
             guard let self = self else { return }
             self.droppedCount = count; self.group.menuOpen = count > 0
@@ -815,16 +820,28 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
                          moreHint: inMenu ? (panel.id == "openrouter" ? "All keys below" : "All budgets below") : "click battery for all",
                          darkBar: inMenu ? nil : darkMenuBar, providerID: panel.id)
     }
-    func hoverButton(_ id: String) -> NSView? { items[id]?.button }
+    /// While hidden batteries are lowered out of the logo, hovering one anchors its panel to that tile.
+    var droppedAnchors: [String: NSView] = [:]
+    func hoverButton(_ id: String) -> NSView? { droppedAnchors[id] ?? items[id]?.button }
     func showHover(_ id: String) {
         guard openMenu == nil, hovered == id, let panel = panels[id] else { return }
+        let edge: NSRectEdge = droppedAnchors[id] != nil ? .maxX : .minY
+        // Antigravity says which pool its battery is showing; it is two pools, so the table is for the click.
+        if id == "antigravity", let button = hoverButton(id), button.window != nil {
+            popover.close()
+            let controller = NSViewController(); controller.view = ModelIdentityView(glyph: ModelIdentity.antigravity, name: panel.name, caption: displayedQuota(panel)?.label)
+            modelPopover.contentViewController = controller; modelPopover.contentSize = controller.view.frame.size
+            modelPopover.animates = false; modelPopover.dark = darkMenuBar
+            modelPopover.show(relativeTo: button.bounds, of: button, preferredEdge: edge)
+            return
+        }
         if !panel.cells.isEmpty { modelPopover.close(); showCells(id); return }
         guard ["claude", "codex", "glm", "grok", "kimi-code"].contains(id),
               let glyph = ModelIdentity.glyph(id), let button = hoverButton(id), button.window != nil else { return }
         let controller = NSViewController(); controller.view = ModelIdentityView(glyph: glyph, name: panel.name)
         modelPopover.contentViewController = controller; modelPopover.contentSize = controller.view.frame.size
         modelPopover.animates = false; modelPopover.dark = darkMenuBar
-        modelPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        modelPopover.show(relativeTo: button.bounds, of: button, preferredEdge: edge)
     }
     /// Opens the per-key panel under a battery that is still hovered.
     func showCells(_ id: String) {
@@ -834,7 +851,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         popover.contentViewController = controller
         popover.contentSize = controller.view.frame.size
         popover.animates = false; popover.dark = darkMenuBar
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: droppedAnchors[id] != nil ? .maxX : .minY)
     }
     @objc func refreshProvider(_ sender: NSMenuItem) { load(sender.representedObject as? String) }
     /// The provider whose sign-in is waiting in the browser.
@@ -1045,7 +1062,7 @@ if CommandLine.arguments.contains("--self-test") {
     let google = Panel(id: "antigravity", name: "Antigravity", windows: [Window(label: "Gemini", pct: 24, palette: .google)])
     let combined = Panel(id: "antigravity", name: "Antigravity", windows: [Window(label: "Claude & GPT", pct: 24, palette: .claudeOpenAI)])
     precondition(delegate.icon(google).tiffRepresentation != delegate.icon(combined).tiffRepresentation)
-    precondition(ModelIdentity.glyph("openrouter") == nil && ModelIdentity.glyph("antigravity") == nil)
+    precondition(ModelIdentity.glyph("openrouter") == nil && ModelIdentity.glyph("antigravity") != nil)
     let identity = ModelIdentityView(glyph: NSImage(size: NSSize(width: 18, height: 18)), name: "Codex")
     precondition(identity.frame.size == NSSize(width: 32, height: 32) && identity.accessibilityLabel() == "Codex")
     let expiredClaude = Panel(id: "claude", name: "Claude", windows: [Window(label: "5h", pct: 40, stale: true)],
