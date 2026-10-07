@@ -6,8 +6,11 @@ final class FakeCredentials: CredentialReading {
     var text = "fixture"
     /// Services with nothing stored; no team key unless a test asks for one.
     var missing: Set<String> = [OpenRouterProvider.teamService]
+    /// Services whose Keychain item was deleted (the real reader answers at once and says so).
+    var deleted: Set<String> = []
     func password(service: String, account: String?) throws -> String {
         calls += 1
+        if deleted.contains(service) { throw HUDProblem("Keychain credential unavailable", gone: true) }
         if missing.contains(service) { throw HUDProblem("not found") }
         return text
     }
@@ -903,24 +906,61 @@ final class CoreTests {
         try FileManager.default.createDirectory(at: opencode, withIntermediateDirectories: true)
         try "{\"openrouter\":{\"type\":\"api\",\"key\":\"\(alice)\"}}".write(to: opencode.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
         try "export OPENROUTER_API_KEY=sk-or-v1-short\nexport OPENROUTER_API_KEY=\(bob)\nexport ALICE_OPENROUTER_KEY='\(alice)'".write(to: root.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
-        try "OPENROUTER_API_KEY=\(carol) agent run\n# \(bob)".write(to: root.appendingPathComponent("boot-carol.sh"), atomically: true, encoding: .utf8)
-        // Organised folders are searched; guarded and too-deep ones are not.
-        for (folder, key) in [("team/research", "d4"), ("Documents", "e5"), ("a/b/c/d", "f6")] {
-            let url = root.appendingPathComponent(folder)
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            try "export DANA_KEY=sk-or-v1-\(String(repeating: key, count: 32))".write(to: url.appendingPathComponent("run.sh"), atomically: true, encoding: .utf8)
-        }
-        let found = KeyFinder.find(in: KeyFinder.places(home: root), environment: [:])
-        expectEqual(found.map { $0.label }, ["zshrc", "alice", "boot-carol", "dana"])
-        expectEqual(found.map { $0.key }, [bob, alice, carol, "sk-or-v1-" + String(repeating: "d4", count: 32)])
+        try "OPENROUTER_API_KEY=\(carol) agent run\n".write(to: root.appendingPathComponent("boot-carol.sh"), atomically: true, encoding: .utf8)
+        // Scripts are never crawled; one the person dropped is read, and named after its file.
+        let team = root.appendingPathComponent("team/research")
+        try FileManager.default.createDirectory(at: team, withIntermediateDirectories: true)
+        try "export DANA_KEY=sk-or-v1-\(String(repeating: "d4", count: 32))".write(to: team.appendingPathComponent("run.sh"), atomically: true, encoding: .utf8)
+        expectEqual(KeyFinder.find(in: KeyFinder.places(home: root), environment: [:]).map { $0.label }, ["zshrc", "alice"])
+        KeySources.add([root.appendingPathComponent("boot-carol.sh")], home: root)
+        let found = KeyFinder.find(in: KeyFinder.places(home: root), chosen: KeyFinder.chosen(home: root), environment: [:])
+        expectEqual(found.map { $0.label }, ["Boot-carol", "zshrc", "alice"])
+        expectEqual(found.map { $0.key }, [carol, bob, alice])
         expectEqual(KeyFinder.label(opencode.appendingPathComponent("auth.json")), "opencode")
         expectEqual(KeyFinder.find(in: [], environment: ["OPENROUTER_API_KEY": alice + "\n" + bob]).map { $0.label }, ["environment", "environment 2"])
         http.handler = { url in url.path.hasSuffix("credits") ? ["data": ["total_credits": 9, "total_usage": 1]] : ["data": ["usage": 3, "usage_daily": 0.25]] }
         let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
         expectTrue(provider.automatic)
         try provider.refresh()
-        expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "zshrc", "alice", "boot-carol", "dana"])
+        expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "Boot-carol", "zshrc", "alice"])
         expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("openrouter.json")), encoding: .utf8)!.contains("sk-or-v1-"))
+    }
+    /// Each key is named after its boot; a deleted or refused key says so once; a free Zen boot is shown but not measured.
+    func testKeysAreNamedAfterTheirBootAndChangesAreAnnounced() throws {
+        let key = "sk-or-v1-" + String(repeating: "a1", count: 32)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let config: [[String: Any]] = [["id": "guy1", "label": "Ox1", "sources": [["provider": "openrouter", "service": "svc", "account": "guy1"]]],
+                                       ["id": "guy3", "label": "Ox3", "sources": [["provider": "openrouter", "service": "svc", "account": "guy3"]]]]
+        try JSONSerialization.data(withJSONObject: config).write(to: root.appendingPathComponent("providers.json"))
+        var counter = 0
+        http.handler = { url in
+            if url.path.hasSuffix("credits") { return ["data": ["total_credits": 9, "total_usage": 1]] }
+            counter += 1; return ["data": ["usage": 3, "usage_daily": 0.25, "label": "sk-or-v1-k\(counter)"]]
+        }
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
+        var changes = SourceChanges()
+        func panel() -> Panel { var panel = provider.panel(); panel.readingSource = .providerAPI; panel.sourceReadAt = Date().timeIntervalSince1970; return panel }
+        try provider.refresh()
+        expectEqual(panel().keys ?? [:], ["Ox1": "ok", "Ox3": "ok"])
+        _ = changes.update(panels: [panel()], announce: false)
+        // The Keychain item is deleted: a notice, and the row says so.
+        credentials.deleted = ["svc"]
+        do { try provider.refresh() } catch {}
+        let removed = changes.update(panels: [panel()])
+        expectTrue(removed?.title == "Keys updated" || removed?.title.hasPrefix("Stopped tracking") == true)
+        expectTrue(provider.panel().cells.contains { $0.right == "Key removed" })
+        expectNil(changes.update(panels: [panel()]))
+        // Only one key is refused by OpenRouter.
+        credentials.deleted = []; http.handler = { _ in throw HTTPFailure(status: 401) }
+        do { try provider.refresh() } catch {}
+        expectTrue(provider.panel().cells.contains { $0.right == "Key no longer valid" })
+        // A dropped boot of free Zen models and no key.
+        let boot = root.appendingPathComponent("ox9.sh")
+        try "# Single model opencode/muse-spark-1.3-contributor-free, no key.\nexec profile".write(to: boot, atomically: true, encoding: .utf8)
+        _ = KeySources.add([boot], home: root)
+        expectEqual(KeyFinder.zen(in: [boot]), ["Ox9"])
+        try "OPENROUTER_API_KEY=\(key) run opencode/x-free".write(to: boot, atomically: true, encoding: .utf8)
+        expectEqual(KeyFinder.zen(in: [boot]), [])
     }
     /// A Keychain password prompt may follow a click on Refresh, never a background timer.
     func testKeychainPromptNeverReturnsOnItsOwn() throws {

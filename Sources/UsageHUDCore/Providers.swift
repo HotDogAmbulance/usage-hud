@@ -223,23 +223,26 @@ final class OpenRouterProvider: UsageProvider {
     func configuredSlots() throws -> [RouterSlot] {
         let env = environment
         let data = env["USAGE_HUD_PROVIDER_SLOTS"].flatMap { $0.data(using: .utf8) } ?? (try? Data(contentsOf: cache.root.appendingPathComponent("providers.json")))
-        if let data = data { return try Self.slots(JSONSerialization.jsonObject(with: data)) }
-        guard let service = env["USAGE_HUD_OPENROUTER_SERVICE"], let pairs = env["USAGE_HUD_OPENROUTER_KEYS"] else {
-            // Nothing configured: use the keys already on this Mac. The search runs at most hourly; keys stay in memory only.
-            let now = Date().timeIntervalSince1970
-            let edited = ((try? FileManager.default.attributesOfItem(atPath: home.appendingPathComponent(".usage-hud/key-sources.json").path))?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-            if now - found.at > 3600 || edited > found.at {
-                found = (now, KeyFinder.find(in: KeyFinder.places(home: home), environment: env).map {
-                    RouterSlot(id: "found-" + $0.label, label: $0.label, sources: [["provider": "openrouter", "found": $0.key]])
-                })
-            }
-            return found.slots
-        }
+        // The slots written in providers.json, plus what dropped boots and the usual places hold.
+        if let data = data { return try Self.slots(JSONSerialization.jsonObject(with: data)) + foundSlots() }
+        guard let service = env["USAGE_HUD_OPENROUTER_SERVICE"], let pairs = env["USAGE_HUD_OPENROUTER_KEYS"] else { return foundSlots() }
         return pairs.split(separator: ",").enumerated().compactMap { index, pair in
             let values = pair.split(separator: ":", maxSplits: 1)
             guard values.count == 2 else { return nil }
             return RouterSlot(id: "legacy-\(index+1)", label: String(values[0]), sources: [["provider": "openrouter", "service": service, "account": String(values[1])]])
         }
+    }
+    /// The keys already on this Mac. The search runs at most hourly; keys stay in memory only.
+    func foundSlots() -> [RouterSlot] {
+        let now = Date().timeIntervalSince1970
+        let edited = ((try? FileManager.default.attributesOfItem(atPath: home.appendingPathComponent(".usage-hud/key-sources.json").path))?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        if now - found.at > 3600 || edited > found.at {
+            let chosen = KeyFinder.chosen(home: home)
+            found = (now, KeyFinder.find(in: KeyFinder.places(home: home), chosen: chosen, environment: environment).map {
+                RouterSlot(id: "found-" + $0.label, label: $0.label, sources: [["provider": "openrouter", "found": $0.key]])
+            } + KeyFinder.zen(in: chosen).map { RouterSlot(id: "zen-" + $0, label: $0, sources: [["provider": "zen"]]) })
+        }
+        return found.slots
     }
     func probe(_ source: JSON) throws -> JSON {
         guard source["provider"] as? String == "openrouter" else { throw HUDProblem("Unsupported provider source") }
@@ -271,15 +274,20 @@ final class OpenRouterProvider: UsageProvider {
                 "usage": usage, "limit": result["limit"] ?? NSNull(), "day": day,
                 "usage_daily": result["usage_daily"] ?? NSNull(), "limit_remaining": result["limit_remaining"] ?? NSNull(),
                 "limit_reset": result["limit_reset"] ?? NSNull(), "captured_at": Date().timeIntervalSince1970,
-                "day_start_usage": same ? number(previous["day_start_usage"]) ?? usage : usage]
+                "day_start_usage": same ? number(previous["day_start_usage"]) ?? usage : usage, "state": "ok"]
     }
     /// One key, personal or a teammate's: `pct` is the share of its cap used, `left` the share remaining (for ordering),
     /// and `warning` is set within 10% of the cap.
     static func keyCell(_ row: JSON, old: Bool, capturedAt: Double? = nil, now: Date = Date()) -> (cell: Window, left: Double, warning: String?) {
         let label = (row["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? row["label"] as? String ?? "Key"
         let problem = row["error"] is String
+        // A key that is gone or refused says so; one that merely can't be read keeps its last value, dimmed.
+        if let state = row["state"] as? String {
+            if state == "zen" { return (Window(label: label, right: "Free · Zen"), 1.5, nil) }
+            if state == "removed" || state == "invalid" { return (Window(label: label, right: row["error"] as? String ?? "Key unavailable", stale: true), 2, nil) }
+        }
         let cached = old || row["stale"] as? Bool == true || problem
-        if problem && number(row["usage"]) == nil { return (Window(label: label, right: "Unavailable", stale: true), 2, nil) }
+        if problem && number(row["usage"]) == nil { return (Window(label: label, right: row["error"] as? String ?? "Unavailable", stale: true), 2, nil) }
         let usage = number(row["usage"]) ?? 0
         let today = number(row["usage_daily"]) ?? number(row["day_start_usage"]).map { max(0, usage - $0) }
         guard let limit = number(row["limit"]), limit >= 0 else {
@@ -333,12 +341,17 @@ final class OpenRouterProvider: UsageProvider {
         let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd"; formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "UTC")
         let day = formatter.string(from: Date()), now = Date().timeIntervalSince1970
+        var seenKeys = Set<String>()
         for slot in slots {
             let old = oldRows.first(where: { $0["slot_id"] as? String == slot.id || $0["label"] as? String == slot.label }) ?? [:]
-            var winner: (JSON, JSON)?, management = false, rejected = false
+            var winner: (JSON, JSON)?, management = false, rejected = false, removed = false
+            if slot.sources.first?["provider"] as? String == "zen" {
+                rows.append(["slot_id": slot.id, "label": slot.label, "provider": "zen", "state": "zen", "captured_at": now]); continue
+            }
             for source in slot.sources {
                 do { winner = (source, try probe(source)) }
                 catch let problem as HUDProblem where problem.prompted { throw problem }
+                catch let problem as HUDProblem where problem.gone { removed = true }
                 catch let failure as HTTPFailure { rejected = failure.status == 401 || failure.status == 403 }
                 catch {}
                 // A management key found on the Mac lists the team instead of showing as a key of its own: OpenRouter flags it,
@@ -351,12 +364,17 @@ final class OpenRouterProvider: UsageProvider {
             }
             // A revoked key left in an old script is not yours to fix; it simply isn't shown.
             if management || winner == nil && rejected && slot.sources.allSatisfy({ $0["found"] != nil }) { continue }
+            // A key already shown under another name (the same one in a keychain slot and a script) shows once.
+            if let (_, result) = winner, let hint = result["key_label"] as? String, !seenKeys.insert(hint).inserted { continue }
             if let (source, result) = winner {
                 rows.append(Self.successfulRow(slot: slot, source: source, result: result, previous: old, day: day))
                 if let balance = number(result["credits_remaining"]) { balances["openrouter"] = balance; balanceCaptured = now }
             } else {
                 var row = old; row["slot_id"] = slot.id; row["label"] = slot.label
-                row["stale"] = true; row["error"] = "All sources unavailable"; rows.append(row); failures.append(slot.label)
+                row["stale"] = true; failures.append(slot.label)
+                row["state"] = removed ? "removed" : rejected ? "invalid" : "unreachable"
+                row["error"] = removed ? "Key removed" : rejected ? "Key no longer valid" : "Temporarily unreadable"
+                rows.append(row)
             }
         }
         var teamRows = previous["team"] as? [JSON], teamProblem: HUDProblem?
@@ -411,6 +429,12 @@ final class OpenRouterProvider: UsageProvider {
         var panel = Panel(id: id, name: name, windows: rows, note: rows.isEmpty ? "Add an OpenRouter key; see PROVIDERS.md" : "", alert: alert,
                           cells: (mine + team).map { $0.cell }, cellsTitle: title)
         // The balance is the number; how full the body is says how close your tightest capped key is to its cap.
+        var states: [String: String] = [:]
+        for row in blob["rows"] as? [JSON] ?? [] {
+            guard let label = row["label"] as? String else { continue }
+            states[label] = row["state"] as? String ?? (row["error"] is String ? "unreachable" : "ok")
+        }
+        panel.keys = states
         panel.gauge = mine.filter { $0.cell.pct != nil }.map { $0.left }.min()
         return panel
     }

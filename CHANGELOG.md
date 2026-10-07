@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Grok Bot: its usage is read from the app's own saved reading on this Mac (no network, no credentials); the battery dims while the app is closed.
+- Key sources are merged: `providers.json`, what you dropped, and a short list of usual places (shell profiles and AI tool configs). Scripts are no longer searched near home; drop one to have it read. A dropped boot is named after its file (`ox3.sh` is "Ox3"), and a key found twice shows once.
+- Per-key notices: a key added, one whose Keychain item was deleted ("Key removed"), and one OpenRouter refuses ("Key no longer valid") each announce themselves once; a key that is only briefly unreadable keeps its last value, dimmed, with no notice. A dropped boot that runs OpenCode Zen free models with no key shows as "Free · Zen" with a one-time note that Zen's usage can't be measured.
+
 - Expired Claude sign-in renews itself the way Claude Code always does: when the credential has expired, Usage HUD makes your own `claude` command send one tiny request (haiku, no tools, nothing saved), then removes the empty project folder it leaves in `~/.claude/projects`. At most once per six hours (retry after half an hour if it failed), at most three times in a row without real use, with a notice and a line in `~/.usage-hud/renewals.log`; `touch ~/.usage-hud/no-auto-renew` turns it off. The same call carries Claude Code's own 5h/7d quota (`rate_limit_event`), which is kept as the reading. The expired-credential message now says so.
 
 - Many sources: with nothing hidden the bar shows no stacked-batteries logo; with something hidden it does, and clicking it lowers the hidden batteries out of the logo with no surface behind them (one hidden: the logo's front battery drops and becomes it; two or more: both logo batteries become the first two and the rest follow in a column; Reduce Motion skips the movement). Click one to keep it in the bar, click anywhere else to put them away; right-click the logo for its menu, which has "Add source…" and Quit. Hover shows only "+n more". The key rows in the hover panel no longer repeat as a tooltip, and show five keys, the rest under "All keys (n)".

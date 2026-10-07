@@ -11,21 +11,6 @@ enum KeyFinder {
         let words = variable.lowercased().split(separator: "_").filter { !["openrouter", "or", "api", "key", "token"].contains($0) }
         return words.isEmpty ? nil : words.joined(separator: " ")
     }
-    /// Folders macOS guards with a permission prompt, or that only hold other apps' and packages' files.
-    static let skipped: Set<String> = ["Library", "Applications", "Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures",
-                                       "Public", "node_modules", "build", "dist", "venv"]
-    /// `.sh` scripts within three levels of home, where people keep them in their own order. Hidden and guarded folders
-    /// are skipped, and at most 500 scripts are read.
-    static func scripts(home: URL) -> [URL] {
-        guard let walk = FileManager.default.enumerator(at: home, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles, .skipsPackageDescendants])
-        else { return [] }
-        var found: [URL] = []
-        while let url = walk.nextObject() as? URL, found.count < 500 {
-            if skipped.contains(url.lastPathComponent) || walk.level > 3 { walk.skipDescendants(); continue }
-            if url.pathExtension == "sh" { found.append(url) }
-        }
-        return found.sorted { $0.path < $1.path }
-    }
     /// Files and folders the person pointed Usage HUD at, one path each in `~/.usage-hud/key-sources.json`. A folder is read
     /// to four levels, hidden folders included, since the person chose it.
     static func chosen(home: URL) -> [URL] {
@@ -47,11 +32,11 @@ enum KeyFinder {
         }
         return found
     }
-    /// Shell profiles, AI tool configs, then personal scripts, which people tend to name after a person or a job.
+    /// What the person chose, then the few usual places: shell profiles and AI tool configs. Scripts are only read when dropped.
     static func places(home: URL) -> [URL] {
         chosen(home: home) + [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".env", ".config/fish/config.fish",
                      ".local/share/opencode/auth.json", ".aider.conf.yml", ".config/crush/crush.json", ".continue/config.yaml",
-                     ".continue/config.json", ".config/zed/settings.json"].map { home.appendingPathComponent($0) } + scripts(home: home)
+                     ".continue/config.json", ".config/zed/settings.json"].map { home.appendingPathComponent($0) }
     }
     /// "boot-alice.sh" is "boot-alice", ".zshrc" is "zshrc"; a tool's config is named after its folder, so opencode's auth.json is "opencode".
     static func label(_ file: URL) -> String {
@@ -59,25 +44,43 @@ enum KeyFinder {
         let name = ["auth", "config", "settings"].contains(stem) ? file.deletingLastPathComponent().lastPathComponent : stem
         return name.trimmingCharacters(in: CharacterSet(charactersIn: "."))
     }
-    /// Each distinct key once, named after its variable or else the first file it appears in. Files over 1 MB are skipped.
-    static func find(in files: [URL], environment: [String: String] = ProcessInfo.processInfo.environment) -> [(label: String, key: String)] {
+    /// A dropped boot is named after its file: "ox3.sh" is "Ox3".
+    static func boot(_ file: URL) -> String {
+        let name = label(file)
+        return name.prefix(1).uppercased() + name.dropFirst()
+    }
+    /// Each distinct key once, named after its variable or else the first file it appears in; a dropped boot is always named
+    /// after its file. Files over 1 MB are skipped.
+    static func find(in files: [URL], chosen: [URL] = [], environment: [String: String] = ProcessInfo.processInfo.environment) -> [(label: String, key: String)] {
         var found: [(label: String, key: String)] = [], seen = Set<String>()
-        let sources = [("environment", environment["OPENROUTER_API_KEY"] ?? "")] + files.compactMap { file -> (String, String)? in
+        let dropped = Set(chosen.map { $0.path })
+        let sources = [("environment", environment["OPENROUTER_API_KEY"] ?? "", false)] + files.compactMap { file -> (String, String, Bool)? in
             guard ((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? .max) < 1 << 20,
                   let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
-            return (label(file), text)
+            return dropped.contains(file.path) ? (boot(file), text, true) : (label(file), text, false)
         }
-        for (file, text) in sources {
+        for (file, text, isBoot) in sources {
             for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
                 let key = (text as NSString).substring(with: match.range(at: 2))
                 guard seen.insert(key).inserted else { continue }
                 let variable = match.range(at: 1).location == NSNotFound ? "" : (text as NSString).substring(with: match.range(at: 1))
-                let name = person(variable) ?? file
+                let name = isBoot ? file : person(variable) ?? file
                 let taken = found.filter { $0.label == name || $0.label.hasPrefix(name + " ") }.count
                 found.append((taken == 0 ? name : "\(name) \(taken + 1)", key))
             }
         }
         return found
+    }
+    /// Dropped boots that run OpenCode Zen's free models and hold no OpenRouter key. Zen needs no key and publishes no usage.
+    static func zen(in files: [URL]) -> [String] {
+        let free = try! NSRegularExpression(pattern: "opencode/[A-Za-z0-9._-]+-free\\b")
+        return files.compactMap { file -> String? in
+            guard ((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? .max) < 1 << 20,
+                  let text = try? String(contentsOf: file, encoding: .utf8),
+                  free.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil,
+                  pattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) == nil else { return nil }
+            return boot(file)
+        }
     }
     /// Keys for providers whose Anthropic-compatible endpoint Claude Code is pointed at (Z.ai, DeepSeek, Moonshot), keyed by
     /// whichever of `hosts` shares that endpoint's domain. The key only ever goes to our fixed host, never to the URL found beside it.
