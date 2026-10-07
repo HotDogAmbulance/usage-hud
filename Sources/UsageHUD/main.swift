@@ -411,8 +411,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// What the logo shows: all of it, the rear battery alone while one is lowered, nothing while two or more are.
     func logoImage() -> NSImage {
         let dark = darkMenuBar
-        return droppedCount == 0 ? SystemBattery.stacked(dark: dark) : droppedCount == 1 ? SystemBattery.stacked(dark: dark, front: false)
-                                                                                         : NSImage(size: NSSize(width: SystemBattery.stackedWidth, height: 22))
+        return SystemBattery.stacked(dark: dark)
     }
     func showDrop(from sender: StatusCellButton) {
         guard let window = sender.window, let screen = window.screen else { return }
@@ -437,12 +436,9 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         drop.changed = { [weak self] count in
             guard let self = self else { return }
             self.droppedCount = count; self.group.menuOpen = count > 0
-            self.overflow?.button?.image = self.logoImage()
         }
         let logo = window.convertToScreen(sender.convert(sender.bounds, to: nil))
-        let dark = darkMenuBar
-        drop.dark = dark
-        drop.show(entries, from: logo, logoImages: (SystemBattery.stacked(dark: dark, front: false), SystemBattery.stacked(dark: dark, rear: false)), screen: screen)
+        drop.show(entries, from: logo, screen: screen)
     }
     /// With the click log on, say which menu or submenu really appears and which entry it hangs from.
     func menuWillOpen(_ menu: NSMenu) {
@@ -858,7 +854,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         if !panel.cells.isEmpty { modelPopover.close(); showCells(id); return }
-        guard ["claude", "codex", "glm", "grok", "kimi-code"].contains(id),
+        guard ["claude", "codex", "glm", "grok", "grokbot", "kimi-code"].contains(id),
               let glyph = ModelIdentity.glyph(id), let button = hoverButton(id), button.window != nil else { return }
         let controller = NSViewController(); controller.view = ModelIdentityView(glyph: glyph, name: panel.name)
         modelPopover.contentViewController = controller; modelPopover.contentSize = controller.view.frame.size
@@ -959,6 +955,8 @@ if CommandLine.arguments.contains("--self-test") {
     delegate.trackers["claude"]?.changed(true)
     precondition(delegate.hovered == "claude")
     delegate.trackers["claude"]?.changed(false)
+    // Leaving counts a moment later, once the pointer is confirmed outside.
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
     precondition(delegate.hovered == nil)
     let image = NSImage(size: NSSize(width: 144, height: 44))
     image.lockFocus()
@@ -988,11 +986,9 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(delegate.items["glm"]?.isVisible == true && !delegate.trayEntries().contains { $0.id == "glm" })
     delegate.shelf.pins = []; delegate.arrange(delegate.arrangedIDs)
     precondition(delegate.items["glm"]?.isVisible == false)
-    // The logo draws the rest of itself while batteries are lowered: both, the rear one, then nothing.
-    delegate.droppedCount = 1
-    precondition(delegate.logoImage().size.width == SystemBattery.stackedWidth && delegate.logoImage().tiffRepresentation != SystemBattery.stacked(dark: delegate.darkMenuBar).tiffRepresentation)
+    // The logo stays whole while batteries are lowered out of it.
     delegate.droppedCount = 2
-    precondition(delegate.logoImage().representations.isEmpty || delegate.logoImage().tiffRepresentation == nil || true)
+    precondition(delegate.logoImage().tiffRepresentation == SystemBattery.stacked(dark: delegate.darkMenuBar).tiffRepresentation)
     delegate.droppedCount = 0
     delegate.arrange(["codex", "claude"])
     precondition(delegate.overflow?.isVisible == false)

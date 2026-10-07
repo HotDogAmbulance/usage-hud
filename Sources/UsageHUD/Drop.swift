@@ -47,13 +47,9 @@ final class DropContent: NSView {
 final class DropPresenter {
     private(set) var panel: DropPanel?
     private var monitor: Any?
-    private var ghosts: [CALayer] = []
     private var tiles: [DropTile] = []
     private var starts: [CGPoint] = []
     var isShown: Bool { panel?.isVisible == true }
-    /// Whether the bar is dark; the surface behind the dropped batteries is the bar's own ink, like the group's.
-    var dark = true
-    private var surface: CALayer?
     var onPick: (String) -> Void = { _ in }
     var onContext: (String, NSView, NSEvent) -> Void = { _, _, _ in }
     var onHover: (String, NSView, Bool) -> Void = { _, _, _ in }
@@ -67,67 +63,35 @@ final class DropPresenter {
         guard let panel = panel, panel.isVisible else { return }
         let finish = { [weak self] in panel.orderOut(nil); self?.changed(0) }
         if Self.calm { finish(); return }
-        // Back into the logo: ghosts return, tiles retreat to where they came from.
+        // Back into the logo, which never left.
         CATransaction.begin()
         CATransaction.setAnimationDuration(0.22)
         CATransaction.setCompletionBlock(finish)
-        for ghost in ghosts { ghost.opacity = 1 }
-        surface?.opacity = 0
         for (tile, start) in zip(tiles, starts) { tile.layer?.opacity = 0; tile.layer?.position = start }
         CATransaction.commit()
     }
-    /// `logo` is the stacked-batteries cell on screen; `front` and `rear` are its two batteries drawn on their own.
-    func show(_ entries: [DropTile.Entry], from logo: NSRect, logoImages: (rear: NSImage, front: NSImage), screen: NSScreen) {
+    /// `logo` is the stacked-batteries cell on screen. The logo stays as it is; the hidden batteries come out of it, one row
+    /// each, below the bar.
+    func show(_ entries: [DropTile.Entry], from logo: NSRect, screen: NSScreen) {
         close()
         guard !entries.isEmpty else { return }
         let count = entries.count, pitch = Self.rowHeight + Self.gap
-        let rows = max(2, count)
-        // The surface that holds the dropped batteries reaches a little past them on each side.
-        let inset: CGFloat = 9, inner = max(32, entries.map { $0.image.size.width }.max() ?? 32), width = inner + 2 * inset
-        let height = CGFloat(rows) * pitch - Self.gap + 5
-        let origin = NSPoint(x: logo.midX - width / 2, y: logo.midY - 11 - CGFloat(rows - 1) * pitch - 5)
+        let rows = count + 1                    // row 0 is the bar's own row, where the logo is
+        let width = max(32, entries.map { $0.image.size.width }.max() ?? 32), height = CGFloat(rows) * pitch - Self.gap
+        let origin = NSPoint(x: logo.midX - width / 2, y: logo.midY - 11 - CGFloat(rows - 1) * pitch)
         let content = DropContent(frame: NSRect(x: 0, y: 0, width: width, height: height))
         content.wantsLayer = true; content.dismiss = { [weak self] in self?.close() }
         func rowCentre(_ row: Int) -> CGPoint { CGPoint(x: width / 2, y: height - Self.rowHeight / 2 - CGFloat(row) * pitch) }
-        // Under the bar's own surface: the same tint, square where it meets the bar, rounded at the bottom.
-        let pill = CALayer()
-        pill.backgroundColor = (dark ? NSColor(white: 1, alpha: 0.18) : NSColor(white: 0, alpha: 0.12)).cgColor
-        pill.cornerRadius = 11; pill.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        pill.anchorPoint = CGPoint(x: 0.5, y: 1)
-        pill.bounds = CGRect(x: 0, y: 0, width: width, height: height - Self.rowHeight + 3)
-        pill.position = CGPoint(x: width / 2, y: height - Self.rowHeight + 3)
-        content.layer?.insertSublayer(pill, at: 0); surface = pill
-        // The logo's batteries sit at (14, 12.5) and (18, 8.5) from the lower left of its 32 x 22 picture; row 0 is the bar's own row.
-        let logoOrigin = CGPoint(x: width / 2 - 16, y: height - Self.rowHeight)
-        let rearStart = CGPoint(x: logoOrigin.x + 14, y: logoOrigin.y + 12.5), frontStart = CGPoint(x: logoOrigin.x + 18, y: logoOrigin.y + 8.5)
-        tiles = []; starts = []; ghosts = []
+        tiles = []; starts = []
         for (index, entry) in entries.enumerated() {
             let tile = DropTile(entry)
             tile.picked = { [weak self] id in self?.onPick(id) }
             tile.contextual = { [weak self] id, view, event in self?.onContext(id, view, event) }
             tile.hover = { [weak self] id, view, inside in self?.onHover(id, view, inside) }
-            let row = count == 1 ? 1 : index
-            tile.frame = NSRect(x: width / 2 - entry.image.size.width / 2, y: rowCentre(row).y - entry.image.size.height / 2,
+            tile.frame = NSRect(x: width / 2 - entry.image.size.width / 2, y: rowCentre(index + 1).y - entry.image.size.height / 2,
                                 width: entry.image.size.width, height: entry.image.size.height)
             content.addSubview(tile); tiles.append(tile)
-            starts.append(count >= 2 && index == 0 ? rearStart : frontStart)
-        }
-        func ghost(_ image: NSImage) -> CALayer {
-            let layer = CALayer()
-            layer.frame = CGRect(origin: logoOrigin, size: image.size)
-            layer.contents = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
-            layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-            content.layer?.addSublayer(layer); ghosts.append(layer)
-            return layer
-        }
-        let frontGhost = ghost(logoImages.front)
-        let rearGhost = count >= 2 ? ghost(logoImages.rear) : nil
-        if !Self.calm {
-            let grow = CABasicAnimation(keyPath: "bounds.size.height"); grow.fromValue = 3; grow.toValue = pill.bounds.height
-            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1
-            let both = CAAnimationGroup(); both.animations = [grow, fade]; both.duration = 0.3
-            both.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            pill.add(both, forKey: "open")
+            starts.append(rowCentre(0))
         }
         let window = panel ?? DropPanel(contentRect: content.bounds, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
@@ -139,13 +103,13 @@ final class DropPresenter {
         // which cut a wider battery (a balance with cents) short on its right.
         window.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: false)
         panel = window
-        changed(count)           // the bar's logo now shows only what stays: the rear battery for one, nothing for two or more
+        changed(count)
         window.orderFrontRegardless()
         content.layoutSubtreeIfNeeded()
         if !Self.calm {
             for (index, tile) in tiles.enumerated() {
                 guard let layer = tile.layer else { continue }
-                let target = layer.position, delay = CACurrentMediaTime() + Double(max(0, index - 1)) * 0.035
+                let target = layer.position, delay = CACurrentMediaTime() + Double(index) * 0.035
                 let move = CASpringAnimation(keyPath: "position")
                 move.fromValue = NSValue(point: starts[index]); move.toValue = NSValue(point: target)
                 move.damping = 16; move.stiffness = 230; move.mass = 1; move.duration = move.settlingDuration
@@ -156,22 +120,7 @@ final class DropPresenter {
                 group.beginTime = delay; group.fillMode = .backwards
                 layer.add(group, forKey: "drop")
             }
-            // The logo's own batteries let go of their outline as the coloured ones arrive; the front one travels with its tile.
-            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 1; fade.toValue = 0; fade.duration = 0.22
-            rearGhost?.opacity = 0; rearGhost?.add(fade, forKey: "fade")
-            let follow = CASpringAnimation(keyPath: "position")
-            let landing = rowCentre(count == 1 ? 1 : 1)
-            follow.fromValue = NSValue(point: frontGhost.position)
-            follow.toValue = NSValue(point: CGPoint(x: frontGhost.position.x + (landing.x - frontStart.x), y: frontGhost.position.y + (landing.y - frontStart.y)))
-            follow.damping = 16; follow.stiffness = 230; follow.mass = 1; follow.duration = follow.settlingDuration
-            let gone = CABasicAnimation(keyPath: "opacity"); gone.fromValue = 1; gone.toValue = 0; gone.duration = 0.22
-            let both = CAAnimationGroup(); both.animations = [follow, gone]; both.duration = follow.duration
-            frontGhost.opacity = 0; both.fillMode = .forwards
-            frontGhost.add(both, forKey: "follow")
-        } else {
-            ghosts.forEach { $0.opacity = 0 }
         }
-        for ghost in ghosts { ghost.opacity = 0 }
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in self?.close() }
     }
 }

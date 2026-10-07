@@ -9,6 +9,7 @@ enum ModelIdentity {
         case "codex": resources = ("ChatGPT", ["chatgptTemplate@2x.png", "chatgptTemplate.png"])
         case "kimi-code": resources = ("KimiCode", ["build/trayTemplate@2x.png", "build/trayTemplate.png"])
         case "antigravity": return antigravity
+        case "grokbot": return grokBot
         default: return nil
         }
         for folder in ["/Applications", FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path] {
@@ -56,4 +57,24 @@ final class ModelIdentityView: NSView {
         toolTip = name
     }
     required init?(coder: NSCoder) { nil }
+}
+extension ModelIdentity {
+    /// Grok Bot ships only its colour app icon, so its mascot is drawn here: a round head with two slanted eyes cut out of it.
+    /// An approximation, kept as a template so it takes the bar's ink like the others.
+    static let grokBot: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            let path = NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 16, height: 16))
+            for (x, y) in [(5.6, 10.4), (11.6, 11.4)] {
+                var eye = NSBezierPath(roundedRect: NSRect(x: -1.0, y: -2.3, width: 2.0, height: 4.6), xRadius: 1, yRadius: 1)
+                var move = AffineTransform(translationByX: x, byY: y); move.rotate(byDegrees: -22)
+                eye.transform(using: move)
+                path.append(eye)
+            }
+            path.windingRule = .evenOdd
+            NSColor.black.setFill(); path.fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
 }
