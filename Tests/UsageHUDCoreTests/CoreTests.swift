@@ -950,6 +950,10 @@ final class CoreTests {
         expectTrue(removed?.title == "Keys updated" || removed?.title.hasPrefix("Stopped tracking") == true)
         expectTrue(provider.panel().cells.contains { $0.right == "Key removed" })
         expectNil(changes.update(panels: [panel()]))
+        // After its notice the removed key's row goes, quietly, and stays gone.
+        do { try provider.refresh() } catch {}
+        expectFalse(provider.panel().cells.contains { $0.right == "Key removed" })
+        expectNil(changes.update(panels: [panel()]))
         // Only one key is refused by OpenRouter.
         credentials.deleted = []; http.handler = { _ in throw HTTPFailure(status: 401) }
         do { try provider.refresh() } catch {}

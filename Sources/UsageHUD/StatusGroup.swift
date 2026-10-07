@@ -106,6 +106,7 @@ final class StatusGroup {
     var dark = false { didSet { surface.dark = dark } }
     /// The rounded edge belongs to hover and press only, like the system's own highlight; at rest the batteries sit on the bar.
     private(set) var pointerInside = false
+    private var emphasised = false
     var menuOpen = false { didSet { setEmphasis(pointerInside || menuOpen) } }
     init() {
         surface = NativeSurface(content: NSView(), radius: 11, flat: true)
@@ -116,12 +117,18 @@ final class StatusGroup {
         item.button?.addSubview(content)
         item.button?.setAccessibilityElement(false)
         content.setAccessibilityElement(false)
-        content.hover = { [weak self] inside in
-            guard let self = self else { return }
-            self.pointerInside = inside; self.setEmphasis(inside || self.menuOpen)
+        // Enter and leave are reported again whenever a battery is redrawn; the pill follows where the pointer is a moment later.
+        content.hover = { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                guard let self = self, let window = self.content.window else { return }
+                let inside = window.frame.contains(NSEvent.mouseLocation)
+                if inside != self.pointerInside { self.pointerInside = inside; self.setEmphasis(inside || self.menuOpen) }
+            }
         }
     }
     func setEmphasis(_ on: Bool) {
+        if on == emphasised { return }
+        emphasised = on
         NSAnimationContext.runAnimationGroup { context in context.duration = 0.15; surface.animator().alphaValue = on ? 1 : 0 }
     }
     /// Space inside the rounded edge, and between neighbouring batteries (each side of a battery gets half of `gap`).

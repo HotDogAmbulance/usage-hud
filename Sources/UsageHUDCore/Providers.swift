@@ -342,6 +342,8 @@ final class OpenRouterProvider: UsageProvider {
         formatter.timeZone = TimeZone(identifier: "UTC")
         let day = formatter.string(from: Date()), now = Date().timeIntervalSince1970
         var seenKeys = Set<String>()
+        // A key whose Keychain item is gone is announced once, then its row goes; it comes back by itself if the item does.
+        var dismissed = Set(previous["dismissed"] as? [String] ?? [])
         for slot in slots {
             let old = oldRows.first(where: { $0["slot_id"] as? String == slot.id || $0["label"] as? String == slot.label }) ?? [:]
             var winner: (JSON, JSON)?, management = false, rejected = false, removed = false
@@ -366,12 +368,15 @@ final class OpenRouterProvider: UsageProvider {
             if management || winner == nil && rejected && slot.sources.allSatisfy({ $0["found"] != nil }) { continue }
             // A key already shown under another name (the same one in a keychain slot and a script) shows once.
             if let (_, result) = winner, let hint = result["key_label"] as? String, !seenKeys.insert(hint).inserted { continue }
+            if winner != nil { dismissed.remove(slot.id) }
             if let (source, result) = winner {
                 rows.append(Self.successfulRow(slot: slot, source: source, result: result, previous: old, day: day))
                 if let balance = number(result["credits_remaining"]) { balances["openrouter"] = balance; balanceCaptured = now }
             } else {
+                if removed && dismissed.contains(slot.id) { continue }
                 var row = old; row["slot_id"] = slot.id; row["label"] = slot.label
-                row["stale"] = true; failures.append(slot.label)
+                row["stale"] = true; if !removed { failures.append(slot.label) }
+                if removed && old["state"] as? String == "removed" { dismissed.insert(slot.id); continue }
                 row["state"] = removed ? "removed" : rejected ? "invalid" : "unreachable"
                 row["error"] = removed ? "Key removed" : rejected ? "Key no longer valid" : "Temporarily unreadable"
                 rows.append(row)
@@ -394,7 +399,7 @@ final class OpenRouterProvider: UsageProvider {
         // Nothing has ever worked: stay hidden rather than show an empty battery.
         if !fresh && previous.isEmpty { throw teamProblem ?? HUDProblem("No working OpenRouter key found") }
         try cache.write("openrouter.json", ["captured_at": fresh ? now : number(previous["captured_at"]) ?? 0,
-                                           "checked_at": now, "balance_captured_at": balanceCaptured, "balances": balances, "rows": rows,
+                                           "checked_at": now, "balance_captured_at": balanceCaptured, "balances": balances, "rows": rows, "dismissed": Array(dismissed),
                                            "team": teamRows as Any? ?? NSNull(),
                                            "reading_source": fresh ? ReadingSource.providerAPI.rawValue : previous["reading_source"] ?? NSNull(),
                                            "source_read_at": fresh ? now : previous["source_read_at"] ?? NSNull()])

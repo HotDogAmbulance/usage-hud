@@ -51,6 +51,9 @@ final class DropPresenter {
     private var tiles: [DropTile] = []
     private var starts: [CGPoint] = []
     var isShown: Bool { panel?.isVisible == true }
+    /// Whether the bar is dark; the surface behind the dropped batteries is the bar's own ink, like the group's.
+    var dark = true
+    private var surface: CALayer?
     var onPick: (String) -> Void = { _ in }
     var onContext: (String, NSView, NSEvent) -> Void = { _, _, _ in }
     var onHover: (String, NSView, Bool) -> Void = { _, _, _ in }
@@ -69,6 +72,7 @@ final class DropPresenter {
         CATransaction.setAnimationDuration(0.22)
         CATransaction.setCompletionBlock(finish)
         for ghost in ghosts { ghost.opacity = 1 }
+        surface?.opacity = 0
         for (tile, start) in zip(tiles, starts) { tile.layer?.opacity = 0; tile.layer?.position = start }
         CATransaction.commit()
     }
@@ -78,11 +82,21 @@ final class DropPresenter {
         guard !entries.isEmpty else { return }
         let count = entries.count, pitch = Self.rowHeight + Self.gap
         let rows = max(2, count)
-        let width = max(32, entries.map { $0.image.size.width }.max() ?? 32), height = CGFloat(rows) * pitch - Self.gap
-        let origin = NSPoint(x: logo.midX - width / 2, y: logo.midY - 11 - CGFloat(rows - 1) * pitch)
+        // The surface that holds the dropped batteries reaches a little past them on each side.
+        let inset: CGFloat = 9, inner = max(32, entries.map { $0.image.size.width }.max() ?? 32), width = inner + 2 * inset
+        let height = CGFloat(rows) * pitch - Self.gap + 5
+        let origin = NSPoint(x: logo.midX - width / 2, y: logo.midY - 11 - CGFloat(rows - 1) * pitch - 5)
         let content = DropContent(frame: NSRect(x: 0, y: 0, width: width, height: height))
         content.wantsLayer = true; content.dismiss = { [weak self] in self?.close() }
         func rowCentre(_ row: Int) -> CGPoint { CGPoint(x: width / 2, y: height - Self.rowHeight / 2 - CGFloat(row) * pitch) }
+        // Under the bar's own surface: the same tint, square where it meets the bar, rounded at the bottom.
+        let pill = CALayer()
+        pill.backgroundColor = (dark ? NSColor(white: 1, alpha: 0.18) : NSColor(white: 0, alpha: 0.12)).cgColor
+        pill.cornerRadius = 11; pill.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        pill.anchorPoint = CGPoint(x: 0.5, y: 1)
+        pill.bounds = CGRect(x: 0, y: 0, width: width, height: height - Self.rowHeight + 3)
+        pill.position = CGPoint(x: width / 2, y: height - Self.rowHeight + 3)
+        content.layer?.insertSublayer(pill, at: 0); surface = pill
         // The logo's batteries sit at (14, 12.5) and (18, 8.5) from the lower left of its 32 x 22 picture; row 0 is the bar's own row.
         let logoOrigin = CGPoint(x: width / 2 - 16, y: height - Self.rowHeight)
         let rearStart = CGPoint(x: logoOrigin.x + 14, y: logoOrigin.y + 12.5), frontStart = CGPoint(x: logoOrigin.x + 18, y: logoOrigin.y + 8.5)
@@ -108,6 +122,13 @@ final class DropPresenter {
         }
         let frontGhost = ghost(logoImages.front)
         let rearGhost = count >= 2 ? ghost(logoImages.rear) : nil
+        if !Self.calm {
+            let grow = CABasicAnimation(keyPath: "bounds.size.height"); grow.fromValue = 3; grow.toValue = pill.bounds.height
+            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1
+            let both = CAAnimationGroup(); both.animations = [grow, fade]; both.duration = 0.3
+            both.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            pill.add(both, forKey: "open")
+        }
         let window = panel ?? DropPanel(contentRect: content.bounds, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
         window.level = .statusBar; window.hidesOnDeactivate = false

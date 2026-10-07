@@ -114,6 +114,9 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let brandCell = StatusCell(id: "usage-hud", length: SystemBattery.stackedWidth + StatusGroup.gap)
     var contrastTimer: Timer?
     var openMenu: NSMenu?
+    /// Any menu being tracked: a hover panel must not open under it, and one already open goes away.
+    var menuTracking = false
+    var hoverMonitor: Any?
     var panels: [String: Panel] = [:]
     var trackers: [String: HoverTracker] = [:]
     var hovered: String?
@@ -153,6 +156,12 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var home: URL { engine.root }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.menuTracking = true; self?.closeHover()
+        }
+        NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in self?.menuTracking = false }
+        // A click anywhere else (another app, the desktop) puts a hover panel away; clicks on the bar are handled by the cell.
+        hoverMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in self?.closeHover() }
         NSApp.setActivationPolicy(.accessory)
         // An installed app starts at login by itself; a build run from Terminal does not register.
         if #available(macOS 13, *), Bundle.main.bundleURL.pathExtension == "app", SMAppService.mainApp.status == .notRegistered {
@@ -432,6 +441,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let logo = window.convertToScreen(sender.convert(sender.bounds, to: nil))
         let dark = darkMenuBar
+        drop.dark = dark
         drop.show(entries, from: logo, logoImages: (SystemBattery.stacked(dark: dark, front: false), SystemBattery.stacked(dark: dark, rear: false)), screen: screen)
     }
     /// With the click log on, say which menu or submenu really appears and which entry it hangs from.
@@ -646,16 +656,25 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panels[panel.id] = panel
         if trackers[panel.id] == nil, let button = item.button {
             let tracker = HoverTracker(), id = panel.id
-            tracker.changed = { [weak self] inside in
+            tracker.changed = { [weak self, weak button] inside in
                 guard let self = self else { return }
                 if inside {
+                    // The tracking area is rebuilt whenever the battery is redrawn, which reports a leave and an enter at once.
+                    if self.hovered == id { return }
                     self.hovered = id; self.acknowledged[id] = self.panels[id]?.alert
                     // Just long enough to ignore a pointer passing over on its way elsewhere.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.showHover(id) }
                 } else {
-                    if self.hovered == id { self.hovered = nil }
-                    if self.popover.isShown { self.popover.close() }
-                    self.modelPopover.close()
+                    // Leaving counts only if the pointer is really outside a moment later.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                        if let button = button, let window = button.window,
+                           window.convertToScreen(button.convert(button.bounds, to: nil)).contains(NSEvent.mouseLocation) { return }
+                        if self.hovered == id { self.hovered = nil }
+                        if self.popover.isShown { self.popover.close() }
+                        self.modelPopover.close()
+                        self.updatePulse(); self.drawIcon(id)
+                    }
+                    return
                 }
                 self.updatePulse()
                 self.drawIcon(id)
@@ -827,7 +846,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var droppedAnchors: [String: NSView] = [:]
     func hoverButton(_ id: String) -> NSView? { droppedAnchors[id] ?? items[id]?.button }
     func showHover(_ id: String) {
-        guard openMenu == nil, hovered == id, let panel = panels[id] else { return }
+        guard openMenu == nil, !menuTracking, hovered == id, let panel = panels[id] else { return }
         let edge: NSRectEdge = droppedAnchors[id] != nil ? .maxX : .minY
         // Antigravity says which pool its battery is showing; it is two pools, so the table is for the click.
         if id == "antigravity", let button = hoverButton(id), button.window != nil {

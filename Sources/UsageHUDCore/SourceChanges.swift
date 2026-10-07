@@ -108,7 +108,7 @@ public struct SourceChanges {
             default: break
             }
         }
-        for label in before.keys.sorted() where keys[label] == nil { events.append(("Stopped tracking " + label, label + " · no longer in " + panel.name)) }
+        for label in before.keys.sorted() where keys[label] == nil && before[label] != "removed" { events.append(("Stopped tracking " + label, label + " · no longer in " + panel.name)) }
         return events
     }
 }
