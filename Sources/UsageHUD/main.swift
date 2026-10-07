@@ -102,9 +102,7 @@ final class CellsView: NSView {
 }
 
 class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    var items: [String: StatusCell] = [:]
-    /// The stacked-batteries logo, left of the batteries: made after the first batteries, since the system puts a new item
-    /// to the left of the ones already there. A click lowers the hidden batteries out of it; with none hidden, or on a right
+    /// The place showing the stacked-batteries logo, the leftmost of this app's items. A click lowers the hidden batteries out of it; with none hidden, or on a right
     /// click, it opens its menu (the hidden batteries, Add source…, Quit).
     var logo: StatusCell?
     var logoMenu: NSMenu?
@@ -120,7 +118,18 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var menuTracking = false
     var hoverMonitor: Any?
     var panels: [String: Panel] = [:]
-    var trackers: [String: HoverTracker] = [:]
+    /// This app's items in the bar, as places: a place keeps its spot, and what it shows (the logo, or a battery by rank) follows
+    /// where it stands, so the bar's order never depends on where macOS last remembered an item.
+    var slots: [StatusCell] = []
+    var slotTrackers: [HoverTracker] = []
+    var layoutCheckPending = false
+    /// The place showing each battery in the bar; a hidden battery has none.
+    var items: [String: StatusCell] = [:]
+    var trackers: [String: HoverTracker] {
+        var found: [String: HoverTracker] = [:]
+        for (id, cell) in items { if let index = slots.firstIndex(where: { $0 === cell }) { found[id] = slotTrackers[index] } }
+        return found
+    }
     var hovered: String?
     var arrangedIDs: [String] = []
     var shelf = Shelf(levels: UserDefaults.standard.dictionary(forKey: "shelfLevels") as? [String: Double] ?? [:],
@@ -342,7 +351,6 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard forcedDarkBar == nil, let button = logo?.button ?? items.values.first(where: { $0.isVisible })?.button,
               let dark = MenuBarInk.isDark(button), dark != barDark else { return }
         barDark = dark
-        logo?.button?.contentTintColor = dark ? .white : .black
         logo?.button?.image = logoImage()
         fades.removeAll()
         for panel in Array(panels.values) { render(panel) }
@@ -352,8 +360,9 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let id = hovered; hovered = nil; popover.close(); modelPopover.close()
         if let id = id { drawIcon(id) }
     }
+    /// No tint on the item's button: the batteries and logo carry their own colours, and the bar's ink is measured from this
+    /// button, so a tint set here would be measured back and the batteries would stop following the wallpaper.
     func configure(_ cell: StatusCell) {
-        cell.button?.contentTintColor = darkMenuBar ? .white : .black
         cell.onDrop = { [weak self] urls in self?.addSources(urls) }
     }
     let renewal = ClaudeRenewal()
@@ -425,7 +434,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = logo?.button, let window = button.window, let screen = window.screen else { return }
         let entries = dropEntries()
         guard !entries.isEmpty else { return }
-        drop.onPick = { [weak self] id in self?.drop.close(); self?.keepInBar(id) }
+        drop.onPick = { [weak self] id in self?.closeHover(); self?.drop.close(); self?.keepInBar(id) }
         drop.onContext = { [weak self] id, view, event in
             guard let self = self, let panel = self.panels[id] else { return }
             NSMenu.popUpContextMenu(self.providerMenu(panel), with: event, for: view)
@@ -437,8 +446,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // No highlight of our own on the logo while its batteries are out: macOS 27 draws its highlight only for an item whose
         // own menu is open, and a drawn imitation is what flashed against it before.
-        drop.changed = { [weak self] count in if count == 0 { self?.droppedAnchors.removeAll() } }
-        drop.anchorWindow = window
+        drop.changed = { [weak self] count in if count == 0 { self?.closeHover(); self?.droppedAnchors.removeAll() } }
         drop.show(entries, from: window.convertToScreen(button.convert(button.bounds, to: nil)), screen: screen)
     }
     /// Fills `rect` with the provider tint, or the model-family palette carried by an Antigravity row.
@@ -613,38 +621,14 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return image
     }
     func render(_ panel: Panel) {
-        let item = items[panel.id] ?? StatusCell(id: panel.id)
-        configure(item)
-        items[panel.id] = item
+        let new = panels[panel.id] == nil
         panels[panel.id] = panel
-        if trackers[panel.id] == nil, let button = item.button {
-            let tracker = HoverTracker(), id = panel.id
-            tracker.changed = { [weak self, weak button] inside in
-                guard let self = self else { return }
-                if inside {
-                    // The tracking area is rebuilt whenever the battery is redrawn, which reports a leave and an enter at once.
-                    if self.hovered == id { return }
-                    self.hovered = id; self.acknowledged[id] = self.panels[id]?.alert
-                    // Just long enough to ignore a pointer passing over on its way elsewhere.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.showHover(id) }
-                } else {
-                    // Leaving counts only if the pointer is really outside a moment later.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-                        if let button = button, let window = button.window,
-                           window.convertToScreen(button.convert(button.bounds, to: nil)).contains(NSEvent.mouseLocation) { return }
-                        if self.hovered == id { self.hovered = nil }
-                        if self.popover.isShown { self.popover.close() }
-                        self.modelPopover.close()
-                        self.updatePulse(); self.drawIcon(id)
-                    }
-                    return
-                }
-                self.updatePulse()
-                self.drawIcon(id)
-            }
-            button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                                  owner: tracker, userInfo: nil))
-            trackers[panel.id] = tracker
+        if panel.alert == nil { acknowledged[panel.id] = nil }
+        // A battery never seen before takes its place now; `load` arranges them all once every reading is in. One that is only
+        // redrawn (a new bar shade, an update offer) is not put back in the bar if it left it.
+        guard let item = items[panel.id] else {
+            if new && !arrangedIDs.contains(panel.id) { arrange(arrangedIDs + [panel.id]) }
+            updatePulse(); return
         }
         drawIcon(panel.id)
         let displayed = displayedQuota(panel)
@@ -654,7 +638,6 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ?? ((mainBalance?.right ?? "balance") + (cached ? " · cached" : ""))
         // Money rows (credits, extra usage) ride along in the hover text, so balances need no click.
         let money = panel.windows.filter { $0.pct == nil && $0.right != nil && $0.label != panel.name }.map { "\n" + $0.label + ": " + ($0.right ?? "") + ($0.isCached ? " · cached" : "") }
-        if panel.alert == nil { acknowledged[panel.id] = nil }
         // Providers with per-key cells get the hover panel instead of a tooltip.
         item.toolTip = !panel.cells.isEmpty ? nil : (panel.alert.map { "⚠︎ " + $0 + "\n" } ?? "") + (panel.fix.map { _ in "Click to sign in again\n" } ?? "") + panel.name + " · " + reading + (hoverPanel(panel) != nil ? "; lighter fill = 7d, hover to show 7d" : "") + money.joined()
         item.button?.setAccessibilityLabel(panel.name + " usage")
@@ -664,6 +647,47 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updatePulse()
         item.menu = providerMenu(panel)
         if hovered == panel.id && popover.isShown { showCells(panel.id) }
+    }
+    /// The visible places as they stand on screen, left to right, and whether macOS has laid them out yet (before it has, a
+    /// newer item stands left of an older one).
+    func placesLeftToRight() -> ([StatusCell], Bool) {
+        let visible = slots.filter(\.isVisible)
+        // A fresh item reports a frame at the origin with no height until macOS has placed it.
+        let laidOut = visible.allSatisfy { ($0.button?.window?.frame.height ?? 0) > 0 }
+        return (laidOut ? visible.sorted { $0.button!.window!.frame.minX < $1.button!.window!.frame.minX } : visible.reversed(), laidOut)
+    }
+    /// A new place in the bar, with its hover tracking; whichever battery it shows at the moment is the one hovered.
+    func makeSlot() -> StatusCell {
+        let cell = StatusCell(id: "place \(slots.count)")
+        configure(cell)
+        let tracker = HoverTracker()
+        tracker.changed = { [weak self, weak cell] inside in
+            guard let self = self, let cell = cell, let id = cell.shownID else { return }
+            if inside {
+                // The tracking area is rebuilt whenever the battery is redrawn, which reports a leave and an enter at once.
+                if self.hovered == id { return }
+                self.hovered = id; self.acknowledged[id] = self.panels[id]?.alert
+                // Just long enough to ignore a pointer passing over on its way elsewhere.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.showHover(id) }
+            } else {
+                // Leaving counts only if the pointer is really outside a moment later.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                    if let button = cell.button, let window = button.window,
+                       window.convertToScreen(button.convert(button.bounds, to: nil)).contains(NSEvent.mouseLocation) { return }
+                    if self.hovered == id { self.hovered = nil }
+                    if self.popover.isShown { self.popover.close() }
+                    self.modelPopover.close()
+                    self.updatePulse(); self.drawIcon(id)
+                }
+                return
+            }
+            self.updatePulse()
+            self.drawIcon(id)
+        }
+        cell.button?.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                                    owner: tracker, userInfo: nil))
+        slots.append(cell); slotTrackers.append(tracker)
+        return cell
     }
     /// Construct a fresh menu for both the status item and overflow: copying an NSMenu archives its views.
     func providerMenu(_ panel: Panel) -> NSMenu {
@@ -758,13 +782,40 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let arrangement = shelf.arrange(ids, limit: visibleLimit, urgent: Set(ids.filter { panels[$0]?.alert != nil }))
         let hidden = arrangement.hidden
         hiddenIDs = shelf.ranked(ids).filter(hidden.contains)
-        for (id, item) in items { item.isVisible = ids.contains(id) && !hidden.contains(id) }
-        let logo = self.logo ?? StatusCell(id: "usage-hud")
-        if self.logo == nil {
-            self.logo = logo
-            logo.button?.target = self; logo.button?.action = #selector(logoClicked(_:))
-            logo.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        let shown = arrangement.shown.filter { panels[$0] != nil }
+        // Every item is a place; where each one stands is macOS's business (it remembers places from earlier runs in its own
+        // way), so the places are read left to right on screen: the leftmost shows the logo, the rest the batteries by rank.
+        let needed = shown.count + 1
+        while slots.count < max(needed, visibleLimit + 1) { _ = makeSlot() }
+        for (index, place) in slots.enumerated() { place.isVisible = index < needed }
+        let (ordered, laidOut) = placesLeftToRight()
+        if !laidOut && !layoutCheckPending {
+            layoutCheckPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self = self else { return }
+                self.layoutCheckPending = false; self.arrange(self.arrangedIDs)
+            }
         }
+        let logo = ordered[0]
+        let moved = items.filter { id, cell in shown.firstIndex(of: id).map { ordered[$0 + 1] !== cell } ?? true }.keys
+        if let id = hovered, moved.contains(id) { closeHover() }
+        if self.logo !== logo, drop.isShown { drop.close() }
+        items = [:]
+        for (index, place) in ordered.enumerated() {
+            let id = index == 0 ? nil : shown[index - 1]
+            place.shownID = id
+            if let id = id {
+                items[id] = place; fades[id] = nil; shownLabel[id] = nil
+                place.button?.target = nil; place.button?.action = nil
+            } else {
+                place.menu = nil
+                place.button?.target = self; place.button?.action = #selector(logoClicked(_:))
+                place.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
+            }
+        }
+        for place in slots.dropFirst(needed) { place.shownID = nil; place.menu = nil }
+        self.logo = logo
+        for id in shown { if let panel = panels[id] { render(panel) } }
         configure(logo)
         logo.button?.image = logoImage()
         if hidden.isEmpty {
@@ -956,20 +1007,25 @@ if CommandLine.arguments.contains("--self-test") {
     for id in ["glm", "deepseek"] { delegate.render(Panel(id: id, name: id.uppercased(), windows: [Window(label: "5h", pct: 10)])) }
     delegate.shelf = Shelf()
     delegate.arrange(["codex", "claude", "openrouter", "glm", "deepseek"])
-    precondition(delegate.items["glm"]?.isVisible == false && delegate.items["deepseek"]?.isVisible == false)
+    precondition(delegate.items["glm"] == nil && delegate.items["deepseek"] == nil)
     precondition(delegate.items["codex"]?.isVisible == true && delegate.logo?.button?.image != nil && delegate.logo?.button?.accessibilityLabel() == "Usage HUD, 2 more usage batteries")
     precondition(delegate.hiddenIDs.count == 2 && delegate.dropEntries().map(\.id) == delegate.hiddenIDs)
     precondition(delegate.logoMenu?.items.first?.submenu?.items.contains { $0.title.hasPrefix("Refresh GLM") } == true)
     // Choosing a hidden battery to keep puts it in the bar and sends another into the logo's menu.
-    precondition(delegate.items["glm"]?.isVisible == false)
+    // The places keep their spots in the bar; only what they show changes.
+    let places = delegate.slots.map(ObjectIdentifier.init)
     delegate.shelf.pin("glm"); delegate.arrange(delegate.arrangedIDs)
-    precondition(delegate.items["glm"]?.isVisible == true)
+    precondition(delegate.items["glm"]?.isVisible == true && delegate.slots.map(ObjectIdentifier.init) == places)
+    precondition(delegate.placesLeftToRight().0.map(\.shownID) == [nil] + delegate.shelf.arrange(delegate.arrangedIDs, limit: delegate.visibleLimit, urgent: []).shown)
+    precondition(delegate.placesLeftToRight().0.first === delegate.logo)
     delegate.shelf.pins = []; delegate.arrange(delegate.arrangedIDs)
-    precondition(delegate.items["glm"]?.isVisible == false)
+    precondition(delegate.items["glm"] == nil)
     delegate.arrange(["codex", "claude"])
     precondition(delegate.hiddenIDs.isEmpty && delegate.logo?.isVisible == true)
     // Each battery is its own status item with its own menu, so the system handles its press, highlight and menu.
     precondition(delegate.items["codex"]?.item !== delegate.items["claude"]?.item && delegate.items["codex"]?.menu != nil)
+    // The bar's ink is measured from these buttons, so none of them may carry a tint of its own.
+    precondition(delegate.logo?.button?.contentTintColor == nil && delegate.items.values.allSatisfy { $0.button?.contentTintColor == nil })
     precondition(delegate.logo?.menu == nil && delegate.logoMenu?.items.contains { $0.title == "Add source…" } == true)
     // A hover identifier is nonactivating and cannot intercept a subsequent battery click.
     let hover = HoverSurface(), controller = NSViewController()
@@ -982,7 +1038,7 @@ if CommandLine.arguments.contains("--self-test") {
     }
     // An alert pulses until hovered, and the hover text says what is wrong.
     let capped = Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$0.40 left")], alert: "Balance low: $0.40 left")
-    delegate.render(capped)
+    delegate.render(capped); delegate.arrange(["codex", "claude", "openrouter"])
     precondition(delegate.pulsing("openrouter") && delegate.pulse != nil)
     precondition(delegate.items["openrouter"]?.button?.toolTip?.hasPrefix("⚠︎ Balance low") == true)
     precondition(delegate.glow(at: 0) == 0 && delegate.glow(at: 1.6) > 0.5)
@@ -1022,7 +1078,7 @@ if CommandLine.arguments.contains("--self-test") {
     delegate.signingIn = "claude"; delegate.render(signedOut)
     precondition(delegate.items["claude"]?.menu?.items.contains { $0.title == "Approve the sign-in in your browser…" } == true)
     delegate.signingIn = nil
-    precondition(delegate.items["openrouter"]?.menu?.items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
+    precondition(delegate.providerMenu(team).items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
     precondition(CellsView(title: "a", lines: ["b"], rows: team.cells).frame.height == 92)
     // The panel widens to show a whole reset time instead of cutting it off.
     let long = Window(label: "Guy1", pct: 0, right: "$0.00 of $5.00 today · resets in 7h 16m")
@@ -1070,7 +1126,7 @@ if CommandLine.arguments.contains("--self-test") {
     try! representation.representation(using: .png, properties: [:])!.write(to: delegate.home.appendingPathComponent("battery-preview.png"))
     // The battery dissolves when it moves to another pool.
     let pools = Panel(id: "antigravity", name: "Antigravity", windows: [Window(label: "Gemini", pct: 84), Window(label: "Claude & GPT", pct: 7)], lead: "Gemini")
-    delegate.render(pools)
+    delegate.render(pools); delegate.arrange(["antigravity"])
     precondition(delegate.fades["antigravity"] == nil)
     var turned = pools; turned.lead = "Claude & GPT"; delegate.render(turned)
     precondition(delegate.fades["antigravity"] != nil)

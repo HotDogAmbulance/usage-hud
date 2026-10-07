@@ -50,9 +50,13 @@ final class DropPresenter {
     private var generation = 0
     private var tiles: [DropTile] = []
     private var starts: [CGPoint] = []
-    var isShown: Bool { panel?.isVisible == true }
-    /// The logo's window: a click there is the logo's own, which toggles the batteries, so the monitor leaves it alone.
-    weak var anchorWindow: NSWindow?
+    /// Out, and not already on its way back.
+    var isShown: Bool { panel?.isVisible == true && !closing }
+    private var closing = false
+    /// The logo on screen: a click there is the logo's own, which toggles the batteries, so the monitor leaves it alone. (A click
+    /// on a status item does not report the item's window, so it is told by where the pointer is.)
+    private var anchor = NSRect.zero
+    private var onLogo: Bool { anchor.insetBy(dx: -2, dy: -4).contains(NSEvent.mouseLocation) }
     var onPick: (String) -> Void = { _ in }
     var onContext: (String, NSView, NSEvent) -> Void = { _, _, _ in }
     var onHover: (String, NSView, Bool) -> Void = { _, _, _ in }
@@ -63,17 +67,19 @@ final class DropPresenter {
 
     func close() {
         monitors.forEach(NSEvent.removeMonitor); monitors = []
-        guard let panel = panel, panel.isVisible else { return }
+        guard let panel = panel, panel.isVisible, !closing else { return }
+        closing = true
         let opened = generation
         let finish = { [weak self] in
             guard let self = self, self.generation == opened else { return }
-            panel.orderOut(nil); self.changed(0)
+            panel.orderOut(nil); self.closing = false; self.changed(0)
         }
+        ClickLog.write("drop closes")
         if Self.calm { finish(); return }
-        // Back into the logo, which never left.
+        // Back under the bar, to the logo. Put away on a timer rather than a transaction's completion, which did not always come
+        // and left an empty panel up.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24, execute: finish)
         CATransaction.begin()
-        CATransaction.setAnimationDuration(0.22)
-        CATransaction.setCompletionBlock(finish)
         // Explicit animations: a view's own layer does not animate a plain change, so the tiles would vanish at once.
         for (tile, start) in zip(tiles, starts) {
             guard let layer = tile.layer else { continue }
@@ -93,23 +99,28 @@ final class DropPresenter {
         close()
         guard !entries.isEmpty else { return }
         generation += 1
+        anchor = logo
+        ClickLog.write("drop opens with \(entries.count) below \(logo)")
+        if closing, let old = panel { old.orderOut(nil); closing = false }
         let count = entries.count, pitch = Self.rowHeight + Self.gap
-        let rows = count + 1                    // row 0 is the bar's own row, where the logo is
-        let width = max(32, entries.map { $0.image.size.width }.max() ?? 32), height = CGFloat(rows) * pitch - Self.gap
-        let origin = NSPoint(x: logo.midX - width / 2, y: logo.midY - 11 - CGFloat(rows - 1) * pitch)
+        // Below the bar only: a window over the bar itself makes macOS give the bar a solid backing for a few seconds.
+        let width = max(32, entries.map { $0.image.size.width }.max() ?? 32), height = CGFloat(count) * pitch + 4
+        let origin = NSPoint(x: logo.midX - width / 2, y: logo.minY - 1 - height)
         let content = DropContent(frame: NSRect(x: 0, y: 0, width: width, height: height))
         content.wantsLayer = true; content.dismiss = { [weak self] in self?.close() }
-        func rowCentre(_ row: Int) -> CGPoint { CGPoint(x: width / 2, y: height - Self.rowHeight / 2 - CGFloat(row) * pitch) }
+        func rowCentre(_ row: Int) -> CGPoint { CGPoint(x: width / 2, y: height - 4 - Self.rowHeight / 2 - CGFloat(row) * pitch) }
+        // Each battery comes out from under the bar's edge, just below the logo, and goes back there.
+        let edge = CGPoint(x: width / 2, y: height + Self.rowHeight / 2)
         tiles = []; starts = []
         for (index, entry) in entries.enumerated() {
             let tile = DropTile(entry)
             tile.picked = { [weak self] id in self?.onPick(id) }
             tile.contextual = { [weak self] id, view, event in self?.onContext(id, view, event) }
             tile.hover = { [weak self] id, view, inside in self?.onHover(id, view, inside) }
-            tile.frame = NSRect(x: width / 2 - entry.image.size.width / 2, y: rowCentre(index + 1).y - entry.image.size.height / 2,
+            tile.frame = NSRect(x: width / 2 - entry.image.size.width / 2, y: rowCentre(index).y - entry.image.size.height / 2,
                                 width: entry.image.size.width, height: entry.image.size.height)
             content.addSubview(tile); tiles.append(tile)
-            starts.append(rowCentre(0))
+            starts.append(edge)
         }
         let window = panel ?? DropPanel(contentRect: content.bounds, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
@@ -140,11 +151,16 @@ final class DropPresenter {
             }
         }
         // Like a menu: a click anywhere else puts it away, in another app or on another of this app's items. A click on the logo
-        // lands on this panel's empty top row, which puts it away too.
+        // is the logo's own, and puts it away from there.
         let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-        if let global = NSEvent.addGlobalMonitorForEvents(matching: clicks, handler: { [weak self] _ in self?.close() }) { monitors.append(global) }
+        // macOS 27 hands a click on a status item through the system first, so it reaches the global monitor too.
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: clicks, handler: { [weak self] _ in
+            guard let self = self, !self.onLogo else { return }
+            self.close()
+        }) { monitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: clicks, handler: { [weak self] event in
-            if event.window !== self?.panel && event.window !== self?.anchorWindow { self?.close() }
+            guard let self = self else { return event }
+            if event.window !== self.panel && !self.onLogo { self.close() }
             return event
         }) { monitors.append(local) }
     }

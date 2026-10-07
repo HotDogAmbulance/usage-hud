@@ -17,6 +17,8 @@ enum ClickLog {
 final class StatusCell {
     let id: String
     let item: NSStatusItem
+    /// For a battery's place: the provider it shows now.
+    var shownID: String?
     private let catcher = FileCatcher()
     var button: NSStatusBarButton? { item.button }
     var menu: NSMenu? { get { item.menu } set { item.menu = newValue } }

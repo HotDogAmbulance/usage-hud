@@ -66,7 +66,8 @@ final class HoverSurface {
         let anchor = window.convertToScreen(view.convert(rect, to: nil))
         let hover = panel ?? HoverPanel(contentRect: content.bounds, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         hover.isOpaque = false; hover.backgroundColor = .clear; hover.hasShadow = true
-        hover.level = .statusBar; hover.hidesOnDeactivate = false; hover.ignoresMouseEvents = true
+        // One above the lowered batteries, which sit at the bar's level, so a panel beside one is never under the next.
+        hover.level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1); hover.hidesOnDeactivate = false; hover.ignoresMouseEvents = true
         hover.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         hover.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         hover.contentView = NativeSurface(content: content, radius: contentSize.width <= 40 ? 8 : 12)

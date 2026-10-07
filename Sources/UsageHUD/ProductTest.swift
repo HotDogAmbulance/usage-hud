@@ -194,7 +194,7 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func openPreview(_ sender: NSButton) {
         hud.closeHover()
         let id = sender.identifier?.rawValue ?? ""
-        let menu = id == "usage-hud" ? hud.logoMenu : hud.items[id]?.menu
+        let menu = id == "logo" ? hud.logoMenu : hud.items[id]?.menu
         menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY - 3), in: sender)
     }
     func windowWillClose(_ notification: Notification) { NSApp.terminate(nil) }
