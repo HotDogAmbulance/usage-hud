@@ -102,3 +102,19 @@ final class HoverSurface {
         panel = hover; hover.orderFrontRegardless()
     }
 }
+
+/// The system's own glass for a surface that hangs under the menu bar: Liquid Glass where the system has it, else the menu material.
+enum GlassSurface {
+    static func make(frame: NSRect, radius: CGFloat) -> NSView {
+        if let glass = NSClassFromString("NSGlassEffectView") as? NSView.Type {
+            let view = glass.init(frame: frame)
+            if view.responds(to: NSSelectorFromString("setCornerRadius:")) { view.setValue(radius, forKey: "cornerRadius") }
+            return view
+        }
+        let blur = NSVisualEffectView(frame: frame)
+        blur.material = .menu; blur.state = .active; blur.blendingMode = .behindWindow
+        blur.wantsLayer = true; blur.layer?.cornerRadius = radius; blur.layer?.masksToBounds = true
+        blur.layer?.borderWidth = 0.5; blur.layer?.borderColor = NSColor(white: 1, alpha: 0.18).cgColor
+        return blur
+    }
+}

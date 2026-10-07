@@ -64,9 +64,10 @@ extension ModelIdentity {
     static let grokBot: NSImage = {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
             let path = NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 16, height: 16))
-            for (x, y) in [(5.6, 10.4), (11.6, 11.4)] {
-                var eye = NSBezierPath(roundedRect: NSRect(x: -1.0, y: -2.3, width: 2.0, height: 4.6), xRadius: 1, yRadius: 1)
-                var move = AffineTransform(translationByX: x, byY: y); move.rotate(byDegrees: -22)
+            // Two slanted eyes in the upper right of the round head, as in the app's own mark.
+            for (x, y, width, length, degrees) in [(10.4, 12.1, 1.3, 3.0, 25.0), (13.7, 13.0, 1.1, 2.5, 20.0)] {
+                let eye = NSBezierPath(roundedRect: NSRect(x: -width / 2, y: -length / 2, width: width, height: length), xRadius: width / 2, yRadius: width / 2)
+                var move = AffineTransform(translationByX: x, byY: y); move.rotate(byDegrees: degrees)
                 eye.transform(using: move)
                 path.append(eye)
             }

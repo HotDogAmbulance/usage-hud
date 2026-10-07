@@ -68,6 +68,7 @@ final class DropPresenter {
         CATransaction.setAnimationDuration(0.22)
         CATransaction.setCompletionBlock(finish)
         for (tile, start) in zip(tiles, starts) { tile.layer?.opacity = 0; tile.layer?.position = start }
+        panel.contentView?.subviews.first?.layer?.opacity = 0
         CATransaction.commit()
     }
     /// `logo` is the stacked-batteries cell on screen. The logo stays as it is; the hidden batteries come out of it, one row
@@ -76,25 +77,34 @@ final class DropPresenter {
         close()
         guard !entries.isEmpty else { return }
         let count = entries.count, pitch = Self.rowHeight + Self.gap
-        let rows = count + 1                    // row 0 is the bar's own row, where the logo is
-        let width = max(32, entries.map { $0.image.size.width }.max() ?? 32), height = CGFloat(rows) * pitch - Self.gap
-        let origin = NSPoint(x: logo.midX - width / 2, y: logo.midY - 11 - CGFloat(rows - 1) * pitch)
+        let inner = max(32, entries.map { $0.image.size.width }.max() ?? 32), width = inner + 20
+        // The bar's own row (where the logo is), a hairline gap, then the glass holding one row per battery.
+        let glassHeight = CGFloat(count) * pitch - Self.gap + 16, height = Self.rowHeight + 3 + glassHeight
+        let origin = NSPoint(x: logo.midX - width / 2, y: logo.midY + 11 - height)
         let content = DropContent(frame: NSRect(x: 0, y: 0, width: width, height: height))
         content.wantsLayer = true; content.dismiss = { [weak self] in self?.close() }
-        func rowCentre(_ row: Int) -> CGPoint { CGPoint(x: width / 2, y: height - Self.rowHeight / 2 - CGFloat(row) * pitch) }
+        let glass = GlassSurface.make(frame: NSRect(x: 0, y: 0, width: width, height: glassHeight), radius: 16)
+        content.addSubview(glass)
+        func rowCentre(_ row: Int) -> CGPoint { CGPoint(x: width / 2, y: glassHeight - 8 - Self.rowHeight / 2 - CGFloat(row) * pitch) }
+        let logoCentre = CGPoint(x: width / 2, y: height - Self.rowHeight / 2)
         tiles = []; starts = []
         for (index, entry) in entries.enumerated() {
             let tile = DropTile(entry)
             tile.picked = { [weak self] id in self?.onPick(id) }
             tile.contextual = { [weak self] id, view, event in self?.onContext(id, view, event) }
             tile.hover = { [weak self] id, view, inside in self?.onHover(id, view, inside) }
-            tile.frame = NSRect(x: width / 2 - entry.image.size.width / 2, y: rowCentre(index + 1).y - entry.image.size.height / 2,
+            tile.frame = NSRect(x: width / 2 - entry.image.size.width / 2, y: rowCentre(index).y - entry.image.size.height / 2,
                                 width: entry.image.size.width, height: entry.image.size.height)
             content.addSubview(tile); tiles.append(tile)
-            starts.append(rowCentre(0))
+            starts.append(logoCentre)
+        }
+        glass.wantsLayer = true
+        if !Self.calm {
+            let rise = CABasicAnimation(keyPath: "opacity"); rise.fromValue = 0; rise.toValue = 1; rise.duration = 0.18
+            glass.layer?.add(rise, forKey: "appear")
         }
         let window = panel ?? DropPanel(contentRect: content.bounds, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
+        window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = true
         window.level = .statusBar; window.hidesOnDeactivate = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         window.contentView = content

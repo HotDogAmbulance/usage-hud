@@ -359,7 +359,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func configure(_ cell: StatusCell) {
         cell.button?.target = self; cell.button?.action = #selector(openCell(_:))
         cell.button?.contentTintColor = darkMenuBar ? .white : .black
-        cell.button?.beforeClick = { [weak self] in self?.closeHover() }
+        cell.button?.beforeClick = { [weak self] in self?.closeHover(); self?.group.press(true) }
         cell.button?.onDrop = { [weak self] urls in self?.addSources(urls) }
     }
     let renewal = ClaudeRenewal()
@@ -453,6 +453,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func openCell(_ sender: StatusCellButton) {
         closeHover()
+        defer { group.press(false) }
         if sender.sourceID == "overflow", NSApp.currentEvent?.type != .rightMouseDown {
             // A second click on the logo puts the batteries away; a click elsewhere in the bar already did.
             if drop.isShown { drop.close() } else { showDrop(from: sender) }
