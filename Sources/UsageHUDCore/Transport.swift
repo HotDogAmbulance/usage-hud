@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import Security
 
 /// The command-line tools the HUD talks to. An app opened from Finder or at login gets launchd's bare PATH, so the
 /// usual install folders are searched here, and each CLI runs with its own folder on PATH so npm's `env node` resolves.
@@ -146,7 +147,51 @@ final class KeychainReader: CredentialReading {
         if seconds > 2 { throw HUDProblem("Keychain asked for your password; choose Refresh here, then Always Allow", prompted: true) }
         throw HUDProblem("Keychain credential unavailable", gone: true)
     }
+    /// The item's persistent reference is kept (it names no secret) and survives the item's account being renamed, so a renamed
+    /// account is followed to its new name instead of being taken for a deleted key.
+    static func refsFile() -> URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".usage-hud/keychain-refs.json") }
+    func reference(service: String, account: String) -> Data? {
+        var out: CFTypeRef?
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account,
+                                    kSecReturnPersistentRef as String: true]
+        return SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess ? out as? Data : nil
+    }
+    func renamed(service: String, account: String) -> String? {
+        let url = Self.refsFile()
+        let refs = (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] } ?? [:]
+        guard let text = refs[service + "\u{0}" + account], let data = Data(base64Encoded: text) else { return nil }
+        var out: CFTypeRef?
+        let query: [String: Any] = [kSecValuePersistentRef as String: data, kSecReturnAttributes as String: true]
+        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let attributes = out as? [String: Any],
+              let now = attributes[kSecAttrAccount as String] as? String, now != account else { return nil }
+        return now
+    }
+    func remember(service: String, account: String) {
+        guard let data = reference(service: service, account: account) else { return }
+        let url = Self.refsFile()
+        var refs = (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] } ?? [:]
+        let key = service + "\u{0}" + account
+        guard refs[key] != data.base64EncodedString() else { return }
+        refs[key] = data.base64EncodedString()
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? JSONSerialization.data(withJSONObject: refs).write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+    var followed: [String: String] = [:]
     func password(service: String, account: String?) throws -> String {
+        guard let account = account else { return try lookup(service: service, account: nil) }
+        let original = account
+        do {
+            let secret = try lookup(service: service, account: followed[service + "\u{0}" + original] ?? original)
+            if followed[service + "\u{0}" + original] == nil { remember(service: service, account: original) }
+            return secret
+        } catch let problem as HUDProblem where problem.gone {
+            guard let now = renamed(service: service, account: original) else { throw problem }
+            followed[service + "\u{0}" + original] = now
+            return try lookup(service: service, account: now)
+        }
+    }
+    func lookup(service: String, account: String?) throws -> String {
         let arguments = ["find-generic-password", "-s", service] + (account.map { ["-a", $0] } ?? [])
         let stamp = try ask(arguments), key = arguments.joined(separator: "\u{0}")
         if let known = memo[key], known.stamp == stamp { return known.secret }

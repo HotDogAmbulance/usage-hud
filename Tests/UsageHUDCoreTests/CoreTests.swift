@@ -6,8 +6,11 @@ final class FakeCredentials: CredentialReading {
     var text = "fixture"
     /// Services with nothing stored; no team key unless a test asks for one.
     var missing: Set<String> = [OpenRouterProvider.teamService]
+    /// Services whose Keychain item was deleted (the real reader answers at once and says so).
+    var deleted: Set<String> = []
     func password(service: String, account: String?) throws -> String {
         calls += 1
+        if deleted.contains(service) { throw HUDProblem("Keychain credential unavailable", gone: true) }
         if missing.contains(service) { throw HUDProblem("not found") }
         return text
     }
@@ -148,6 +151,15 @@ final class CoreTests {
         expectEqual(http.calls, 1)
         expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("claude.json")), encoding: .utf8)!.contains("fixture"))
     }
+    func testClaude429BacksOffInsteadOfAskingAgain() throws {
+        try seed(); try cache.merge("claude.json", ["oauth_at": 1])
+        credentials.text = "{\"accessToken\":\"fixture\"}"; http.error = HTTPFailure(status: 429)
+        let claude = ClaudeProvider(cache: cache, credentials: credentials, http: http)
+        expectError(try claude.refresh())
+        let calls = http.calls
+        try claude.refresh()
+        expectEqual(http.calls, calls)
+    }
     func testClaude429DoesNotInventExhaustedQuota() throws {
         try seed(); let before = try Data(contentsOf: root.appendingPathComponent("claude.json"))
         credentials.text = "{\"accessToken\":\"fixture\"}"; http.error = HTTPFailure(status: 429)
@@ -268,6 +280,7 @@ final class CoreTests {
         expectNil(panel.windows.first { $0.label == "Free resets" })
         expectFalse(asked.contains { $0.contains("cedar_ember") })
         // Those two are read hourly, not with every quota refresh.
+        try cache.merge("claude.json", ["oauth_at": 1])
         asked = []; try claude.refresh()
         expectEqual(asked.count, 1)
     }
@@ -554,6 +567,30 @@ final class CoreTests {
         try signIn("2020-01-01T00:00:00Z"); http.calls = 0
         do { try grok.refresh(); fail("an old sign-in should wait") } catch let problem as HUDProblem { expectFalse(problem.attention || problem.gone) }
         expectEqual(http.calls, 0)
+    }
+    /// Grok Bot's own saved reading is read from disk, newest first, and an older one never replaces a newer one.
+    func testGrokBotUsageFromItsSavedReading() throws {
+        let bot = GrokBotProvider(cache: cache, home: root)
+        expectError(try bot.refresh())
+        let folder = root.appendingPathComponent("Library/Application Support/Grok Bot/sand-client-persistence")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        func save(_ name: String, percent: Double, readAt: Double) throws {
+            let usage: JSON = ["percentUsed": percent, "nextResetMs": 4_102_444_800_000.0, "isSandTrial": true, "grokPlanLabel": "Grok Bot Plan"]
+            try JSONSerialization.data(withJSONObject: ["schemaVersion": 2, "value": ["kind": "present", "reading": ["usage": usage, "readAtMs": readAt],
+                "expiresAtMs": 4_102_444_800_000.0]]).write(to: folder.appendingPathComponent(name))
+        }
+        try Data("{}".utf8).write(to: folder.appendingPathComponent("other.blob"))
+        expectError(try bot.refresh()); expectFalse(bot.shown())
+        let now = Date().timeIntervalSince1970 * 1000
+        try save("a.blob", percent: 12, readAt: now - 5000); try save("b.blob", percent: 30, readAt: now - 1000)
+        try bot.refresh()
+        let panel = bot.panel()
+        expectEqual(panel.windows.first?.label, "7d"); expectEqual(panel.windows.first?.pct, 30)
+        expectNotNil(panel.windows.first?.resets_at); expectEqual(panel.note, "Plan: Trial"); expectTrue(bot.shown())
+        // Nothing newer has been written, so the battery keeps what it had and waits.
+        do { try bot.refresh(); fail("an unchanged reading should wait") } catch let problem as HUDProblem { expectFalse(problem.attention || problem.gone) }
+        try save("a.blob", percent: 45, readAt: now + 1000)
+        try bot.refresh(); expectEqual(bot.panel().windows.first?.pct, 45)
     }
     /// Kimi Code reports counts as strings (a zero may be missing) and, on newer plans, a ratio per pool.
     func testKimiCodeWindowsAndPlan() throws {
@@ -842,6 +879,21 @@ final class CoreTests {
         expectNil(OpenRouterProvider.nextReset(nil, after: saturday))
         expectEqual(Shelf().arrange(["codex", "claude", "openrouter", "kimi"], limit: 3, urgent: ["kimi"]).hidden, ["openrouter"])
     }
+    func testDraggedBatteryTakesItsSeat() {
+        let ids = ["codex", "claude", "openrouter", "kimi", "glm"]
+        var shelf = Shelf()
+        // kimi, hidden, is dragged onto claude: it stands where claude stood, and claude goes down.
+        shelf.place("kimi", at: "claude", bar: ["codex", "claude", "openrouter"])
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "kimi", "openrouter"])
+        expectEqual(shelf.arrange(ids, limit: 3).hidden, ["claude", "glm"])
+        // Two batteries in the bar trade places.
+        shelf.place("openrouter", at: "codex", bar: ["codex", "kimi", "openrouter"])
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["openrouter", "kimi", "codex"])
+        // Use no longer reorders a laid bar; one asking for attention is added after it.
+        expectEqual(shelf.arrange(ids, limit: 3, urgent: ["glm"]).shown, ["openrouter", "kimi", "codex", "glm"])
+        // A battery that went away leaves its seat to the best of the rest.
+        expectEqual(shelf.arrange(["codex", "claude", "openrouter", "glm"], limit: 3).shown, ["openrouter", "codex", "claude"])
+    }
     func testRouterTeamListsEveryKeyWithoutPulsing() throws {
         credentials.missing = []
         let first: [JSON] = (0..<100).map { ["name": "k\($0)", "usage_daily": 0.5, "limit": 5, "limit_reset": "daily",
@@ -869,24 +921,89 @@ final class CoreTests {
         try FileManager.default.createDirectory(at: opencode, withIntermediateDirectories: true)
         try "{\"openrouter\":{\"type\":\"api\",\"key\":\"\(alice)\"}}".write(to: opencode.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
         try "export OPENROUTER_API_KEY=sk-or-v1-short\nexport OPENROUTER_API_KEY=\(bob)\nexport ALICE_OPENROUTER_KEY='\(alice)'".write(to: root.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
-        try "OPENROUTER_API_KEY=\(carol) agent run\n# \(bob)".write(to: root.appendingPathComponent("boot-carol.sh"), atomically: true, encoding: .utf8)
-        // Organised folders are searched; guarded and too-deep ones are not.
-        for (folder, key) in [("team/research", "d4"), ("Documents", "e5"), ("a/b/c/d", "f6")] {
-            let url = root.appendingPathComponent(folder)
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            try "export DANA_KEY=sk-or-v1-\(String(repeating: key, count: 32))".write(to: url.appendingPathComponent("run.sh"), atomically: true, encoding: .utf8)
-        }
-        let found = KeyFinder.find(in: KeyFinder.places(home: root), environment: [:])
-        expectEqual(found.map { $0.label }, ["zshrc", "alice", "boot-carol", "dana"])
-        expectEqual(found.map { $0.key }, [bob, alice, carol, "sk-or-v1-" + String(repeating: "d4", count: 32)])
+        try "OPENROUTER_API_KEY=\(carol) agent run\n".write(to: root.appendingPathComponent("boot-carol.sh"), atomically: true, encoding: .utf8)
+        // Scripts are never crawled; one the person dropped is read, and named after its file.
+        let team = root.appendingPathComponent("team/research")
+        try FileManager.default.createDirectory(at: team, withIntermediateDirectories: true)
+        try "export DANA_KEY=sk-or-v1-\(String(repeating: "d4", count: 32))".write(to: team.appendingPathComponent("run.sh"), atomically: true, encoding: .utf8)
+        expectEqual(KeyFinder.find(in: KeyFinder.places(home: root), environment: [:]).map { $0.label }, ["zshrc", "alice"])
+        KeySources.add([root.appendingPathComponent("boot-carol.sh")], home: root)
+        let found = KeyFinder.find(in: KeyFinder.places(home: root), chosen: KeyFinder.chosen(home: root), environment: [:])
+        expectEqual(found.map { $0.label }, ["Boot-carol", "zshrc", "alice"])
+        expectEqual(found.map { $0.key }, [carol, bob, alice])
         expectEqual(KeyFinder.label(opencode.appendingPathComponent("auth.json")), "opencode")
         expectEqual(KeyFinder.find(in: [], environment: ["OPENROUTER_API_KEY": alice + "\n" + bob]).map { $0.label }, ["environment", "environment 2"])
         http.handler = { url in url.path.hasSuffix("credits") ? ["data": ["total_credits": 9, "total_usage": 1]] : ["data": ["usage": 3, "usage_daily": 0.25]] }
         let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
         expectTrue(provider.automatic)
         try provider.refresh()
-        expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "zshrc", "alice", "boot-carol", "dana"])
+        expectEqual(provider.panel().windows.map { $0.label }, ["OpenRouter", "Boot-carol", "zshrc", "alice"])
         expectFalse(String(data: try Data(contentsOf: root.appendingPathComponent("openrouter.json")), encoding: .utf8)!.contains("sk-or-v1-"))
+    }
+    /// Each key is named after its boot; a deleted or refused key says so once; a free Zen boot is shown but not measured.
+    func testKeysAreNamedAfterTheirBootAndChangesAreAnnounced() throws {
+        let key = "sk-or-v1-" + String(repeating: "a1", count: 32)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let config: [[String: Any]] = [["id": "guy1", "label": "Ox1", "sources": [["provider": "openrouter", "service": "svc", "account": "guy1"]]],
+                                       ["id": "guy3", "label": "Ox3", "sources": [["provider": "openrouter", "service": "svc", "account": "guy3"]]]]
+        try JSONSerialization.data(withJSONObject: config).write(to: root.appendingPathComponent("providers.json"))
+        var counter = 0
+        http.handler = { url in
+            if url.path.hasSuffix("credits") { return ["data": ["total_credits": 9, "total_usage": 1]] }
+            counter += 1; return ["data": ["usage": 3, "usage_daily": 0.25, "label": "sk-or-v1-k\(counter)"]]
+        }
+        let provider = OpenRouterProvider(cache: cache, credentials: credentials, http: http, home: root, environment: [:])
+        var changes = SourceChanges()
+        func panel() -> Panel { var panel = provider.panel(); panel.readingSource = .providerAPI; panel.sourceReadAt = Date().timeIntervalSince1970; return panel }
+        try provider.refresh()
+        expectEqual(panel().keys ?? [:], ["guy1": "ok", "guy3": "ok"])
+        expectEqual(panel().keyNames ?? [:], ["guy1": "Ox1", "guy3": "Ox3"])
+        _ = changes.update(panels: [panel()], announce: false)
+        // The Keychain item is deleted: a notice, and the row says so.
+        credentials.deleted = ["svc"]
+        do { try provider.refresh() } catch {}
+        let removed = changes.update(panels: [panel()])
+        expectTrue(removed?.title == "Keys updated" || removed?.title.hasPrefix("Stopped tracking") == true)
+        expectTrue(provider.panel().cells.contains { $0.right == "Key removed" })
+        expectNil(changes.update(panels: [panel()]))
+        // After its notice the removed key's row goes, quietly, and stays gone.
+        do { try provider.refresh() } catch {}
+        expectFalse(provider.panel().cells.contains { $0.right == "Key removed" })
+        expectNil(changes.update(panels: [panel()]))
+        // Only one key is refused by OpenRouter.
+        credentials.deleted = []; http.handler = { _ in throw HTTPFailure(status: 401) }
+        do { try provider.refresh() } catch {}
+        expectTrue(provider.panel().cells.contains { $0.right == "Key no longer valid" })
+        // A dropped boot of free Zen models and no key.
+        let boot = root.appendingPathComponent("ox9.sh")
+        try "# Single model opencode/muse-spark-1.3-contributor-free, no key.\nexec profile".write(to: boot, atomically: true, encoding: .utf8)
+        _ = KeySources.add([boot], home: root)
+        expectEqual(KeyFinder.zen(in: [boot]), ["Ox9"])
+        try "OPENROUTER_API_KEY=\(key) run opencode/x-free".write(to: boot, atomically: true, encoding: .utf8)
+        expectEqual(KeyFinder.zen(in: [boot]), [])
+    }
+    /// A boot renamed or moved after it was dropped is found again, and its new name shows; a renamed slot announces nothing.
+    func testRenamedBootsAreFollowedAndRenamesStayQuiet() throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let key = "sk-or-v1-" + String(repeating: "c3", count: 32)
+        let old = root.appendingPathComponent("ox4.sh"), new = root.appendingPathComponent("renamed-ox4.sh")
+        try "OPENROUTER_API_KEY=\(key) run".write(to: old, atomically: true, encoding: .utf8)
+        KeySources.add([old], home: root)
+        try FileManager.default.moveItem(at: old, to: new)
+        let chosen = KeyFinder.chosen(home: root)
+        expectEqual(chosen.map { $0.lastPathComponent }, ["renamed-ox4.sh"])
+        expectEqual(KeyFinder.find(in: chosen, chosen: chosen, environment: [:]).map { $0.label }, ["Renamed-ox4"])
+        expectEqual(KeySources.list(home: root).map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }, [new.resolvingSymlinksInPath().path])
+        // A slot given a new label keeps its id, so the key is the same one and no notice is made.
+        var changes = SourceChanges()
+        func panel(_ label: String) -> Panel {
+            var panel = Panel(id: "openrouter", name: "OpenRouter", windows: [Window(label: "OpenRouter", right: "$9 left")])
+            panel.keys = ["guy1": "ok"]; panel.keyNames = ["guy1": label]
+            panel.readingSource = .providerAPI; panel.sourceReadAt = Date().timeIntervalSince1970
+            return panel
+        }
+        _ = changes.update(panels: [panel("Ox1")], announce: false)
+        expectNil(changes.update(panels: [panel("Renamed")]))
     }
     /// A Keychain password prompt may follow a click on Refresh, never a background timer.
     func testKeychainPromptNeverReturnsOnItsOwn() throws {
@@ -1010,6 +1127,83 @@ final class CoreTests {
         let healed = claude(nil)
         expectTrue(healed?.fix == nil && healed?.alert == nil && healed?.note == "")
     }
+    func testPinnedBatteriesTakeAPlaceInTheBar() {
+        var shelf = Shelf()
+        let ids = ["codex", "claude", "openrouter", "glm", "kimi"]
+        shelf.pin("kimi", now: 1000)
+        expectEqual(shelf.arrange(ids, limit: 3, now: 1000).shown, ["codex", "claude", "kimi"])
+        // A week with the battery unused, and the pin lapses; used meanwhile, it holds.
+        expectEqual(shelf.arrange(ids, limit: 3, now: 1000 + Shelf.pinLife + 1).shown, ["codex", "claude", "openrouter"])
+        shelf.lastUsed["kimi"] = 1000 + Shelf.pinLife
+        expectEqual(shelf.arrange(ids, limit: 3, now: 1000 + Shelf.pinLife + 1).shown, ["codex", "claude", "kimi"])
+        shelf.lastUsed["kimi"] = nil
+        shelf.pins = []; shelf.pinnedAt = [:]; shelf.togglePin("kimi")
+        shelf.pin("kimi"); expectEqual(shelf.pins, ["kimi"])
+        shelf.togglePin("glm")
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "glm", "kimi"])
+        // A battery asking for attention is never pushed out by a choice.
+        expectEqual(shelf.arrange(ids, limit: 3, urgent: ["openrouter"]).shown, ["openrouter", "glm", "kimi"])
+        shelf.togglePin("kimi")
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "claude", "glm"])
+    }
+    func testChosenFoldersAreReadEvenWhenHiddenAndKeepNoKeys() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("hud-sources-" + UUID().uuidString)
+        let folder = root.appendingPathComponent(".tools/launchers")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let key = "sk-or-v1-" + String(repeating: "ab", count: 32)
+        try ("export OX1_OPENROUTER_KEY=" + key + "\n").write(to: folder.appendingPathComponent("ox1.sh"), atomically: true, encoding: .utf8)
+        expectEqual(KeyFinder.find(in: KeyFinder.places(home: root), environment: [:]).count, 0)
+        expectEqual(KeySources.add([root.appendingPathComponent(".tools")], home: root), 1)
+        expectEqual(KeyFinder.find(in: KeyFinder.places(home: root), environment: [:]).map { $0.label }, ["ox1"])
+        let saved = try String(contentsOf: root.appendingPathComponent(".usage-hud/key-sources.json"), encoding: .utf8)
+        expectTrue(!saved.contains(key))
+        expectEqual(KeySources.add([root.appendingPathComponent(".tools")], home: root), 1)
+        expectEqual(KeySources.list(home: root).count, 1)
+        try? FileManager.default.removeItem(at: root)
+    }
+    func testExpiredClaudeSignInRenewsRarelyAndLeavesNothing() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("hud-renew-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".local/bin"), withIntermediateDirectories: true)
+        let fake = root.appendingPathComponent(".local/bin/claude")
+        try "#!/bin/sh\n".write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        var clock = 1_000_000.0, calls: [[String]] = [], reply = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"unifiedWindows\":{\"five_hour\":{\"utilization\":0.23,\"resetsAt\":1791293400},\"seven_day\":{\"utilization\":0.4,\"resetsAt\":1791489600}}}}\n{\"type\":\"result\",\"is_error\":false,\"result\":\"OK\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cache_creation_input_tokens\":100}}", status: Int32 = 0
+        let renewal = ClaudeRenewal(home: root, run: { _, arguments, directory in
+            calls.append(arguments)
+            // Claude Code leaves an empty project folder behind even when nothing is saved.
+            let project = root.appendingPathComponent(".claude/projects/" + directory.path.map { $0 == "/" || $0 == "." ? "-" : String($0) }.joined() + "/memory")
+            try? FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+            return (status, reply.data(using: .utf8)!)
+        }, now: { clock })
+        let first = renewal.renewIfDue(lastRealUse: 0)
+        expectEqual(first?.title, "Claude sign-in renewed")
+        expectTrue(first?.lines.first?.contains("115 tokens") == true)
+        let stored = Cache(root.appendingPathComponent(".usage-hud")).read("claude.json")
+        expectEqual(stored["source"] as? String, "claude-run")
+        expectEqual(quotaWindows(stored, now: 1_000_000).map { $0.label + String(Int($0.pct ?? -1)) }.sorted(), ["5h23", "7d40"])
+        expectTrue(calls[0].contains("--no-session-persistence") && calls[0].contains("haiku") && calls[0].contains("--tools"))
+        expectEqual(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".claude/projects").path).count, 0)
+        expectTrue((try String(contentsOf: root.appendingPathComponent(".usage-hud/renewals.log"), encoding: .utf8)).contains("renewed with one Claude Code call"))
+        // Not again within six hours.
+        clock += 3600; expectEqual(renewal.renewIfDue(lastRealUse: 0) == nil, true)
+        clock += 6 * 3600
+        // Two more with nobody using Claude Code, then it stops until real use is seen again.
+        expectEqual(renewal.renewIfDue(lastRealUse: 0) != nil, true)
+        clock += 7 * 3600; expectEqual(renewal.renewIfDue(lastRealUse: 0) != nil, true)
+        clock += 7 * 3600; expectEqual(renewal.renewIfDue(lastRealUse: 0) == nil, true)
+        expectEqual(calls.count, 3)
+        clock += 7 * 3600; expectEqual(renewal.renewIfDue(lastRealUse: clock - 100) != nil, true)
+        // A failure stays quiet and is tried again in half an hour; the opt-out file stops everything.
+        clock += 7 * 3600; status = 1; expectEqual(renewal.renewIfDue(lastRealUse: clock - 100) == nil, true)
+        expectEqual(calls.count, 5)
+        clock += 600; expectEqual(renewal.renewIfDue(lastRealUse: clock - 100) == nil && calls.count == 5, true)
+        clock += 1300; status = 0
+        expectEqual(renewal.renewIfDue(lastRealUse: clock - 100) != nil && calls.count == 6, true)
+        clock += 7 * 3600
+        try Data().write(to: root.appendingPathComponent(".usage-hud/no-auto-renew"))
+        expectEqual(renewal.renewIfDue(lastRealUse: clock - 100) == nil && calls.count == 6, true)
+        try? FileManager.default.removeItem(at: root)
+    }
     func testShelfLearnsEachPersonsMainTools() {
         func quota(_ id: String, _ pct: Double) -> Panel { Panel(id: id, name: id, windows: [Window(label: "5h", pct: pct)]) }
         func balance(_ id: String, _ amount: Double) -> Panel { Panel(id: id, name: id, windows: [Window(label: id, right: String(format: "$%.2f left", amount))]) }
@@ -1088,6 +1282,13 @@ final class CoreTests {
         try ClaudeProvider(cache: cache, credentials: credentials, http: http).refresh()
         expectEqual(credentials.calls, 0); expectEqual(http.calls, 0)
         try cache.merge("claude.json", ["oauth_at": 0])
+        credentials.text = "{\"accessToken\":\"fixture\",\"expiresAt\":1}"
+        try ClaudeProvider(cache: cache, credentials: credentials, http: http, home: root).refresh()
+        expectEqual(credentials.calls, 0); expectEqual(http.calls, 0)
+        // Once the actual window ages out, the existing read-only OAuth fallback may run.
+        var blob = cache.read("claude.json"), windows = dict(cache.read("claude.json")["rate_limits"])
+        var five = dict(windows["five_hour"]); five["captured_at"] = 1; windows["five_hour"] = five
+        blob["rate_limits"] = windows; try cache.write("claude.json", blob)
         credentials.text = "{\"accessToken\":\"fixture\"}"; http.response = ["five_hour": ["utilization": 12]]
         try ClaudeProvider(cache: cache, credentials: credentials, http: http, home: root).refresh()
         expectEqual(http.calls, 1)

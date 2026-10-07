@@ -30,6 +30,7 @@ public final class Engine {
                                       GLMProvider(cache: cache, credentials: credentials, http: http),
                                       AntigravityProvider(cache: cache),
                                       GrokProvider(cache: cache, http: http),
+                                      GrokBotProvider(cache: cache),
                                       KeyProvider.vercel(cache: cache, credentials: credentials, http: http),
                                       KeyProvider.deepSeek(cache: cache, credentials: credentials, http: http),
                                       KeyProvider.kimi(cache: cache, credentials: credentials, http: http),
@@ -74,7 +75,7 @@ public final class Engine {
             panel.readingSource = (blob["reading_source"] as? String).flatMap(ReadingSource.init(rawValue:))
             panel.sourceReadAt = number(blob["source_read_at"])
             if provider.id == "claude" {
-                let legacy: ReadingSource? = blob["source"] as? String == "statusline" ? .claudeStatusline :
+                let legacy: ReadingSource? = ["statusline", "claude-run"].contains(blob["source"] as? String) ? .claudeStatusline :
                     blob["source"] as? String == "oauth-usage-get" ? .claudeOAuth : nil
                 let usable = quotaWindows(blob).contains { !$0.isCached && ($0.label == "5h" || $0.label.hasPrefix("7d")) }
                 panel.readingSource = usable ? legacy : nil
@@ -110,11 +111,20 @@ public final class Engine {
         guard let payload = try? JSONSerialization.jsonObject(with: data) as? JSON else { return "" }
         let now = Date().timeIntervalSince1970
         var updates: JSON = [:]
-        let windows = dict(payload["rate_limits"])
-        if !windows.isEmpty { try cache.quota("claude.json", windows: windows, extra: ["source": "statusline"]) }
+        let windows = dict(payload["rate_limits"]).filter { key, raw in
+            ["five_hour", "seven_day", "seven_day_sonnet", "seven_day_opus"].contains(key) &&
+                number(dict(raw)["used_percentage"]).map { (0...100).contains($0) } == true
+        }
+        if !windows.isEmpty {
+            try cache.quota("claude.json", windows: windows,
+                            extra: ReadingSource.claudeStatusline.receipt(now: now).merging(["source": "statusline"]) { _, new in new }, now: now)
+        }
         let context = number(dict(payload["context_window"])["used_percentage"])
         if let context = context { updates["context_pct"] = context; updates["context_captured_at"] = now }
         if !updates.isEmpty { try cache.merge("claude.json", updates) }
+        if !windows.isEmpty {
+            DistributedNotificationCenter.default().postNotificationName(Self.claudeUsageRead, object: nil, userInfo: nil, deliverImmediately: true)
+        }
         let model = (payload["model"] as? String) ?? (dict(payload["model"])["display_name"] as? String) ?? ""
         var bits = model.isEmpty ? [] : [model]
         if let context = context { bits.append("ctx \(Int(context.rounded()))%") }
@@ -123,6 +133,8 @@ public final class Engine {
         }
         return bits.joined(separator: " | ")
     }
+    /// A successful statusline write, not merely Claude Code activity.
+    public static let claudeUsageRead = Notification.Name("local.usage-hud.claude-usage-read")
     /// Claude Code's hooks call this when it starts, takes a prompt and finishes a turn.
     public static let claudeCodeRan = Notification.Name("local.usage-hud.claude-code-ran")
     /// Our own hook and statusline commands, in exactly the form we write; one someone wrapped in a script of theirs stays theirs.

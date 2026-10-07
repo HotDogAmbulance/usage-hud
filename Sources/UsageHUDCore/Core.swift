@@ -109,6 +109,10 @@ public struct Panel: Codable {
     public var gauge: Double?
     /// A command that fixes the current problem, from the provider; the menu can run it in Terminal.
     public var fix: String?
+    /// What each key (by its id, not its name) under this battery is doing ("ok", "removed", "invalid", "unreachable", "zen"), for per-key notices.
+    public var keys: [String: String]?
+    /// The name shown for each key id above, so a rename changes the text and announces nothing.
+    public var keyNames: [String: String]?
     public var readingSource: ReadingSource?
     public var sourceReadAt: Double?
     public init(id: String, name: String, windows: [Window] = [], note: String = "", alert: String? = nil,

@@ -83,6 +83,21 @@ extension CoreTests {
         _ = try engine.statusline(JSONSerialization.data(withJSONObject: ["context_window": ["used_percentage": 50]]))
         expectEqual(engine.panels().first?.sourceReadAt, receipt)
     }
+    func testClaudeFreshStatuslineClearsFailureWithoutOAuth() throws {
+        let claude = ClaudeProvider(cache: cache, credentials: credentials, http: http, home: root)
+        let engine = Engine(root: root, credentials: credentials, http: http, providers: [claude])
+        credentials.text = "{\"accessToken\":\"fixture\",\"expiresAt\":1}"
+        try cache.quota("claude.json", windows: ["five_hour": ["used_percentage": 50]], now: 1)
+        expectTrue(engine.panels(refresh: "automatic").first?.windows.first?.isCached == true)
+        let before = credentials.calls
+        _ = try engine.statusline(JSONSerialization.data(withJSONObject: ["rate_limits": ["five_hour": ["used_percentage": 20], "seven_day": ["used_percentage": 30]]]))
+        let restored = engine.panels(refresh: "automatic").first
+        expectEqual(restored?.readingSource, .claudeStatusline)
+        expectEqual(restored?.windows.first?.pct, 20)
+        expectTrue(restored?.windows.allSatisfy { !$0.isCached } == true)
+        expectEqual(restored?.note, ""); expectNil(restored?.alert)
+        expectEqual(credentials.calls, before); expectEqual(http.calls, 0)
+    }
     func testGoneEvidenceUsesProviderCacheAndExpiresOnFreshRead() throws {
         let provider = SwitchProvider()
         let engine = Engine(root: root, credentials: credentials, http: http, providers: [provider])

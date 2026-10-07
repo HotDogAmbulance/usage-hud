@@ -9,15 +9,18 @@ enum SystemBattery {
     static let outline = mask("battery-outline", fillInterior: false)
 
     /// Two copies of the installed Mac battery artwork; the front copy masks the rear one.
-    static func stacked() -> NSImage {
-        let image = NSImage(size: NSSize(width: 32, height: 22))
+    static let stackedWidth: CGFloat = 32
+    static func stacked(dark: Bool, front showFront: Bool = true, rear showRear: Bool = true) -> NSImage {
+        let image = NSImage(size: NSSize(width: stackedWidth, height: 22))
+        // Coloured here rather than left to a template tint, which did not reach this button: the logo came out black on a dark bar.
+        let ink: NSColor = dark ? .white : .black
         image.lockFocus()
         func paint(_ mask: CGImage?, in rect: NSRect, ink: NSColor, operation: CGBlendMode = .normal) {
             guard let mask = mask, let context = NSGraphicsContext.current?.cgContext else { return }
             context.saveGState(); context.setBlendMode(operation); context.clip(to: rect, mask: mask)
             ink.setFill(); rect.fill(); context.restoreGState()
         }
-        for (x, y, front) in [(CGFloat(1), CGFloat(8), false), (CGFloat(5), CGFloat(4), true)] {
+        for (x, y, front) in [(CGFloat(1), CGFloat(6.5), false), (CGFloat(5), CGFloat(2.5), true)] where front ? showFront : showRear {
             let rect = NSRect(x: x, y: y, width: 23, height: 12)
             let capRect = NSRect(x: x + 24, y: y, width: 2, height: 12)
             if front {
@@ -25,15 +28,15 @@ enum SystemBattery {
                 paint(cap, in: capRect, ink: .black, operation: .destinationOut)
             }
             if outline != nil {
-                paint(outline, in: rect, ink: .black.withAlphaComponent(front ? 1 : 0.55))
+                paint(outline, in: rect, ink: ink.withAlphaComponent(front ? 1 : BatteryText.trackAlpha(dark: dark)))
             } else {
-                NSColor.black.withAlphaComponent(front ? 1 : 0.55).setStroke()
+                ink.withAlphaComponent(front ? 1 : BatteryText.trackAlpha(dark: dark)).setStroke()
                 let fallback = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 3.5, yRadius: 3.5)
                 fallback.lineWidth = 1; fallback.stroke()
             }
-            paint(cap, in: capRect, ink: .black.withAlphaComponent(front ? 0.5 : 0.35))
+            paint(cap, in: capRect, ink: ink.withAlphaComponent(front ? 0.5 : 0.35))
         }
-        image.unlockFocus(); image.isTemplate = true
+        image.unlockFocus(); image.isTemplate = false
         return image
     }
 
