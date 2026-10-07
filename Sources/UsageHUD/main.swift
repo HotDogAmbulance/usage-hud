@@ -596,7 +596,10 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if weeklyEnd > fillEnd {
             paint(span(fillEnd, weeklyEnd), body: bodyRect, id: warning, light: false, muted: true, alpha: weeklyAlpha, dark: dark, palette: palette)
         }
-        paint(span(0, fillEnd), body: bodyRect, id: warning, light: money != nil && panel.caution == nil && panel.id != "litellm", muted: weeklyShade, alpha: fillAlpha, dark: dark, palette: palette)
+        // A balance is drawn a little paler than a quota, except where the brand colour is the point: LiteLLM's gradient, and
+        // OpenRouter's lime, which paled to a washed yellow.
+        let pale = money != nil && panel.caution == nil && !["litellm", "openrouter"].contains(panel.id)
+        paint(span(0, fillEnd), body: bodyRect, id: warning, light: pale, muted: weeklyShade, alpha: fillAlpha, dark: dark, palette: palette)
         if glow > 0 { HUD.red.withAlphaComponent(glow).setFill(); bodyRect.fill() }
         NSGraphicsContext.restoreGraphicsState()
         NSGraphicsContext.saveGraphicsState()
