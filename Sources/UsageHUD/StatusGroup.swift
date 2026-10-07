@@ -107,16 +107,12 @@ final class StatusGroup {
     /// The rounded edge belongs to hover and press only, like the system's own highlight; at rest the batteries sit on the bar.
     private(set) var pointerInside = false
     private var emphasised = false
-    /// While a menu or the dropped batteries are open, or the button is pressed, the system's own highlight is drawn and ours is off,
-    /// so the two never overlap: ours hands over at once, and takes the hover back when the system's lets go.
-    var menuOpen = false { didSet { item.button?.highlight(menuOpen || pressed); refreshEmphasis() } }
+    /// The pill is the system's own highlight, for hover as well as for a press or an open menu: one drawing, so ours can never
+    /// overlap it or hand over to it. (Ours is kept, hidden, only as the fallback below.)
+    var menuOpen = false { didSet { refreshEmphasis() } }
     private(set) var pressed = false
-    func press(_ down: Bool) {
-        pressed = down
-        item.button?.highlight(down || menuOpen)
-        refreshEmphasis(instant: down)
-    }
-    func refreshEmphasis(instant: Bool = false) { setEmphasis(pointerInside && !menuOpen && !pressed, instant: instant) }
+    func press(_ down: Bool) { pressed = down; refreshEmphasis() }
+    func refreshEmphasis(instant: Bool = false) { setEmphasis(pointerInside || menuOpen || pressed, instant: instant) }
     init() {
         surface = NativeSurface(content: NSView(), radius: StatusGroup.highlightHeight / 2, flat: true)
         item.autosaveName = "Usage HUD group"
@@ -138,8 +134,7 @@ final class StatusGroup {
     func setEmphasis(_ on: Bool, instant: Bool = false) {
         if on == emphasised { return }
         emphasised = on
-        if instant { surface.layer?.removeAllAnimations(); surface.alphaValue = on ? 1 : 0; return }
-        NSAnimationContext.runAnimationGroup { context in context.duration = 0.15; surface.animator().alphaValue = on ? 1 : 0 }
+        item.button?.highlight(on)
     }
     /// Space inside the rounded edge, and between neighbouring batteries (each side of a battery gets half of `gap`).
     static let pad: CGFloat = 15, gap: CGFloat = 6

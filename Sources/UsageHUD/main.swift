@@ -455,11 +455,6 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func openCell(_ sender: StatusCellButton) {
         closeHover()
         defer { group.press(false) }
-        if sender.sourceID == "overflow", NSApp.currentEvent?.type != .rightMouseDown {
-            // A second click on the logo puts the batteries away; a click elsewhere in the bar already did.
-            if drop.isShown { drop.close() } else { showDrop(from: sender) }
-            return
-        }
         drop.close()
         let cell = sender.sourceID == "overflow" ? overflow : sender.sourceID == "usage-hud" ? brandCell : items[sender.sourceID]
         guard let menu = cell?.menu else { ClickLog.write("open \(sender.sourceID) no menu"); return }
@@ -813,7 +808,13 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let panel = panels[id] else { continue }
             let balance = panel.windows.first { $0.label == panel.name }?.right
             let entry = menu.addItem(withTitle: panel.name + (balance.map { "  " + $0 } ?? ""), action: nil, keyEquivalent: "")
-            entry.image = icon(panel); entry.submenu = providerMenu(panel)
+            let detail = providerMenu(panel)
+            if !hidden.isEmpty {
+                let keep = NSMenuItem(title: "Keep in the menu bar", action: #selector(keepInBar(_:)), keyEquivalent: "")
+                keep.target = self; keep.representedObject = id
+                detail.insertItem(keep, at: 0); detail.insertItem(NSMenuItem.separator(), at: 1)
+            }
+            entry.image = icon(panel); entry.submenu = detail
         }
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Add source…", action: #selector(addSourceFromMenu), keyEquivalent: "").target = self
@@ -822,6 +823,13 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         leading.menu = menu
         group.install([leading] + arrangement.shown.compactMap { items[$0] })
         updateContrast()
+    }
+    /// Chosen from a hidden battery's menu: it takes a place in the bar, as a battery picked from the old drop did.
+    @objc func keepInBar(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        shelf.pin(id)
+        UserDefaults.standard.set(shelf.pins, forKey: "shelfPins"); UserDefaults.standard.set(shelf.pinnedAt, forKey: "shelfPinnedAt")
+        arrange(arrangedIDs)
     }
     /// One presentation of keys/pools/budgets, whether the provider is visible or folded into overflow.
     func cellsView(_ panel: Panel, inMenu: Bool = false) -> CellsView {
@@ -1036,7 +1044,8 @@ if CommandLine.arguments.contains("--self-test") {
     delegate.shelf = Shelf()
     delegate.arrange(["codex", "claude", "glm", "openrouter"])
     let hiddenMenu = delegate.overflow?.menu?.items.first { $0.title.hasPrefix("OpenRouter") }?.submenu
-    let hiddenDetail = hiddenMenu?.items.first?.view as? CellsView
+    let hiddenDetail = hiddenMenu?.items.compactMap { $0.view as? CellsView }.first
+    precondition(hiddenMenu?.items.first?.title == "Keep in the menu bar")
     precondition(hiddenDetail?.rows.count == 2 && hiddenDetail !== visibleDetail)
     precondition(hiddenMenu?.items.contains { $0.title == "Refresh OpenRouter" && $0.action != nil } == true)
     precondition(hiddenMenu?.items.contains { $0.title == "All keys (2)" && $0.submenu?.items.count == 2 } == true)
