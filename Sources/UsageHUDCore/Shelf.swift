@@ -15,9 +15,20 @@ public struct Shelf {
     /// a fresh choice; the battery stays one click away in the logo, as before.
     public var pinnedAt: [String: Double]
     public static let pinLife: Double = 7 * 86_400
+    /// The bar as the person laid it out by dragging, left to right. Once set it holds (use no longer reorders it); batteries not
+    /// in it fill any free places by rank, and one asking for attention is added at the end.
+    public var placed: [String]
     public init(levels: [String: Double] = [:], lastUsed: [String: Double] = [:], scores: [String: Double] = [:], scoredAt: Double = 0,
-                pins: [String] = [], pinnedAt: [String: Double] = [:]) {
+                pins: [String] = [], pinnedAt: [String: Double] = [:], placed: [String] = []) {
         self.levels = levels; self.lastUsed = lastUsed; self.scores = scores; self.scoredAt = scoredAt; self.pins = pins; self.pinnedAt = pinnedAt
+        self.placed = placed
+    }
+    /// Puts `id` where `seat` stands in the bar `bar` (left to right): two batteries in the bar trade places; one from outside
+    /// takes the seat and the battery there leaves the bar.
+    public mutating func place(_ id: String, at seat: String, bar: [String]) {
+        if !placed.contains(seat) { placed = bar }
+        guard id != seat, let target = placed.firstIndex(of: seat) else { return }
+        if let from = placed.firstIndex(of: id) { placed.swapAt(from, target) } else { placed[target] = id }
     }
     /// The pin still holds: made, or the battery used, within the last week. A pin with no date (older settings) holds.
     func pinned(_ id: String, now: Double) -> Int? {
@@ -60,9 +71,16 @@ public struct Shelf {
         let key = { (id: String) in (urgent.contains(id) ? 1 : 0, self.pinned(id, now: now) ?? 0, self.scores[id] ?? 0, self.lastUsed[id] ?? 0) }
         return ids.enumerated().sorted { key($0.element) != key($1.element) ? key($0.element) > key($1.element) : $0.offset < $1.offset }.map { $0.element }
     }
-    /// Splits `ids` into those shown and those moved to the overflow item, both in their original order.
+    /// Splits `ids` into those shown and those moved to the overflow item. Without a laid-out bar both keep their original
+    /// order; with one, the shown follow it.
     public func arrange(_ ids: [String], limit: Int, urgent: Set<String> = [], now: Double = Date().timeIntervalSince1970) -> (shown: [String], hidden: [String]) {
-        let shown = Set(ranked(ids, urgent: urgent, now: now).prefix(max(0, limit)))
-        return (ids.filter { shown.contains($0) }, ids.filter { !shown.contains($0) })
+        let laid = Array(placed.filter(ids.contains).prefix(max(0, limit)))
+        guard !laid.isEmpty else {
+            let shown = Set(ranked(ids, urgent: urgent, now: now).prefix(max(0, limit)))
+            return (ids.filter { shown.contains($0) }, ids.filter { !shown.contains($0) })
+        }
+        let rest = ranked(ids.filter { !laid.contains($0) }, urgent: urgent, now: now), free = max(0, limit - laid.count)
+        let shown = laid + rest.prefix(free) + rest.dropFirst(free).filter(urgent.contains)
+        return (shown, ids.filter { !shown.contains($0) })
     }
 }

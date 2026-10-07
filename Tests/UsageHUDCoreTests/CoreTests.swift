@@ -879,6 +879,21 @@ final class CoreTests {
         expectNil(OpenRouterProvider.nextReset(nil, after: saturday))
         expectEqual(Shelf().arrange(["codex", "claude", "openrouter", "kimi"], limit: 3, urgent: ["kimi"]).hidden, ["openrouter"])
     }
+    func testDraggedBatteryTakesItsSeat() {
+        let ids = ["codex", "claude", "openrouter", "kimi", "glm"]
+        var shelf = Shelf()
+        // kimi, hidden, is dragged onto claude: it stands where claude stood, and claude goes down.
+        shelf.place("kimi", at: "claude", bar: ["codex", "claude", "openrouter"])
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "kimi", "openrouter"])
+        expectEqual(shelf.arrange(ids, limit: 3).hidden, ["claude", "glm"])
+        // Two batteries in the bar trade places.
+        shelf.place("openrouter", at: "codex", bar: ["codex", "kimi", "openrouter"])
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["openrouter", "kimi", "codex"])
+        // Use no longer reorders a laid bar; one asking for attention is added after it.
+        expectEqual(shelf.arrange(ids, limit: 3, urgent: ["glm"]).shown, ["openrouter", "kimi", "codex", "glm"])
+        // A battery that went away leaves its seat to the best of the rest.
+        expectEqual(shelf.arrange(["codex", "claude", "openrouter", "glm"], limit: 3).shown, ["openrouter", "codex", "claude"])
+    }
     func testRouterTeamListsEveryKeyWithoutPulsing() throws {
         credentials.missing = []
         let first: [JSON] = (0..<100).map { ["name": "k\($0)", "usage_daily": 0.5, "limit": 5, "limit_reset": "daily",

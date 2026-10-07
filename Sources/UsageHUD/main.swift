@@ -111,6 +111,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let drop = DropPresenter()
     /// While hidden batteries are lowered out of the logo, hovering one anchors its panel to that tile.
     var droppedAnchors: [String: NSView] = [:]
+    /// The hidden batteries are out under the bar (until their closing animation ends).
+    var batteriesOut = false
     /// Whether the bar's ink is light (a dark bar); it follows the wallpaper, so it can differ from the system appearance.
     var barDark = false
     var contrastTimer: Timer?
@@ -137,7 +139,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       scores: UserDefaults.standard.dictionary(forKey: "shelfScores") as? [String: Double] ?? [:],
                       scoredAt: UserDefaults.standard.double(forKey: "shelfScoredAt"),
                       pins: UserDefaults.standard.stringArray(forKey: "shelfPins") ?? [],
-                      pinnedAt: UserDefaults.standard.dictionary(forKey: "shelfPinnedAt") as? [String: Double] ?? [:])
+                      pinnedAt: UserDefaults.standard.dictionary(forKey: "shelfPinnedAt") as? [String: Double] ?? [:],
+                      placed: UserDefaults.standard.stringArray(forKey: "shelfPlaced") ?? [])
     /// Change with `defaults write local.usage-hud visibleBatteries 4`.
     var visibleLimit: Int { UserDefaults.standard.integer(forKey: "visibleBatteries") > 0 ? UserDefaults.standard.integer(forKey: "visibleBatteries") : 3 }
     /// Alerts the user has already seen by hovering, by provider; those batteries stop pulsing until the alert changes.
@@ -430,11 +433,52 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return DropTile.Entry(id: id, name: panel.name, reading: reading, image: icon(panel), state: "")
         }
     }
-    func showDrop() {
-        guard let button = logo?.button, let window = button.window, let screen = window.screen else { return }
+    /// A battery's place opens its menu the system's way. While the hidden batteries are out it takes the press itself instead
+    /// (macOS opens an item's menu before the item sees the press), so the battery can be dragged down onto one of them.
+    func wire(_ place: StatusCell) {
+        guard let id = place.shownID, let panel = panels[id] else { return }
+        if batteriesOut {
+            place.menu = nil
+            place.button?.target = self; place.button?.action = #selector(batteryPressed(_:))
+            place.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        } else {
+            place.menu = providerMenu(panel); place.button?.target = nil; place.button?.action = nil
+        }
+    }
+    /// A battery in the bar pressed while the hidden ones are out: dragged onto one of them, the two trade places; a click
+    /// puts the hidden ones away and opens the battery's menu.
+    @objc func batteryPressed(_ sender: NSStatusBarButton) {
+        guard let place = slots.first(where: { $0.button === sender }), let id = place.shownID, let panel = panels[id] else { return }
+        closeHover()
+        guard drop.isShown, NSApp.currentEvent?.type == .leftMouseDown else { return openMenu(place, panel) }
+        BatteryDrag.follow(icon(panel)) { [weak self] point in
+            guard let self = self else { return }
+            guard let point = point else { return self.openMenu(place, panel) }
+            if let hidden = self.drop.battery(at: point) { self.swap(hidden, into: id) }
+        }
+    }
+    func openMenu(_ place: StatusCell, _ panel: Panel) {
+        drop.close()
+        place.menu = providerMenu(panel); place.button?.performClick(nil); place.menu = nil
+    }
+    /// Where an item stands on screen.
+    func screenRect(_ cell: StatusCell) -> NSRect? {
+        guard let button = cell.button, let window = button.window else { return nil }
+        return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+    func showDrop(animated: Bool = true) {
+        guard let logo = logo, let logoRect = screenRect(logo) else { return }
         let entries = dropEntries()
         guard !entries.isEmpty else { return }
+        let places = placesLeftToRight().0
+        let bar = places.dropFirst().compactMap(screenRect)
         drop.onPick = { [weak self] id in self?.closeHover(); self?.drop.close(); self?.keepInBar(id) }
+        drop.onDrop = { [weak self] id, point in
+            guard let self = self else { return }
+            self.closeHover()
+            let seat = self.placesLeftToRight().0.dropFirst().first { self.screenRect($0)?.insetBy(dx: -2, dy: -6).contains(point) == true }
+            if let seat = seat?.shownID { self.swap(id, into: seat) }
+        }
         drop.onContext = { [weak self] id, view, event in
             guard let self = self, let panel = self.panels[id] else { return }
             NSMenu.popUpContextMenu(self.providerMenu(panel), with: event, for: view)
@@ -446,8 +490,23 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // No highlight of our own on the logo while its batteries are out: macOS 27 draws its highlight only for an item whose
         // own menu is open, and a drawn imitation is what flashed against it before.
-        drop.changed = { [weak self] count in if count == 0 { self?.closeHover(); self?.droppedAnchors.removeAll() } }
-        drop.show(entries, from: window.convertToScreen(button.convert(button.bounds, to: nil)), screen: screen)
+        drop.changed = { [weak self] count in
+            guard let self = self else { return }
+            if count == 0 { self.closeHover(); self.droppedAnchors.removeAll() }
+            self.batteriesOut = count > 0
+            for place in self.items.values { self.wire(place) }
+        }
+        drop.show(entries, columns: bar.isEmpty ? [logoRect] : bar, own: places.compactMap(screenRect), animated: animated)
+    }
+    /// A hidden battery takes the place of one in the bar, which goes down among the hidden ones; the bar keeps this hand-laid
+    /// order from then on.
+    func swap(_ hidden: String, into seat: String) {
+        ClickLog.write("swap \(hidden) into \(seat)")
+        shelf.place(hidden, at: seat, bar: placesLeftToRight().0.dropFirst().compactMap(\.shownID))
+        UserDefaults.standard.set(shelf.placed, forKey: "shelfPlaced")
+        arrange(arrangedIDs)
+        // The bar settles a moment later (a wider battery pushes its neighbours); the columns follow it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in if self?.drop.isShown == true { self?.showDrop(animated: false) } }
     }
     /// Fills `rect` with the provider tint, or the model-family palette carried by an Antigravity row.
     /// The 5h colour is always the one chosen for the provider, on any bar. `muted` is the 7d layer behind it: the same colour at
@@ -648,7 +707,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.setAccessibilityHelp(([panel.alert, panel.note.isEmpty ? nil : panel.note,
             "Click for usage details and refresh actions"].compactMap { $0 }).joined(separator: ". "))
         updatePulse()
-        item.menu = providerMenu(panel)
+        wire(item)
         if hovered == panel.id && popover.isShown { showCells(panel.id) }
     }
     /// The visible places as they stand on screen, left to right, and whether macOS has laid them out yet (before it has, a
@@ -809,7 +868,6 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
             place.shownID = id
             if let id = id {
                 items[id] = place; fades[id] = nil; shownLabel[id] = nil
-                place.button?.target = nil; place.button?.action = nil
             } else {
                 place.menu = nil
                 place.button?.target = self; place.button?.action = #selector(logoClicked(_:))
@@ -848,12 +906,14 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         logoMenu = menu
         // Readings come in every 30 s; an open drop keeps still and only redraws, unless what is hidden changed.
-        if drop.isShown { if hidden.isEmpty { drop.close() } else if !drop.refresh(dropEntries()) { showDrop() } }
+        if drop.isShown { if hidden.isEmpty { drop.close() } else if !drop.refresh(dropEntries()) { showDrop(animated: false) } }
         updateContrast()
     }
     /// Chosen from a hidden battery's menu: it takes a place in the bar, as a battery picked from the old drop did.
     @objc func keepInBarItem(_ sender: NSMenuItem) { if let id = sender.representedObject as? String { keepInBar(id) } }
     func keepInBar(_ id: String) {
+        // Once the bar is laid out by hand, a kept battery takes its last place.
+        if !shelf.placed.isEmpty, let last = placesLeftToRight().0.dropFirst().compactMap(\.shownID).last { swap(id, into: last); return }
         shelf.pin(id)
         UserDefaults.standard.set(shelf.pins, forKey: "shelfPins"); UserDefaults.standard.set(shelf.pinnedAt, forKey: "shelfPinnedAt")
         arrange(arrangedIDs)
