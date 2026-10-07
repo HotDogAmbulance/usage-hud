@@ -1023,8 +1023,14 @@ final class CoreTests {
     func testPinnedBatteriesTakeAPlaceInTheBar() {
         var shelf = Shelf()
         let ids = ["codex", "claude", "openrouter", "glm", "kimi"]
-        shelf.togglePin("kimi")
-        expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "claude", "kimi"])
+        shelf.pin("kimi", now: 1000)
+        expectEqual(shelf.arrange(ids, limit: 3, now: 1000).shown, ["codex", "claude", "kimi"])
+        // A week with the battery unused, and the pin lapses; used meanwhile, it holds.
+        expectEqual(shelf.arrange(ids, limit: 3, now: 1000 + Shelf.pinLife + 1).shown, ["codex", "claude", "openrouter"])
+        shelf.lastUsed["kimi"] = 1000 + Shelf.pinLife
+        expectEqual(shelf.arrange(ids, limit: 3, now: 1000 + Shelf.pinLife + 1).shown, ["codex", "claude", "kimi"])
+        shelf.lastUsed["kimi"] = nil
+        shelf.pins = []; shelf.pinnedAt = [:]; shelf.togglePin("kimi")
         shelf.pin("kimi"); expectEqual(shelf.pins, ["kimi"])
         shelf.togglePin("glm")
         expectEqual(shelf.arrange(ids, limit: 3).shown, ["codex", "glm", "kimi"])

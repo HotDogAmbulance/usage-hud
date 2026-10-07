@@ -11,14 +11,25 @@ public struct Shelf {
     public var scoredAt: Double
     /// Batteries the person chose to keep in the bar, oldest first; a new choice takes a place from the least recent one.
     public var pins: [String]
-    public init(levels: [String: Double] = [:], lastUsed: [String: Double] = [:], scores: [String: Double] = [:], scoredAt: Double = 0, pins: [String] = []) {
-        self.levels = levels; self.lastUsed = lastUsed; self.scores = scores; self.scoredAt = scoredAt; self.pins = pins
+    /// When each pin was made. A pin holds its place while that battery is in use, and lapses after a week without use or
+    /// a fresh choice; the battery stays one click away in the logo, as before.
+    public var pinnedAt: [String: Double]
+    public static let pinLife: Double = 7 * 86_400
+    public init(levels: [String: Double] = [:], lastUsed: [String: Double] = [:], scores: [String: Double] = [:], scoredAt: Double = 0,
+                pins: [String] = [], pinnedAt: [String: Double] = [:]) {
+        self.levels = levels; self.lastUsed = lastUsed; self.scores = scores; self.scoredAt = scoredAt; self.pins = pins; self.pinnedAt = pinnedAt
+    }
+    /// The pin still holds: made, or the battery used, within the last week. A pin with no date (older settings) holds.
+    func pinned(_ id: String, now: Double) -> Int? {
+        guard let index = pins.lastIndex(of: id) else { return nil }
+        guard let made = pinnedAt[id] else { return index + 1 }
+        return now - max(made, lastUsed[id] ?? 0) < Self.pinLife ? index + 1 : nil
     }
     /// Keeps `id` in the bar as the latest choice.
-    public mutating func pin(_ id: String) { pins.removeAll { $0 == id }; pins.append(id) }
+    public mutating func pin(_ id: String, now: Double = Date().timeIntervalSince1970) { pins.removeAll { $0 == id }; pins.append(id); pinnedAt[id] = now }
     /// Pins `id`, or lets it go if it was already pinned.
     public mutating func togglePin(_ id: String) {
-        if let index = pins.firstIndex(of: id) { pins.remove(at: index) } else { pins.append(id) }
+        if let index = pins.firstIndex(of: id) { pins.remove(at: index); pinnedAt[id] = nil } else { pin(id) }
     }
     /// One number that grows with use: the sum of used percentages, or the negated balance.
     public static func level(_ panel: Panel) -> Double? {
@@ -45,13 +56,13 @@ public struct Shelf {
     }
     /// Batteries asking for attention first, then the ones chosen by hand (latest choice first), then by score and last use;
     /// ties keep the engine's order.
-    public func ranked(_ ids: [String], urgent: Set<String> = []) -> [String] {
-        let key = { (id: String) in (urgent.contains(id) ? 1 : 0, (self.pins.lastIndex(of: id)).map { $0 + 1 } ?? 0, self.scores[id] ?? 0, self.lastUsed[id] ?? 0) }
+    public func ranked(_ ids: [String], urgent: Set<String> = [], now: Double = Date().timeIntervalSince1970) -> [String] {
+        let key = { (id: String) in (urgent.contains(id) ? 1 : 0, self.pinned(id, now: now) ?? 0, self.scores[id] ?? 0, self.lastUsed[id] ?? 0) }
         return ids.enumerated().sorted { key($0.element) != key($1.element) ? key($0.element) > key($1.element) : $0.offset < $1.offset }.map { $0.element }
     }
     /// Splits `ids` into those shown and those moved to the overflow item, both in their original order.
-    public func arrange(_ ids: [String], limit: Int, urgent: Set<String> = []) -> (shown: [String], hidden: [String]) {
-        let shown = Set(ranked(ids, urgent: urgent).prefix(max(0, limit)))
+    public func arrange(_ ids: [String], limit: Int, urgent: Set<String> = [], now: Double = Date().timeIntervalSince1970) -> (shown: [String], hidden: [String]) {
+        let shown = Set(ranked(ids, urgent: urgent, now: now).prefix(max(0, limit)))
         return (ids.filter { shown.contains($0) }, ids.filter { !shown.contains($0) })
     }
 }

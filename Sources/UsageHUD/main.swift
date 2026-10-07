@@ -127,7 +127,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       lastUsed: UserDefaults.standard.dictionary(forKey: "shelfLastUsed") as? [String: Double] ?? [:],
                       scores: UserDefaults.standard.dictionary(forKey: "shelfScores") as? [String: Double] ?? [:],
                       scoredAt: UserDefaults.standard.double(forKey: "shelfScoredAt"),
-                      pins: UserDefaults.standard.stringArray(forKey: "shelfPins") ?? [])
+                      pins: UserDefaults.standard.stringArray(forKey: "shelfPins") ?? [],
+                      pinnedAt: UserDefaults.standard.dictionary(forKey: "shelfPinnedAt") as? [String: Double] ?? [:])
     /// Change with `defaults write local.usage-hud visibleBatteries 4`.
     var visibleLimit: Int { UserDefaults.standard.integer(forKey: "visibleBatteries") > 0 ? UserDefaults.standard.integer(forKey: "visibleBatteries") : 3 }
     /// Alerts the user has already seen by hovering, by provider; those batteries stop pulsing until the alert changes.
@@ -409,7 +410,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         drop.onPick = { [weak self] id in
             guard let self = self else { return }
             self.shelf.pin(id)
-            UserDefaults.standard.set(self.shelf.pins, forKey: "shelfPins")
+            UserDefaults.standard.set(self.shelf.pins, forKey: "shelfPins"); UserDefaults.standard.set(self.shelf.pinnedAt, forKey: "shelfPinnedAt")
             self.drop.close()
             self.arrange(self.arrangedIDs)
         }
