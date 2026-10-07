@@ -125,7 +125,8 @@ let cases: [(String, () throws -> Void)] = [
     ("testVanishedWindowsExpireWithTheirReset", test.testVanishedWindowsExpireWithTheirReset),
     ("testARevokedKeyThatWorkedIsAnnouncedOnceThenGoes", test.testARevokedKeyThatWorkedIsAnnouncedOnceThenGoes),
     ("testEmptyBalancesAndFullQuotasAreShownNotHidden", test.testEmptyBalancesAndFullQuotasAreShownNotHidden),
-    ("testAnEarlyResetReadsFreshNotStale", test.testAnEarlyResetReadsFreshNotStale)
+    ("testAnEarlyResetReadsFreshNotStale", test.testAnEarlyResetReadsFreshNotStale),
+    ("testRecordedAnswersStillParse", test.testRecordedAnswersStillParse)
 ]
 for (name, action) in cases {
     do { try test.setUpWithError(); try action() } catch { fail(name + ": " + error.localizedDescription) }
