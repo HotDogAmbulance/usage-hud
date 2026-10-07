@@ -143,7 +143,7 @@ enum DesignPreview {
             NSColor(srgbRed: 0.16, green: 0.18, blue: 0.20, alpha: 1).setFill()
             NSBezierPath(roundedRect: NSRect(x: 64, y: 513, width: 1312, height: 188), xRadius: 18, yRadius: 18).fill()
             text("A palette of providers", 86, 666, size: 14, strong: true)
-            let providers: [(String, String)] = [("codex", "Codex"), ("claude", "Claude"), ("antigravity", "Antigravity"), ("glm", "GLM"), ("grok", "Grok"), ("xai", "xAI"), ("vercel", "Vercel"), ("deepseek", "DeepSeek"), ("kimi", "Kimi"), ("kimi-code", "Kimi Code"), ("openrouter", "OpenRouter"), ("fireworks", "Fireworks"), ("litellm", "LiteLLM")]
+            let providers: [(String, String)] = [("codex", "Codex"), ("claude", "Claude"), ("antigravity", "Antigravity"), ("glm", "GLM"), ("grok", "Grok"), ("grokbot", "Grok Bot"), ("xai", "xAI"), ("vercel", "Vercel"), ("deepseek", "DeepSeek"), ("kimi", "Kimi"), ("kimi-code", "Kimi Code"), ("openrouter", "OpenRouter"), ("fireworks", "Fireworks"), ("litellm", "LiteLLM")]
             for (i, provider) in providers.enumerated() {
                 let id = provider.0, x = 88 + CGFloat(i) * 99
                 var panel = Panel(id: id, name: provider.1, windows: [Window(label: "Budget", pct: 20)])

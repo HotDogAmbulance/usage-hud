@@ -309,6 +309,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "antigravity": return NSColor(srgbRed: 0.19, green: 0.53, blue: 1.00, alpha: 1)
         // Grok is black; xAI the same family in graphite blue, so the two read as one house but not as one battery.
         case "grok": return NSColor(srgbRed: 0.0, green: 0.0, blue: 0.0, alpha: 1)
+        // Grok Bot: a warm charcoal between the two, still dark enough to sit with them.
+        case "grokbot": return NSColor(srgbRed: 0.2392, green: 0.2078, blue: 0.1922, alpha: 1)
         case "xai": return NSColor(srgbRed: 0.1843, green: 0.2275, blue: 0.3216, alpha: 1)
         case "vercel": return NSColor(srgbRed: 0.58, green: 0.56, blue: 0.54, alpha: 1)
         case "deepseek": return NSColor(srgbRed: 0.30, green: 0.42, blue: 1.00, alpha: 1)
@@ -1049,7 +1051,7 @@ if CommandLine.arguments.contains("--self-test") {
     let mixedLines = HUD.menuLines(mixed, showingWeek: false, cached: false).map(\.string)
     precondition(!mixedLines[0].contains("cached") && mixedLines[1].contains("cached"))
     // No tint may pass for the system battery's white.
-    for id in ["codex", "claude", "glm", "antigravity", "grok", "vercel", "deepseek", "kimi", "openrouter", "fireworks", "litellm", "other"] {
+    for id in ["codex", "claude", "glm", "antigravity", "grok", "grokbot", "vercel", "deepseek", "kimi", "openrouter", "fireworks", "litellm", "other"] {
         let rgb = delegate.tint(id).usingColorSpace(.sRGB)!
         let linear = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
         let chroma = max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) - min(rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
@@ -1096,7 +1098,7 @@ if CommandLine.arguments.contains("--self-test") {
     // OpenRouter balance states (gauge at 40%, under $15, under $10 mid-pulse).
     func sheet(light: Bool) -> NSImage {
         delegate.forcedDarkBar = !light
-        let ids = ["codex", "claude", "glm", "antigravity", "grok", "xai", "vercel", "deepseek", "kimi", "kimi-code", "openrouter", "fireworks", "litellm"]
+        let ids = ["codex", "claude", "glm", "antigravity", "grok", "grokbot", "xai", "vercel", "deepseek", "kimi", "kimi-code", "openrouter", "fireworks", "litellm"]
         let states = ["or · gauge 40%", "or · under $15", "or · under $10", "ag · one pool 16%", "ag · both under 20%", "codex · 14% left", "codex · 9% left"]
         let scale: CGFloat = 3, row: CGFloat = 30 * scale, width: CGFloat = 215 * scale
         let sheet = NSImage(size: NSSize(width: width, height: row * CGFloat(ids.count + states.count)))

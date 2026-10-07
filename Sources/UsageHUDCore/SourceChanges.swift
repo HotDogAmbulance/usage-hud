@@ -8,6 +8,7 @@ public enum ReadingSource: String, Codable {
     case antigravityLocal = "antigravity-local"
     case providerAPI = "provider-api"
     case grokCLI = "grok-cli-billing"
+    case grokBotLocal = "grok-bot-local"
     case liteLLMProxy = "litellm-proxy"
 
     public func description(provider: String) -> String {
@@ -18,6 +19,7 @@ public enum ReadingSource: String, Codable {
         case .antigravityLocal: return "Quotas from Antigravity on this Mac"
         case .providerAPI: return provider == "OpenRouter" ? "Balance and key limits from OpenRouter’s API" : "Readings from \(provider)’s API"
         case .grokCLI: return "Billing read with Grok CLI’s existing sign-in"
+        case .grokBotLocal: return "Usage from Grok Bot on this Mac"
         case .liteLLMProxy: return "Spend and budget from your LiteLLM proxy"
         }
     }

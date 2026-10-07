@@ -19,7 +19,7 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var groupPreview: NativeSurface?
     var state = "Fresh"
     let names = [("codex", "Codex"), ("claude", "Claude"), ("antigravity", "Antigravity"), ("openrouter", "OpenRouter"),
-                 ("grok", "Grok"), ("xai", "xAI"), ("vercel", "Vercel"), ("deepseek", "DeepSeek"), ("kimi", "Kimi"),
+                 ("grok", "Grok"), ("grokbot", "Grok Bot"), ("xai", "xAI"), ("vercel", "Vercel"), ("deepseek", "DeepSeek"), ("kimi", "Kimi"),
                  ("kimi-code", "Kimi Code"), ("fireworks", "Fireworks"), ("litellm", "LiteLLM")]
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -60,7 +60,7 @@ final class ProductTest: NSObject, NSApplicationDelegate, NSWindowDelegate {
             for index in panel.cells.indices { panel.cells[index].stale = false }
             panel.sourceReadAt = Date().timeIntervalSince1970
             panel.readingSource = id == "claude" ? .claudeStatusline : id == "codex" ? .codexCLI :
-                id == "antigravity" ? .antigravityLocal : id == "litellm" ? .liteLLMProxy : id == "grok" ? .grokCLI : .providerAPI
+                id == "antigravity" ? .antigravityLocal : id == "litellm" ? .liteLLMProxy : id == "grok" ? .grokCLI : id == "grokbot" ? .grokBotLocal : .providerAPI
             return panel
         }
         let current = connected(selected.0, selected.1)

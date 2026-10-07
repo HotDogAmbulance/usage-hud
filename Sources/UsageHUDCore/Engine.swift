@@ -30,6 +30,7 @@ public final class Engine {
                                       GLMProvider(cache: cache, credentials: credentials, http: http),
                                       AntigravityProvider(cache: cache),
                                       GrokProvider(cache: cache, http: http),
+                                      GrokBotProvider(cache: cache),
                                       KeyProvider.vercel(cache: cache, credentials: credentials, http: http),
                                       KeyProvider.deepSeek(cache: cache, credentials: credentials, http: http),
                                       KeyProvider.kimi(cache: cache, credentials: credentials, http: http),

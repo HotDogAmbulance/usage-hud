@@ -71,6 +71,7 @@ let cases: [(String, () throws -> Void)] = [
     ("testGLMLegacyTokensLimitIsFiveHour", test.testGLMLegacyTokensLimitIsFiveHour),
     ("testGLMSendsRawKeyAndTriesMainlandHost", test.testGLMSendsRawKeyAndTriesMainlandHost),
     ("testGrokCreditsFromTheCLISignIn", test.testGrokCreditsFromTheCLISignIn),
+    ("testGrokBotUsageFromItsSavedReading", test.testGrokBotUsageFromItsSavedReading),
     ("testKimiCodeWindowsAndPlan", test.testKimiCodeWindowsAndPlan),
     ("testKimiCodeFindsKimiCLIKey", test.testKimiCodeFindsKimiCLIKey),
     ("testXAIBillingFromAManagementKey", test.testXAIBillingFromAManagementKey),

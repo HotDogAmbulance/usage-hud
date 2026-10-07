@@ -565,6 +565,30 @@ final class CoreTests {
         do { try grok.refresh(); fail("an old sign-in should wait") } catch let problem as HUDProblem { expectFalse(problem.attention || problem.gone) }
         expectEqual(http.calls, 0)
     }
+    /// Grok Bot's own saved reading is read from disk, newest first, and an older one never replaces a newer one.
+    func testGrokBotUsageFromItsSavedReading() throws {
+        let bot = GrokBotProvider(cache: cache, home: root)
+        expectError(try bot.refresh())
+        let folder = root.appendingPathComponent("Library/Application Support/Grok Bot/sand-client-persistence")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        func save(_ name: String, percent: Double, readAt: Double) throws {
+            let usage: JSON = ["percentUsed": percent, "nextResetMs": 4_102_444_800_000.0, "isSandTrial": true, "grokPlanLabel": "Grok Bot Plan"]
+            try JSONSerialization.data(withJSONObject: ["schemaVersion": 2, "value": ["kind": "present", "reading": ["usage": usage, "readAtMs": readAt],
+                "expiresAtMs": 4_102_444_800_000.0]]).write(to: folder.appendingPathComponent(name))
+        }
+        try Data("{}".utf8).write(to: folder.appendingPathComponent("other.blob"))
+        expectError(try bot.refresh()); expectFalse(bot.shown())
+        let now = Date().timeIntervalSince1970 * 1000
+        try save("a.blob", percent: 12, readAt: now - 5000); try save("b.blob", percent: 30, readAt: now - 1000)
+        try bot.refresh()
+        let panel = bot.panel()
+        expectEqual(panel.windows.first?.label, "7d"); expectEqual(panel.windows.first?.pct, 30)
+        expectNotNil(panel.windows.first?.resets_at); expectEqual(panel.note, "Plan: Trial"); expectTrue(bot.shown())
+        // Nothing newer has been written, so the battery keeps what it had and waits.
+        do { try bot.refresh(); fail("an unchanged reading should wait") } catch let problem as HUDProblem { expectFalse(problem.attention || problem.gone) }
+        try save("a.blob", percent: 45, readAt: now + 1000)
+        try bot.refresh(); expectEqual(bot.panel().windows.first?.pct, 45)
+    }
     /// Kimi Code reports counts as strings (a zero may be missing) and, on newer plans, a ratio per pool.
     func testKimiCodeWindowsAndPlan() throws {
         let blob = try KeyProvider.kimiCodeUsage([
