@@ -7,6 +7,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: No hidden or look-alike characters
+        run: python3 scripts/check_characters.py --self-test && python3 scripts/check_characters.py
       - name: Build the app
         run: swift build --product usagehud
       - name: Core checks (readers, situations matrix, recorded answers)
