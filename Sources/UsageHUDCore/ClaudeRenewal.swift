@@ -10,15 +10,17 @@ public final class ClaudeRenewal {
     /// After a renewal the credential lasts about eight hours, so nothing needed is held back; after a failure, try again in half an hour.
     public static let minimumGap: Double = 6 * 3600, retryGap: Double = 1800
     public static let unattendedLimit = 3
-    let home: URL, run: Runner, now: () -> Double
-    var state: URL { home.appendingPathComponent(".usage-hud/claude-renewal.json") }
-    var log: URL { home.appendingPathComponent(".usage-hud/renewals.log") }
-    var workDirectory: URL { home.appendingPathComponent(".usage-hud/renew") }
+    let home: URL, directory: URL, run: Runner, now: () -> Double
+    var state: URL { directory.appendingPathComponent("claude-renewal.json") }
+    var log: URL { directory.appendingPathComponent("renewals.log") }
+    var workDirectory: URL { directory.appendingPathComponent("renew") }
+    var optOut: URL { directory.appendingPathComponent("no-auto-renew") }
 
-    public init(home: URL = FileManager.default.homeDirectoryForCurrentUser, run: @escaping Runner = ClaudeRenewal.process,
+    /// `directory` is where Usage HUD keeps its files (`~/.usage-hud`), the same one its cache uses.
+    public init(home: URL = FileManager.default.homeDirectoryForCurrentUser, directory: URL? = nil, run: @escaping Runner = ClaudeRenewal.process,
                 now: @escaping () -> Double = { Date().timeIntervalSince1970 }
 ) {
-        self.home = home; self.run = run; self.now = now
+        self.home = home; self.directory = directory ?? home.appendingPathComponent(".usage-hud"); self.run = run; self.now = now
     }
     public static func process(_ executable: URL, _ arguments: [String], _ directory: URL) -> (status: Int32, output: Data) {
         let task = Process(), pipe = Pipe()
@@ -39,6 +41,12 @@ public final class ClaudeRenewal {
             .map { URL(fileURLWithPath: $0) }.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
     func saved() -> JSON { (try? Data(contentsOf: state)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? JSON } ?? [:] }
+    /// One read-modify-write at a time: a hook noting use must not be undone by a renewal saving its own count a moment later.
+    private let lock = NSLock()
+    func update(_ change: (inout JSON) -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        var values = saved(); change(&values); save(values)
+    }
     func save(_ values: JSON) {
         try? FileManager.default.createDirectory(at: state.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         if let data = try? JSONSerialization.data(withJSONObject: values) { try? data.write(to: state, options: .atomic) }
@@ -69,19 +77,50 @@ public final class ClaudeRenewal {
             saved[key] = ["used_percentage": max(0, min(100, used * 100)), "resets_at": number(window["resetsAt"]) as Any? ?? NSNull()]
         }
         guard !saved.isEmpty else { return }
-        try? Cache(home.appendingPathComponent(".usage-hud")).quota("claude.json", windows: saved, extra: ["source": "claude-run", "reading_source": "claude-statusline"], now: now())
+        try? Cache(directory).quota("claude.json", windows: saved, extra: ["source": "claude-run", "reading_source": "claude-statusline"], now: now())
+    }
+    /// Claude Code ran (its hooks fire in a terminal and in the Code tab of the Claude app alike): someone is using it, which
+    /// clears the count of renewals made with nobody present. Written at most once a minute.
+    public func noteUse() {
+        guard now() - ((saved()["last_use"] as? NSNumber)?.doubleValue ?? 0) >= 60 else { return }
+        update { $0["last_use"] = now() }
+    }
+    /// When Claude Code last reported through its statusline, which only a terminal session runs.
+    public static func statuslineUse(_ blob: [String: Any]) -> Double {
+        blob["source"] as? String == "statusline" ? number(blob["captured_at"]) ?? 0 : 0
+    }
+    public enum State { case ready, paused, off }
+    /// Whether a renewal may run when one is due: `off` after the opt-out, `paused` after three renewals in a row with no use of
+    /// Claude Code since, otherwise `ready`. `lastRealUse` is the statusline's last reading.
+    public func state(lastRealUse: Double) -> State {
+        guard !FileManager.default.fileExists(atPath: optOut.path) else { return .off }
+        let values = saved()
+        let succeeded = (values["last_ok"] as? NSNumber)?.doubleValue ?? 0, alone = (values["unattended"] as? NSNumber)?.intValue ?? 0
+        let used = max(lastRealUse, (values["last_use"] as? NSNumber)?.doubleValue ?? 0)
+        return alone >= Self.unattendedLimit && used <= succeeded ? .paused : .ready
+    }
+    /// What an expired sign-in says, as the person can act on it. Plain chat (claude.ai, the Chat tab) never counts: only a
+    /// message sent to Claude Code does.
+    public static func expiredMessage(_ state: State) -> String {
+        switch state {
+        case .ready: return "Claude Code credential expired; it renews with one small Claude Code call, or run claude once in a terminal"
+        case .paused: return "Claude Code credential expired. Usage HUD stopped renewing it after 3 renewals in a row while Claude Code sat unused. "
+            + "Send one message in Claude Code (claude in a terminal, or the Code tab of the Claude app) and it carries on; chat in claude.ai or the Chat tab does not count"
+        case .off: return "Claude Code credential expired and automatic renewal is off. Send one message in Claude Code (claude in a terminal) to renew it"
+        }
     }
     /// A notice to show when a renewal ran, or nil when nothing was due or it could not be done. `lastRealUse` is when Claude Code
-    /// last reported through its statusline (seconds since 1970), which clears the count of renewals made without anyone present.
+    /// last reported through its statusline (seconds since 1970); a hook seen by `noteUse` counts the same. Either clears the count
+    /// of renewals made without anyone present.
     public func renewIfDue(lastRealUse: Double) -> SourceNotice? {
-        guard !FileManager.default.fileExists(atPath: home.appendingPathComponent(".usage-hud/no-auto-renew").path) else { return nil }
-        var values = saved()
+        guard !FileManager.default.fileExists(atPath: optOut.path) else { return nil }
+        let values = saved()
         let attempted = (values["last_attempt"] as? NSNumber)?.doubleValue ?? 0, succeeded = (values["last_ok"] as? NSNumber)?.doubleValue ?? 0
         var alone = (values["unattended"] as? NSNumber)?.intValue ?? 0
-        if lastRealUse > succeeded { alone = 0 }
+        if max(lastRealUse, (values["last_use"] as? NSNumber)?.doubleValue ?? 0) > succeeded { alone = 0 }
         let gap = attempted > succeeded ? Self.retryGap : Self.minimumGap
         guard now() - attempted >= gap, alone < Self.unattendedLimit else { return nil }
-        values["last_attempt"] = now(); values["unattended"] = alone; save(values)
+        update { $0["last_attempt"] = now(); $0["unattended"] = alone }
         guard let claude = executable() else { note("skipped: no claude command found"); return nil }
         try? FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let result = run(claude, ["-p", "Reply with the single word OK", "--model", "haiku", "--no-session-persistence", "--setting-sources", "local",
@@ -99,7 +138,7 @@ public final class ClaudeRenewal {
         }
         let usage = reply?["usage"] as? JSON ?? [:]
         let tokens = ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"].reduce(0) { $0 + ((usage[$1] as? NSNumber)?.intValue ?? 0) }
-        values["last_ok"] = now(); values["unattended"] = alone + 1; save(values)
+        update { $0["last_ok"] = now(); $0["unattended"] = alone + 1 }
         note("renewed with one Claude Code call (haiku, \(tokens) tokens); removed \(removed) leftover item(s) from ~/.claude/projects")
         return SourceNotice(title: "Claude sign-in renewed",
                             lines: ["It had expired, so Claude Code made one tiny request (\(tokens) tokens, nothing saved). See ~/.usage-hud/renewals.log."])

@@ -28,6 +28,9 @@ final class KeyProvider: UsageProvider {
     /// left alone until the app restarts.
     /// Gateways found by discovery that did not answer: skipped for an hour (forever when they answered "not LiteLLM").
     var notHere: [String: Date] = [:]
+    /// Gateways that have given a good reading. A proxy that worked once is never written off for being down, slow or
+    /// refusing a key for a while; only an address that has never answered like this provider is left alone.
+    var confirmed = Set<String>()
     init(id: String, name: String, hosts: [String], variables: [String], cache: Cache, credentials: CredentialReading, http: HTTPReading,
          home: URL = FileManager.default.homeDirectoryForCurrentUser, environment: [String: String] = ProcessInfo.processInfo.environment,
          discover: @escaping (URL, [String: String]) -> [String: String] = { _, _ in [:] }, read: @escaping (Call) throws -> JSON) {
@@ -57,15 +60,16 @@ final class KeyProvider: UsageProvider {
             let blob: JSON
             do { blob = try read(Call(host: host, key: key, http: http)) }
             catch let error as HTTPFailure {
-                if !hosts.contains(host), [401, 403, 404, 405].contains(error.status) { notHere[host] = .distantFuture }
+                if !hosts.contains(host), !confirmed.contains(host), [401, 403, 404, 405].contains(error.status) { notHere[host] = .distantFuture }
                 // A key someone stored and that stopped working needs them; an old one left in a profile doesn't.
                 lastProblem = error.status == 401 || error.status == 403 ? HUDProblem("\(name) API key rejected", attention: stored != nil) : HUDProblem("\(name) HTTP \(error.status)")
                 continue
-            } catch let error as HUDProblem where !hosts.contains(host) {
+            } catch let error as HUDProblem where !hosts.contains(host) && !confirmed.contains(host) {
                 // A gateway that is down or slow costs a 30 s wait; try it again in an hour, not at every refresh.
                 notHere[host] = Date().addingTimeInterval(3600); lastProblem = error
                 continue
             }
+            confirmed.insert(host)
             let receipt = (id == "litellm" ? ReadingSource.liteLLMProxy : .providerAPI).receipt()
             let metadata = receipt.merging(["host": host]) { _, new in new }
             if let windows = blob["rate_limits"] as? JSON {

@@ -140,7 +140,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       scoredAt: UserDefaults.standard.double(forKey: "shelfScoredAt"),
                       pins: UserDefaults.standard.stringArray(forKey: "shelfPins") ?? [],
                       pinnedAt: UserDefaults.standard.dictionary(forKey: "shelfPinnedAt") as? [String: Double] ?? [:],
-                      placed: UserDefaults.standard.stringArray(forKey: "shelfPlaced") ?? [])
+                      placed: UserDefaults.standard.stringArray(forKey: "shelfPlaced") ?? [],
+                      settled: UserDefaults.standard.dictionary(forKey: "shelfSettled") as? [String: String] ?? [:])
     /// Change with `defaults write local.usage-hud visibleBatteries 4`.
     var visibleLimit: Int { UserDefaults.standard.integer(forKey: "visibleBatteries") > 0 ? UserDefaults.standard.integer(forKey: "visibleBatteries") : 3 }
     /// Alerts the user has already seen by hovering, by provider; those batteries stop pulsing until the alert changes.
@@ -248,6 +249,8 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// answer this app already holds, so nothing new is asked.
     var claudeNudged = 0.0
     @objc func claudeCodeRan(_ note: Notification) {
+        // Someone is using Claude Code, in a terminal or in the Code tab of the Claude app: renewals made before no longer count as unattended.
+        DispatchQueue.global(qos: .utility).async { self.renewal.noteUse() }
         let now = Date().timeIntervalSince1970
         guard now - claudeNudged > 60 else { return }
         claudeNudged = now; load(nil, also: ["claude"])
@@ -375,7 +378,7 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !renewing, let claude = panels.first(where: { $0.id == "claude" }), claude.note.contains("credential expired") else { return }
         renewing = true
         let saved = (try? Data(contentsOf: home.appendingPathComponent("claude.json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-        let real = saved["source"] as? String == "statusline" ? (saved["captured_at"] as? NSNumber)?.doubleValue ?? 0 : 0
+        let real = ClaudeRenewal.statuslineUse(saved)
         DispatchQueue.global(qos: .utility).async {
             let notice = self.renewal.renewIfDue(lastRealUse: real)
             DispatchQueue.main.async {
@@ -503,7 +506,9 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func swap(_ hidden: String, into seat: String) {
         ClickLog.write("swap \(hidden) into \(seat)")
         shelf.place(hidden, at: seat, bar: placesLeftToRight().0.dropFirst().compactMap(\.shownID))
-        UserDefaults.standard.set(shelf.placed, forKey: "shelfPlaced")
+        // The battery that gave up its seat stays out, even if it is asking for attention, until its alert changes.
+        shelf.leave(seat, alert: panels[seat]?.alert)
+        UserDefaults.standard.set(shelf.placed, forKey: "shelfPlaced"); UserDefaults.standard.set(shelf.settled, forKey: "shelfSettled")
         arrange(arrangedIDs)
         // The bar settles a moment later (a wider battery pushes its neighbours); the columns follow it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in if self?.drop.isShown == true { self?.showDrop(animated: false) } }
@@ -841,7 +846,12 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Keeps the most recently used batteries in the menu bar, so a crowded bar or the notch never hides them silently.
     func arrange(_ ids: [String]) {
         arrangedIDs = ids
-        let arrangement = shelf.arrange(ids, limit: visibleLimit, urgent: Set(ids.filter { panels[$0]?.alert != nil }))
+        var alerts: [String: String] = [:]
+        for id in ids { if let alert = panels[id]?.alert { alerts[id] = alert } }
+        let settled = shelf.settled
+        let urgent = shelf.urgent(alerts, among: ids)
+        if shelf.settled != settled { UserDefaults.standard.set(shelf.settled, forKey: "shelfSettled") }
+        let arrangement = shelf.arrange(ids, limit: visibleLimit, urgent: urgent)
         let hidden = arrangement.hidden
         hiddenIDs = shelf.ranked(ids).filter(hidden.contains)
         let shown = arrangement.shown.filter { panels[$0] != nil }
@@ -912,8 +922,11 @@ class HUD: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Chosen from a hidden battery's menu: it takes a place in the bar, as a battery picked from the old drop did.
     @objc func keepInBarItem(_ sender: NSMenuItem) { if let id = sender.representedObject as? String { keepInBar(id) } }
     func keepInBar(_ id: String) {
-        // Once the bar is laid out by hand, a kept battery takes its last place.
-        if !shelf.placed.isEmpty, let last = placesLeftToRight().0.dropFirst().compactMap(\.shownID).last { swap(id, into: last); return }
+        // Once the bar is laid out by hand, a kept battery takes the seat of the least used one, never one asking for attention
+        // (unless every one is).
+        let bar = placesLeftToRight().0.dropFirst().compactMap(\.shownID)
+        let asking = Set(bar.filter { panels[$0]?.alert != nil && shelf.settled[$0] != panels[$0]?.alert })
+        if !shelf.placed.isEmpty, let seat = shelf.leastUsed(bar, urgent: asking) ?? bar.last { swap(id, into: seat); return }
         shelf.pin(id)
         UserDefaults.standard.set(shelf.pins, forKey: "shelfPins"); UserDefaults.standard.set(shelf.pinnedAt, forKey: "shelfPinnedAt")
         arrange(arrangedIDs)

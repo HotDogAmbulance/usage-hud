@@ -23,7 +23,8 @@ final class ClaudeProvider: UsageProvider {
         self.cache = cache; self.credentials = credentials; self.http = http; self.home = home
     }
     static let headers = ["anthropic-beta": "oauth-2025-04-20", "anthropic-version": "2023-06-01"]
-    static func accessToken(_ text: String, now: Double = Date().timeIntervalSince1970) throws -> String {
+    static func accessToken(_ text: String, now: Double = Date().timeIntervalSince1970,
+                            expired: () -> String = { ClaudeRenewal.expiredMessage(.ready) }) throws -> String {
         guard let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? JSON else {
             throw HUDProblem("Claude credential unreadable")
         }
@@ -31,7 +32,7 @@ final class ClaudeProvider: UsageProvider {
         guard let token = oauth["accessToken"] as? String, !token.isEmpty else { throw HUDProblem("Claude token missing") }
         // Expiry does not establish sign-out or which credential store Desktop uses. The HUD leaves renewal to Claude
         // Code; a newer statusline reading can also clear the cached failure without this token changing.
-        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem("Claude Code credential expired; it renews with one small Claude Code call, or run claude once in a terminal") }
+        if let expiry = number(oauth["expiresAt"]), expiry / 1000 < now { throw HUDProblem(expired()) }
         return token
     }
     func refresh() throws {
@@ -49,7 +50,10 @@ final class ClaudeProvider: UsageProvider {
                    (resetTime(window["resets_at"]) ?? .infinity) > now
            }) { return }
         if now < (number(backoff["until"]) ?? 0) || now - (number(blob["oauth_at"]) ?? 0) < 300 { return }
-        let token = try Self.accessToken(credentials.password(service: "Claude Code-credentials", account: nil))
+        // What the person can do about an expired sign-in depends on whether the renewal is still allowed to run.
+        let token = try Self.accessToken(credentials.password(service: "Claude Code-credentials", account: nil), expired: {
+            ClaudeRenewal.expiredMessage(ClaudeRenewal(home: home, directory: cache.root).state(lastRealUse: ClaudeRenewal.statuslineUse(blob)))
+        })
         let data: JSON
         do {
             data = try http.get(URL(string: "https://api.anthropic.com/api/oauth/usage")!, token: token, headers: Self.headers, limit: 1024 * 1024)
@@ -364,8 +368,13 @@ final class OpenRouterProvider: UsageProvider {
                    let keys = try? teamKeys(found) { team = found; listed = keys; management = true; winner = nil; break }
                 if winner != nil { break }
             }
-            // A revoked key left in an old script is not yours to fix; it simply isn't shown.
-            if management || winner == nil && rejected && slot.sources.allSatisfy({ $0["found"] != nil }) { continue }
+            if management { continue }
+            if winner == nil && rejected && slot.sources.allSatisfy({ $0["found"] != nil }) {
+                // A revoked key left in an old script is not yours to fix; it simply isn't shown. One that was working is announced
+                // once ("refused"), the way a deleted key is, and then goes.
+                if old.isEmpty || dismissed.contains(slot.id) { continue }
+                if old["state"] as? String == "invalid" { dismissed.insert(slot.id); continue }
+            }
             // A key already shown under another name (the same one in a keychain slot and a script) shows once.
             if let (_, result) = winner, let hint = result["key_label"] as? String, !seenKeys.insert(hint).inserted { continue }
             if winner != nil { dismissed.remove(slot.id) }

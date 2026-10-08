@@ -169,6 +169,13 @@ final class Cache {
             for (key, raw) in dict(blob["rate_limits"]) {
                 var window = dict(raw); window["stale"] = true
                 window["captured_at"] = number(window["captured_at"]) ?? number(blob["captured_at"]) ?? 0
+                // A window the answers no longer carry (a plan change, a field renamed) is kept, dimmed, only while it could still be
+                // true: until its own reset, or without one for twice its length.
+                if let reset = resetTime(window["resets_at"]) { guard reset > now else { continue } }
+                else {
+                    let seconds = number(window["window_minutes"]).map { $0 * 60 } ?? (["five_hour", "primary"].contains(key) ? 18000 : 604800)
+                    guard now - (number(window["captured_at"]) ?? 0) < seconds * 2 else { continue }
+                }
                 saved[key] = window
             }
             for (key, raw) in windows {

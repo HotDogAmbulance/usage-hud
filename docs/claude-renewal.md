@@ -36,7 +36,7 @@ With `--output-format stream-json --verbose` the stream contains a `rate_limit_e
 
 ## Limits worth keeping
 
-Only when the credential has expired; at most once every six hours after a success and again after half an hour after a failure; stop after three renewals in a row with no real use in between; tell the person each time and log it; provide an opt-out. See `Sources/UsageHUDCore/ClaudeRenewal.swift` and its test for one implementation.
+Only when the credential has expired; at most once every six hours after a success and again after half an hour after a failure; stop after three renewals in a row with no real use in between; tell the person each time and log it; provide an opt-out. "Real use" has to be something the tool can observe without a credential: a statusline reading (a terminal session only) or a Claude Code hook (a terminal, and, in one observation, the Code tab of the Desktop app). When the limit is reached, say so in the place the person looks, and say what resumes it in words that do not assume they know what counts: a message in Claude Code, not chat on claude.ai. See `Sources/UsageHUDCore/ClaudeRenewal.swift` and its test for one implementation.
 
 ## Not established
 

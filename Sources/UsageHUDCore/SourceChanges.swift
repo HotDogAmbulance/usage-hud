@@ -112,7 +112,7 @@ public struct SourceChanges {
             default: break
             }
         }
-        for id in before.keys.sorted() where keys[id] == nil && before[id] != "removed" {
+        for id in before.keys.sorted() where keys[id] == nil && before[id] != "removed" && before[id] != "invalid" {
             events.append(("Stopped tracking " + (lastNames[panel.id]?[id] ?? id), (lastNames[panel.id]?[id] ?? id) + " · no longer in " + panel.name))
         }
         return events

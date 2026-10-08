@@ -16,13 +16,25 @@ public struct Shelf {
     public var pinnedAt: [String: Double]
     public static let pinLife: Double = 7 * 86_400
     /// The bar as the person laid it out by dragging, left to right. Once set it holds (use no longer reorders it); batteries not
-    /// in it fill any free places by rank, and one asking for attention is added at the end.
+    /// in it fill any free places by rank, and one asking for attention takes the seat of the least used.
     public var placed: [String]
+    /// Alerts the person chose to leave out of the bar by taking the battery's seat for another, by battery id: the alert's text
+    /// at that moment. The same alert stays out, across restarts; a different one, or the same one after it cleared, asks again.
+    public var settled: [String: String]
     public init(levels: [String: Double] = [:], lastUsed: [String: Double] = [:], scores: [String: Double] = [:], scoredAt: Double = 0,
-                pins: [String] = [], pinnedAt: [String: Double] = [:], placed: [String] = []) {
+                pins: [String] = [], pinnedAt: [String: Double] = [:], placed: [String] = [], settled: [String: String] = [:]) {
         self.levels = levels; self.lastUsed = lastUsed; self.scores = scores; self.scoredAt = scoredAt; self.pins = pins; self.pinnedAt = pinnedAt
-        self.placed = placed
+        self.placed = placed; self.settled = settled
     }
+    /// The batteries whose alert should claim a seat: every alert in `alerts` (by battery id) except one the person already
+    /// left out. Alerts that cleared or changed since are forgotten here, so they ask again next time; a battery absent from
+    /// `ids` (not read yet, or hidden) keeps its answer.
+    public mutating func urgent(_ alerts: [String: String], among ids: [String]) -> Set<String> {
+        settled = settled.filter { id, text in !ids.contains(id) || alerts[id] == text }
+        return Set(alerts.filter { ids.contains($0.key) && settled[$0.key] != $0.value }.keys)
+    }
+    /// The person took the seat of `id` for another battery: its current alert, if any, stays out of the bar until it changes.
+    public mutating func leave(_ id: String, alert: String?) { if let alert = alert { settled[id] = alert } }
     /// Puts `id` where `seat` stands in the bar `bar` (left to right): two batteries in the bar trade places; one from outside
     /// takes the seat and the battery there leaves the bar.
     public mutating func place(_ id: String, at seat: String, bar: [String]) {
@@ -71,8 +83,13 @@ public struct Shelf {
         let key = { (id: String) in (urgent.contains(id) ? 1 : 0, self.pinned(id, now: now) ?? 0, self.scores[id] ?? 0, self.lastUsed[id] ?? 0) }
         return ids.enumerated().sorted { key($0.element) != key($1.element) ? key($0.element) > key($1.element) : $0.offset < $1.offset }.map { $0.element }
     }
+    /// The battery in `ids` worth least to keep in the bar: not asking for attention, and last by choice, score and use.
+    public func leastUsed(_ ids: [String], urgent: Set<String> = [], now: Double = Date().timeIntervalSince1970) -> String? {
+        ranked(ids.filter { !urgent.contains($0) }, now: now).last
+    }
     /// Splits `ids` into those shown and those moved to the overflow item. Without a laid-out bar both keep their original
-    /// order; with one, the shown follow it.
+    /// order; with one, the shown follow it. The bar never holds more than `limit`: a battery asking for attention takes the
+    /// seat of the least used one, and gives it back once its alert clears or the person takes the seat for another battery.
     public func arrange(_ ids: [String], limit: Int, urgent: Set<String> = [], now: Double = Date().timeIntervalSince1970) -> (shown: [String], hidden: [String]) {
         let laid = Array(placed.filter(ids.contains).prefix(max(0, limit)))
         guard !laid.isEmpty else {
@@ -80,7 +97,11 @@ public struct Shelf {
             return (ids.filter { shown.contains($0) }, ids.filter { !shown.contains($0) })
         }
         let rest = ranked(ids.filter { !laid.contains($0) }, urgent: urgent, now: now), free = max(0, limit - laid.count)
-        let shown = laid + rest.prefix(free) + rest.dropFirst(free).filter(urgent.contains)
+        var shown = laid + rest.prefix(free)
+        for id in rest.dropFirst(free) where urgent.contains(id) {
+            guard let out = leastUsed(shown, urgent: urgent, now: now), let seat = shown.firstIndex(of: out) else { break }
+            shown[seat] = id
+        }
         return (shown, ids.filter { !shown.contains($0) })
     }
 }
