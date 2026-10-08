@@ -4,6 +4,7 @@ __pycache__/
 
 *.app/
 *.json
+!Tests/Fixtures/*.json
 *.log
 *.lock
 battery-preview.png

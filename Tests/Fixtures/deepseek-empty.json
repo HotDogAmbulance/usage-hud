@@ -1,0 +1,29 @@
+{
+  "provider": "deepseek",
+  "synthetic": true,
+  "answers": {
+    "/user/balance": {
+      "status": 200,
+      "body": {
+        "is_available": false,
+        "balance_infos": [
+          {
+            "currency": "USD",
+            "total_balance": "0.00",
+            "granted_balance": "0.00",
+            "topped_up_balance": "0.00"
+          }
+        ]
+      }
+    }
+  },
+  "expect": {
+    "windows": [
+      {
+        "label": "DeepSeek",
+        "right": "$0 left"
+      }
+    ],
+    "alert": "Balance low"
+  }
+}

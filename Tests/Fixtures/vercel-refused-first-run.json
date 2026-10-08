@@ -1,0 +1,13 @@
+{
+  "provider": "vercel",
+  "synthetic": true,
+  "answers": {
+    "/v1/credits": {
+      "status": 401,
+      "body": {}
+    }
+  },
+  "expect": {
+    "hidden": true
+  }
+}

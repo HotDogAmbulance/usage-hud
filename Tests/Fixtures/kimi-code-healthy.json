@@ -1,0 +1,25 @@
+{
+  "provider": "kimi-code",
+  "synthetic": true,
+  "answers": {
+    "/coding/v1/usages": {
+      "status": 200,
+      "body": {
+        "usage": {
+          "limit": "100",
+          "used": "10",
+          "resetTime": "2099-01-01T00:00:00Z"
+        }
+      }
+    }
+  },
+  "expect": {
+    "windows": [
+      {
+        "label": "7d",
+        "pct": 10
+      }
+    ],
+    "alert": null
+  }
+}
