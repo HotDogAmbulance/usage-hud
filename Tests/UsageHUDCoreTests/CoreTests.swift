@@ -889,10 +889,91 @@ final class CoreTests {
         // Two batteries in the bar trade places.
         shelf.place("openrouter", at: "codex", bar: ["codex", "kimi", "openrouter"])
         expectEqual(shelf.arrange(ids, limit: 3).shown, ["openrouter", "kimi", "codex"])
-        // Use no longer reorders a laid bar; one asking for attention is added after it.
-        expectEqual(shelf.arrange(ids, limit: 3, urgent: ["glm"]).shown, ["openrouter", "kimi", "codex", "glm"])
+        // Use no longer reorders a laid bar; one asking for attention takes the seat of the least used, never a fourth.
+        expectEqual(shelf.arrange(ids, limit: 3, urgent: ["glm"]).shown, ["openrouter", "kimi", "glm"])
         // A battery that went away leaves its seat to the best of the rest.
         expectEqual(shelf.arrange(["codex", "claude", "openrouter", "glm"], limit: 3).shown, ["openrouter", "codex", "claude"])
+    }
+    /// The bar holds three. A battery asking for attention takes the seat of the least used one; the person can take that seat
+    /// back by hand, and the alert stays out (across a restart) until it changes or has cleared and comes again.
+    func testAttentionNeverMakesAFourthBatteryAndTheirChoiceWins() {
+        let ids = ["codex", "claude", "openrouter", "xai", "glm"], alert = "Keychain asked for your password"
+        var shelf = Shelf(scores: ["openrouter": 5, "claude": 1, "codex": 3])
+        shelf.place("openrouter", at: "codex", bar: ["codex", "claude", "openrouter"])
+        expectEqual(shelf.arrange(ids, limit: 3).shown, ["openrouter", "claude", "codex"])
+        // xai asks: it takes the seat of claude, the least used, and the bar stays at three.
+        var urgent = shelf.urgent(["xai": alert], among: ids)
+        expectEqual(urgent, ["xai"])
+        expectEqual(shelf.arrange(ids, limit: 3, urgent: urgent).shown, ["openrouter", "xai", "codex"])
+        expectEqual(shelf.leastUsed(["openrouter", "xai", "codex"], urgent: urgent), "codex")
+        // The person takes xai's seat for glm (a click or a drag): xai goes down and its alert stays out.
+        shelf.place("glm", at: "xai", bar: ["openrouter", "xai", "codex"]); shelf.leave("xai", alert: alert)
+        urgent = shelf.urgent(["xai": alert], among: ids)
+        expectEqual(urgent, [])
+        expectEqual(shelf.arrange(ids, limit: 3, urgent: urgent).shown, ["openrouter", "glm", "codex"])
+        // A restart keeps the layout and the answer.
+        var restarted = Shelf(scores: shelf.scores, placed: shelf.placed, settled: shelf.settled)
+        urgent = restarted.urgent(["xai": alert], among: ids)
+        expectEqual(urgent, [])
+        expectEqual(restarted.arrange(ids, limit: 3, urgent: urgent).shown, ["openrouter", "glm", "codex"])
+        // Before its battery is read after a restart, the answer is kept.
+        expectEqual(restarted.urgent([:], among: ["codex"]), [])
+        expectEqual(restarted.settled["xai"], alert)
+        // A different alert asks again, and still within three.
+        urgent = restarted.urgent(["xai": "xAI key refused"], among: ids)
+        expectEqual(urgent, ["xai"]); expectNil(restarted.settled["xai"])
+        let again = restarted.arrange(ids, limit: 3, urgent: urgent).shown
+        expectEqual(again.count, 3); expectTrue(again.contains("xai"))
+        // The same alert after it cleared asks again too.
+        restarted.leave("xai", alert: alert)
+        expectEqual(restarted.urgent([:], among: ids), [])
+        expectNil(restarted.settled["xai"])
+        expectEqual(restarted.urgent(["xai": alert], among: ids), ["xai"])
+        // Many alerts at once still fit three seats, and a bar made only of alerts does not lose any of them to another.
+        let crowd = Shelf(placed: ["codex", "claude", "openrouter"])
+        expectEqual(crowd.arrange(ids, limit: 3, urgent: ["xai", "glm"]).shown.count, 3)
+        expectEqual(crowd.arrange(ids, limit: 3, urgent: ["codex", "claude", "openrouter", "xai"]).shown, ["codex", "claude", "openrouter"])
+    }
+    /// Three renewals in a row with nobody using Claude Code stop the renewals; a hook from Claude Code, which also fires in the
+    /// Code tab of the Claude app, counts as use and lets them carry on. The note says which, in words for someone who is not sure
+    /// what counts.
+    func testHooksCountAsUseAndThePauseSaysSo() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("hud-pause-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".local/bin"), withIntermediateDirectories: true)
+        let fake = root.appendingPathComponent(".local/bin/claude")
+        try "#!/bin/sh\n".write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        var clock = 1_000_000.0, calls = 0
+        let reply = "{\"type\":\"result\",\"is_error\":false,\"result\":\"OK\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}"
+        let renewal = ClaudeRenewal(home: root, run: { _, _, _ in calls += 1; return (0, reply.data(using: .utf8)!) }, now: { clock })
+        expectEqual(renewal.state(lastRealUse: 0), .ready)
+        for _ in 0..<3 { _ = renewal.renewIfDue(lastRealUse: 0); clock += 7 * 3600 }
+        expectEqual(calls, 3)
+        expectEqual(renewal.state(lastRealUse: 0), .paused)
+        expectNil(renewal.renewIfDue(lastRealUse: 0))
+        let paused = ClaudeRenewal.expiredMessage(.paused)
+        expectTrue(paused.contains("credential expired") && paused.contains("3 renewals") && paused.contains("Code tab") && paused.contains("claude in a terminal"))
+        expectTrue(paused.contains("Chat tab does not count"))
+        // The expired note a provider shows follows the same state, read from its own folder.
+        let cache = Cache(root.appendingPathComponent(".usage-hud"))
+        let credentials = FakeCredentials(); credentials.text = "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"expiresAt\":1000}}"
+        let provider = ClaudeProvider(cache: cache, credentials: credentials, http: FakeHTTP(), home: root)
+        var problem: HUDProblem?
+        do { try provider.refresh() } catch let error as HUDProblem { problem = error } catch {}
+        expectEqual(problem?.message, paused); expectEqual(problem?.attention, false)
+        // A hook seen while paused (even one older than the last renewal does not count) lets the renewals resume.
+        renewal.noteUse(); clock += 7 * 3600
+        expectEqual(renewal.state(lastRealUse: 0), .ready)
+        expectNotNil(renewal.renewIfDue(lastRealUse: 0)); expectEqual(calls, 4)
+        // Noting use is written once a minute, and never undone by a renewal's own save.
+        clock += 61; renewal.noteUse(); renewal.noteUse()
+        expectEqual((renewal.saved()["last_use"] as? NSNumber)?.doubleValue, clock)
+        // Switched off, it says so and does not run.
+        try Data().write(to: root.appendingPathComponent(".usage-hud/no-auto-renew"))
+        expectEqual(renewal.state(lastRealUse: 0), .off)
+        expectTrue(ClaudeRenewal.expiredMessage(.off).contains("automatic renewal is off"))
+        expectNil(renewal.renewIfDue(lastRealUse: clock))
+        try? FileManager.default.removeItem(at: root)
     }
     func testRouterTeamListsEveryKeyWithoutPulsing() throws {
         credentials.missing = []

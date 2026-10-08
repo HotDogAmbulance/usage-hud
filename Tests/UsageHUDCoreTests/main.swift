@@ -103,6 +103,8 @@ let cases: [(String, () throws -> Void)] = [
     ("testSignInProblemsOfferTheirFix", test.testSignInProblemsOfferTheirFix),
     ("testShelfLearnsEachPersonsMainTools", test.testShelfLearnsEachPersonsMainTools),
     ("testExpiredClaudeSignInRenewsRarelyAndLeavesNothing", test.testExpiredClaudeSignInRenewsRarelyAndLeavesNothing),
+    ("testHooksCountAsUseAndThePauseSaysSo", test.testHooksCountAsUseAndThePauseSaysSo),
+    ("testAttentionNeverMakesAFourthBatteryAndTheirChoiceWins", test.testAttentionNeverMakesAFourthBatteryAndTheirChoiceWins),
     ("testPinnedBatteriesTakeAPlaceInTheBar", test.testPinnedBatteriesTakeAPlaceInTheBar),
     ("testChosenFoldersAreReadEvenWhenHiddenAndKeepNoKeys", test.testChosenFoldersAreReadEvenWhenHiddenAndKeepNoKeys),
     ("testBalanceKeysAlreadyOnTheMac", test.testBalanceKeysAlreadyOnTheMac),
